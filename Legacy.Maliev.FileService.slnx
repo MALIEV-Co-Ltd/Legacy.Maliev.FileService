@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Legacy.Maliev.FileService.Api/Legacy.Maliev.FileService.Api.csproj" />
+  <Project Path="Legacy.Maliev.FileService.Application/Legacy.Maliev.FileService.Application.csproj" />
+  <Project Path="Legacy.Maliev.FileService.Data/Legacy.Maliev.FileService.Data.csproj" />
+  <Project Path="Legacy.Maliev.FileService.Domain/Legacy.Maliev.FileService.Domain.csproj" />
+  <Project Path="Legacy.Maliev.FileService.Tests/Legacy.Maliev.FileService.Tests.csproj" />
+</Solution>

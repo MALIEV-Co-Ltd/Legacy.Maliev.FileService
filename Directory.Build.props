@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <MalievWorkspaceRoot Condition="'$(MalievWorkspaceRoot)' == ''">$(MSBuildThisFileDirectory)..</MalievWorkspaceRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Update="Microsoft.EntityFrameworkCore" Version="10.0.4" />
+    <PackageReference Update="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
+    <PackageReference Update="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.4" />
+  </ItemGroup>
+</Project>
