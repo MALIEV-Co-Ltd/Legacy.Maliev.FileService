@@ -18,22 +18,24 @@ public sealed class RedisUploadIdempotencyStoreTests : IAsyncLifetime
     [Fact]
     public async Task ExpiredWorkerLease_TransitionsDurableCheckpointToUnknownWithoutReacquiring()
     {
-        const string identity = "IDENTITY"; var store = new RedisUploadIdempotencyStore(connection); var first = await store.AcquireAsync(identity, "fingerprint", default);
+        const string identity = "IDENTITY"; const string path = "uploads/2026-7-17/generation"; var store = new RedisUploadIdempotencyStore(connection); var first = await store.AcquireAsync(identity, "fingerprint", path, default);
         Assert.Equal(UploadAcquireState.Acquired, first.State);
         await connection!.GetDatabase().KeyDeleteAsync("legacy:file:idempotency:v1:IDENTITY:lease");
-        var afterCrash = await store.AcquireAsync(identity, "fingerprint", default);
-        var retry = await store.AcquireAsync(identity, "fingerprint", default);
+        var afterCrash = await store.AcquireAsync(identity, "fingerprint", "uploads/2026-7-18/different", default);
+        var retry = await store.AcquireAsync(identity, "fingerprint", "uploads/2026-7-18/different", default);
         Assert.Equal(UploadAcquireState.Unknown, afterCrash.State); Assert.Equal(UploadAcquireState.Unknown, retry.State);
+        Assert.Equal(path, afterCrash.EffectivePath); Assert.Equal(path, retry.EffectivePath);
         Assert.True(await connection.GetDatabase().KeyTimeToLiveAsync("legacy:file:idempotency:v1:IDENTITY") >= TimeSpan.FromHours(23));
     }
 
     [Fact]
     public async Task CompletedCheckpoint_ReplaysExactSignedResponseAndRejectsDifferentPayload()
     {
-        var store = new RedisUploadIdempotencyStore(connection); var acquired = await store.AcquireAsync("REPLAY", "fingerprint", default);
+        const string path = "orders/42"; var store = new RedisUploadIdempotencyStore(connection); var acquired = await store.AcquireAsync("REPLAY", "fingerprint", path, default);
         var response = new UploadResultResponse([new("maliev.com", "orders/part.stl", new Uri("https://storage.test/signed?token=exact"))]);
         await store.CompleteAsync("REPLAY", "fingerprint", acquired.ReservationId!, response, default);
-        var replay = await store.AcquireAsync("REPLAY", "fingerprint", default); var conflict = await store.AcquireAsync("REPLAY", "changed", default);
+        var replay = await store.AcquireAsync("REPLAY", "fingerprint", "changed-path", default); var conflict = await store.AcquireAsync("REPLAY", "changed", path, default);
         Assert.Equal(UploadAcquireState.Replay, replay.State); Assert.Equal(JsonSerializer.Serialize(response), JsonSerializer.Serialize(replay.Response)); Assert.Equal(UploadAcquireState.Conflict, conflict.State);
+        Assert.Equal(path, replay.EffectivePath);
     }
 }

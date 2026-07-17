@@ -82,7 +82,7 @@ public sealed class FileControllerContractTests
     private static List<IFormFile> Files() => [new FormFile(new MemoryStream([1]), 0, 1, "files", "part.stl") { Headers = new HeaderDictionary(), ContentType = "model/stl" }];
     private sealed class StubStore(UploadAcquireResult result) : IUploadIdempotencyStore
     {
-        public Task<UploadAcquireResult> AcquireAsync(string identity, string fingerprint, CancellationToken cancellationToken) => Task.FromResult(result);
+        public Task<UploadAcquireResult> AcquireAsync(string identity, string fingerprint, string effectivePath, CancellationToken cancellationToken) => Task.FromResult(result with { EffectivePath = result.EffectivePath ?? effectivePath });
         public Task<bool> RenewAsync(string identity, string reservationId, CancellationToken cancellationToken) => Task.FromResult(true);
         public Task CompleteAsync(string identity, string fingerprint, string reservationId, UploadResultResponse response, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task MarkUnknownAsync(string identity, string reservationId, UploadResultResponse? response, CancellationToken cancellationToken) => Task.CompletedTask;

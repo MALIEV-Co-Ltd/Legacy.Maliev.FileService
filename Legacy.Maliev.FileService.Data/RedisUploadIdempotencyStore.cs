@@ -14,16 +14,16 @@ public sealed class RedisUploadIdempotencyStore(IConnectionMultiplexer? redis = 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <inheritdoc />
-    public async Task<UploadAcquireResult> AcquireAsync(string identity, string fingerprint, CancellationToken cancellationToken)
+    public async Task<UploadAcquireResult> AcquireAsync(string identity, string fingerprint, string effectivePath, CancellationToken cancellationToken)
     {
         var database = Database();
         var key = Key(identity);
         var leaseKey = LeaseKey(identity); var reservation = Guid.NewGuid().ToString("N");
-        var pending = Serialize(new Envelope(fingerprint, reservation, "pending", null));
+        var pending = Serialize(new Envelope(fingerprint, reservation, "pending", null, effectivePath));
         var create = database.CreateTransaction(); create.AddCondition(Condition.KeyNotExists(key)); create.AddCondition(Condition.KeyNotExists(leaseKey));
         _ = create.StringSetAsync(key, pending, Retention); _ = create.StringSetAsync(leaseKey, reservation, LeaseLifetime);
         if (await create.ExecuteAsync().WaitAsync(cancellationToken))
-            return new(UploadAcquireState.Acquired, reservation);
+            return new(UploadAcquireState.Acquired, reservation, EffectivePath: effectivePath);
         var current = await database.StringGetAsync(key).WaitAsync(cancellationToken);
         if (!current.HasValue) throw new InvalidOperationException("Upload checkpoint changed during acquisition.");
         var envelope = Deserialize(current!);
@@ -31,16 +31,16 @@ public sealed class RedisUploadIdempotencyStore(IConnectionMultiplexer? redis = 
         if (envelope.State == "pending")
         {
             var lease = await database.StringGetAsync(leaseKey).WaitAsync(cancellationToken);
-            if (lease == envelope.ReservationId) return new(UploadAcquireState.InProgress);
+            if (lease == envelope.ReservationId) return new(UploadAcquireState.InProgress, EffectivePath: envelope.EffectivePath);
             var unknown = Serialize(envelope with { State = "unknown" });
             _ = await ReplaceAsync(database, key, current!, unknown, cancellationToken);
-            return new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response);
+            return new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response, envelope.EffectivePath);
         }
         return envelope.State switch
         {
-            "completed" when envelope.Response is not null => new(UploadAcquireState.Replay, Response: envelope.Response),
-            "unknown" => new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response),
-            _ => new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response),
+            "completed" when envelope.Response is not null => new(UploadAcquireState.Replay, Response: envelope.Response, EffectivePath: envelope.EffectivePath),
+            "unknown" => new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response, envelope.EffectivePath),
+            _ => new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response, envelope.EffectivePath),
         };
     }
 
@@ -61,7 +61,7 @@ public sealed class RedisUploadIdempotencyStore(IConnectionMultiplexer? redis = 
     {
         var database = Database(); var key = Key(identity); var leaseKey = LeaseKey(identity); var current = await database.StringGetAsync(key).WaitAsync(cancellationToken);
         if (!current.HasValue || !(Owned(current!, reservationId, "pending") || Owned(current!, reservationId, "unknown"))) throw new InvalidOperationException("Upload reservation ownership was lost.");
-        var completed = Serialize(new Envelope(fingerprint, reservationId, "completed", response));
+        var completed = Serialize(new Envelope(fingerprint, reservationId, "completed", response, Deserialize(current!).EffectivePath));
         var envelope = Deserialize(current!);
         var transaction = database.CreateTransaction(); transaction.AddCondition(Condition.StringEqual(key, current));
         if (envelope.State == "pending") transaction.AddCondition(Condition.StringEqual(leaseKey, reservationId));
@@ -100,5 +100,5 @@ public sealed class RedisUploadIdempotencyStore(IConnectionMultiplexer? redis = 
     private static bool Owned(RedisValue value, string reservation, string state) { var e = Deserialize(value); return e.ReservationId == reservation && e.State == state; }
     private static RedisValue Serialize(Envelope envelope) => JsonSerializer.Serialize(envelope, JsonOptions);
     private static Envelope Deserialize(RedisValue value) => JsonSerializer.Deserialize<Envelope>((string)value!, JsonOptions) ?? throw new InvalidDataException("Upload checkpoint is invalid.");
-    private sealed record Envelope(string Fingerprint, string ReservationId, string State, UploadResultResponse? Response);
+    private sealed record Envelope(string Fingerprint, string ReservationId, string State, UploadResultResponse? Response, string EffectivePath);
 }

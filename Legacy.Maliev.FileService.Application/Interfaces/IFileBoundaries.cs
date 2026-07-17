@@ -61,7 +61,7 @@ public interface IUploadRepository
 public interface IUploadIdempotencyStore
 {
     /// <summary>Atomically acquires or reads a durable upload checkpoint.</summary>
-    Task<UploadAcquireResult> AcquireAsync(string identity, string fingerprint, CancellationToken cancellationToken);
+    Task<UploadAcquireResult> AcquireAsync(string identity, string fingerprint, string effectivePath, CancellationToken cancellationToken);
     /// <summary>Renews fenced ownership when the reservation still owns the checkpoint.</summary>
     Task<bool> RenewAsync(string identity, string reservationId, CancellationToken cancellationToken);
     /// <summary>Persists the exact completed upload response.</summary>
@@ -90,4 +90,5 @@ public enum UploadAcquireState
 /// <param name="State">The durable checkpoint state.</param>
 /// <param name="ReservationId">The fenced reservation identifier when available.</param>
 /// <param name="Response">The exact completed response when available.</param>
-public sealed record UploadAcquireResult(UploadAcquireState State, string? ReservationId = null, UploadResultResponse? Response = null);
+/// <param name="EffectivePath">The stable persisted path used for deterministic object naming.</param>
+public sealed record UploadAcquireResult(UploadAcquireState State, string? ReservationId = null, UploadResultResponse? Response = null, string? EffectivePath = null);
