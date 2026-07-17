@@ -52,6 +52,12 @@ the PascalCase response shape:
 }
 ```
 
+Callers that need replay safety send a stable `Idempotency-Key`. The service binds
+that workflow key to the signed service principal and complete multipart payload,
+then persists the exact `201` response for at least 24 hours. Changed payloads and
+concurrent execution return `409`; ambiguous storage or metadata outcomes return
+`503` and remain reconcilable without starting a second scanner execution.
+
 Security corrections intentionally reject unapproved buckets and path traversal.
 Signed URLs are capped at seven days, matching the effective maximum of the old
 signer, and are issued only when clean `Upload` metadata exists.
@@ -59,6 +65,7 @@ signer, and are issued only when clean `Upload` metadata exists.
 ## Runtime configuration
 
 - PostgreSQL connection: `ConnectionStrings__FileDbContext`
+- Existing shared Redis connection: `ConnectionStrings__redis`
 - Allowed GCS buckets: `FileStorage__AllowedBuckets__*`
 - Quarantine prefix: `FileStorage__QuarantinePrefix`
 - Signed URL hours: `FileStorage__SignedUrlHours` (1-168)
@@ -71,9 +78,10 @@ ClamAV must be configured for at least the legacy 200 MB request ceiling. Leavin
 `MalwareScanner__Host` empty is safe for local startup, but all upload requests fail
 closed with `503` until a scanner is available.
 
-Redis is deliberately not used for object authorization or signed URLs: caching
-either would weaken delete/move revocation semantics. PostgreSQL clean metadata is
-the authorization boundary; GCS handles object delivery directly.
+Redis is used only for fenced upload replay checkpoints. It is deliberately not
+used for object authorization or newly generated signed URLs: caching either would
+weaken delete/move revocation semantics. PostgreSQL clean metadata is the
+authorization boundary; GCS handles object delivery directly.
 
 ## Migration and deployment boundary
 

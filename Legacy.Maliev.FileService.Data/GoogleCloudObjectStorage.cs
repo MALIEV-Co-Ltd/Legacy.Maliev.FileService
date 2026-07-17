@@ -64,6 +64,20 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
     }
 
     /// <inheritdoc />
+    public async Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var item = await client.GetObjectAsync(bucket, objectName, cancellationToken: cancellationToken);
+            return item.Size is null ? null : checked((long)item.Size.Value);
+        }
+        catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<Uri> CreateSignedReadUriAsync(
         string bucket,
         string objectName,

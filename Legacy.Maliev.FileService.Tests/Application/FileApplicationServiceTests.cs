@@ -79,6 +79,26 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_KnownFailureUsesIndependentCleanupToken()
+    {
+        var storage = new RecordingStorage();
+        var service = CreateService(
+            storage,
+            new StubScanner(new FileSafetyResult(FileSafetyVerdict.Unavailable)),
+            new RecordingRepository());
+        using var request = new CancellationTokenSource();
+        request.Cancel();
+
+        await Assert.ThrowsAsync<MalwareScannerUnavailableException>(() => service.UploadAsync(
+            "maliev.com",
+            null,
+            [new MemoryUploadFile("part.step", "application/step", [1])],
+            request.Token));
+
+        Assert.False(storage.CleanupObservedCancellation);
+    }
+
+    [Fact]
     public async Task GetSignedUrlAsync_ObjectWithoutCleanMetadata_ReturnsNull()
     {
         var storage = new RecordingStorage();
@@ -88,6 +108,27 @@ public sealed class FileApplicationServiceTests
 
         Assert.Null(result);
         Assert.Empty(storage.Signed);
+    }
+
+    [Fact]
+    public async Task MetadataCommitResponseLoss_RetainsPromotedObjectForDeterministicReconciliation()
+    {
+        var storage = new RecordingStorage(); var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+        var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
+        await Assert.ThrowsAsync<IOException>(() => service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+        Assert.Empty(storage.Deleted);
+        repository.ThrowAfterAdd = false;
+        var reconciled = await service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default);
+        Assert.NotNull(reconciled); Assert.Single(reconciled.Object);
+    }
+
+    [Fact]
+    public void MultipartEnvelopeAllowance_PreservesExactAggregateFileLimit()
+    {
+        Assert.Equal(200L * 1024L * 1024L, FileApplicationService.MaximumUploadBytes);
+        Assert.InRange(FileApplicationService.MaximumRequestBytes - FileApplicationService.MaximumUploadBytes, 1, 1024L * 1024L);
     }
 
     private static FileApplicationService CreateService(
@@ -130,24 +171,33 @@ public sealed class FileApplicationServiceTests
         public List<(string SourceObjectName, string DestinationObjectName)> Moved { get; } = [];
         public List<(string Bucket, string ObjectName)> Deleted { get; } = [];
         public List<(string Bucket, string ObjectName)> Signed { get; } = [];
+        private readonly Dictionary<(string Bucket, string ObjectName), long> sizes = [];
+        public bool CleanupObservedCancellation { get; private set; }
 
         public Task UploadAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken)
         {
             Uploaded.Add((bucket, objectName));
+            sizes[(bucket, objectName)] = content.Length;
             return Task.CompletedTask;
         }
 
         public Task<bool> MoveAsync(string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
         {
             Moved.Add((sourceObjectName, destinationObjectName));
+            if (sizes.Remove((sourceBucket, sourceObjectName), out var size)) sizes[(destinationBucket, destinationObjectName)] = size;
             return Task.FromResult(true);
         }
 
         public Task<bool> DeleteAsync(string bucket, string objectName, CancellationToken cancellationToken)
         {
+            CleanupObservedCancellation |= cancellationToken.IsCancellationRequested;
             Deleted.Add((bucket, objectName));
+            sizes.Remove((bucket, objectName));
             return Task.FromResult(true);
         }
+
+        public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
+            Task.FromResult(sizes.TryGetValue((bucket, objectName), out var size) ? (long?)size : null);
 
         public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken)
         {
@@ -159,10 +209,12 @@ public sealed class FileApplicationServiceTests
     private sealed class RecordingRepository : IUploadRepository
     {
         public List<Upload> Uploads { get; } = [];
+        public bool ThrowAfterAdd { get; set; }
 
         public Task AddRangeAsync(IReadOnlyCollection<Upload> uploads, CancellationToken cancellationToken)
         {
             Uploads.AddRange(uploads);
+            if (ThrowAfterAdd) throw new IOException("metadata response lost");
             return Task.CompletedTask;
         }
 

@@ -5,6 +5,7 @@ using Legacy.Maliev.FileService.Application.Services;
 using Maliev.Aspire.ServiceDefaults.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace Legacy.Maliev.FileService.Api.Controllers;
 
@@ -12,7 +13,7 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 [ApiController]
 [Route("[controller]")]
 [Authorize]
-public sealed class UploadsController(IFileService service) : ControllerBase
+public sealed class UploadsController(IFileService service, IdempotentUploadCoordinator idempotency) : ControllerBase
 {
     /// <summary>Deletes an uploaded object.</summary>
     [HttpDelete]
@@ -66,13 +67,14 @@ public sealed class UploadsController(IFileService service) : ControllerBase
 
     /// <summary>Uploads files through private quarantine and malware scanning.</summary>
     [HttpPost]
-    [DisableRequestSizeLimit]
+    [RequestSizeLimit(FileApplicationService.MaximumRequestBytes)]
     [RequirePermission(FilePermissions.Create)]
     public async Task<ActionResult<UploadResultResponse>> UploadAsync(
         [FromQuery] string? bucket,
         [FromForm] List<IFormFile>? files,
         [FromQuery] string? path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey = null)
     {
         if (!ValidateFiles(files))
         {
@@ -88,7 +90,23 @@ public sealed class UploadsController(IFileService service) : ControllerBase
         try
         {
             var uploadFiles = files!.Select(file => (IUploadFile)new FormUploadFile(file)).ToArray();
-            var result = await service.UploadAsync(bucket, path, uploadFiles, cancellationToken);
+            var principalId = User.FindFirst("client_id")?.Value
+                ?? User.FindFirst("azp")?.Value
+                ?? User.FindFirst("sub")?.Value
+                ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (!string.IsNullOrWhiteSpace(idempotencyKey) && string.IsNullOrWhiteSpace(principalId))
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, Problem("Upload identity is unavailable."));
+            }
+            var result = await idempotency.ExecuteAsync(
+                principalId ?? string.Empty,
+                idempotencyKey,
+                bucket,
+                path,
+                uploadFiles,
+                (generation, token) => service.UploadAsync(bucket, path, uploadFiles, generation, token),
+                (generation, token) => service.ReconcileUploadAsync(bucket, path, uploadFiles, generation, token),
+                cancellationToken);
             return Created("Google Cloud Storage", result);
         }
         catch (FileUploadValidationException exception)
@@ -114,7 +132,26 @@ public sealed class UploadsController(IFileService service) : ControllerBase
                 Detail = exception.Message,
             });
         }
+        catch (UploadIdempotencyConflictException exception)
+        {
+            return Conflict(Problem(exception.Message, StatusCodes.Status409Conflict, "Upload replay conflict"));
+        }
+        catch (UploadIdempotencyInProgressException exception)
+        {
+            return Conflict(Problem(exception.Message, StatusCodes.Status409Conflict, "Upload in progress"));
+        }
+        catch (UploadOutcomeUnknownException exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, Problem(exception.Message, StatusCodes.Status503ServiceUnavailable, "Upload outcome unknown"));
+        }
+        catch (UploadIdempotencyUnavailableException exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, Problem(exception.Message, StatusCodes.Status503ServiceUnavailable, "Upload replay protection unavailable"));
+        }
     }
+
+    private static ProblemDetails Problem(string detail, int status = StatusCodes.Status503ServiceUnavailable, string title = "Upload unavailable") =>
+        new() { Status = status, Title = title, Detail = detail };
 
     private bool ValidateFiles(IReadOnlyCollection<IFormFile>? files)
     {

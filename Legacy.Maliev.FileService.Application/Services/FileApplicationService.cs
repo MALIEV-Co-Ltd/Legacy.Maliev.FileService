@@ -17,21 +17,32 @@ public sealed class FileApplicationService(
 {
     /// <summary>Maximum aggregate size preserved from the legacy controller.</summary>
     public const long MaximumUploadBytes = 200L * 1024L * 1024L;
+    /// <summary>Bounded multipart envelope allowance above the aggregate file limit.</summary>
+    public const long MaximumRequestBytes = MaximumUploadBytes + (1L * 1024L * 1024L);
 
     /// <inheritdoc />
     public async Task<UploadResultResponse> UploadAsync(
         string bucket,
         string? path,
         IReadOnlyList<IUploadFile> files,
+        CancellationToken cancellationToken) =>
+        await UploadAsync(bucket, path, files, Guid.NewGuid(), cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<UploadResultResponse> UploadAsync(
+        string bucket,
+        string? path,
+        IReadOnlyList<IUploadFile> files,
+        Guid operationId,
         CancellationToken cancellationToken)
     {
         names.RequireBucket(bucket);
         ValidateFiles(files);
 
-        var operationId = Guid.NewGuid();
         var promoted = new List<(string Bucket, string ObjectName)>();
         var quarantined = new List<(string Bucket, string ObjectName)>();
         var uploads = new List<Upload>(files.Count);
+        var metadataCommitAttempted = false;
 
         try
         {
@@ -74,6 +85,7 @@ public sealed class FileApplicationService(
                 });
             }
 
+            metadataCommitAttempted = true;
             await repository.AddRangeAsync(uploads, cancellationToken);
             var duration = TimeSpan.FromHours(Math.Clamp(options.Value.SignedUrlHours, 1, 168));
             var result = new List<UploadObjectResponse>(uploads.Count);
@@ -87,9 +99,32 @@ public sealed class FileApplicationService(
         }
         catch
         {
-            await BestEffortCleanupAsync(quarantined.Concat(promoted), cancellationToken);
+            await BestEffortCleanupAsync(metadataCommitAttempted ? quarantined : quarantined.Concat(promoted));
             throw;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<UploadResultResponse?> ReconcileUploadAsync(
+        string bucket,
+        string? path,
+        IReadOnlyList<IUploadFile> files,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        names.RequireBucket(bucket);
+        ValidateFiles(files);
+        var duration = TimeSpan.FromHours(Math.Clamp(options.Value.SignedUrlHours, 1, 168));
+        var result = new List<UploadObjectResponse>(files.Count);
+        foreach (var file in files)
+        {
+            var objectName = names.BuildFinalObjectName(path, file.FileName, operationId);
+            if (!await repository.ExistsAsync(bucket, objectName, cancellationToken)
+                || await storage.GetSizeAsync(bucket, objectName, cancellationToken) != file.Length) return null;
+            var uri = await storage.CreateSignedReadUriAsync(bucket, objectName, duration, cancellationToken);
+            result.Add(new UploadObjectResponse(bucket, objectName, uri));
+        }
+        return new UploadResultResponse(result);
     }
 
     /// <inheritdoc />
@@ -161,13 +196,14 @@ public sealed class FileApplicationService(
         }
     }
 
-    private async Task BestEffortCleanupAsync(IEnumerable<(string Bucket, string ObjectName)> objects, CancellationToken cancellationToken)
+    private async Task BestEffortCleanupAsync(IEnumerable<(string Bucket, string ObjectName)> objects)
     {
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         foreach (var item in objects)
         {
             try
             {
-                await storage.DeleteAsync(item.Bucket, item.ObjectName, cancellationToken);
+                await storage.DeleteAsync(item.Bucket, item.ObjectName, cleanup.Token);
             }
             catch (Exception exception)
             {
