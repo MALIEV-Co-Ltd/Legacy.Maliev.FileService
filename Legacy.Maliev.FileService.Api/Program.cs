@@ -12,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddDefaultApiVersioning();
 builder.AddPostgresDbContext<FileDbContext>(connectionName: "FileDbContext");
+builder.AddStandardCache("legacy:file:");
 builder.AddStandardCors();
 builder.AddJwtAuthentication();
 builder.AddStandardMiddleware(options => options.EnableRequestLogging = true);
@@ -36,16 +37,18 @@ builder.Services.AddOptions<MalwareScannerOptions>()
     .Validate(options => options.Port is > 0 and <= 65535, "Scanner port is invalid")
     .ValidateOnStart();
 builder.Services.Configure<FormOptions>(options =>
-    options.MultipartBodyLengthLimit = FileApplicationService.MaximumUploadBytes);
+    options.MultipartBodyLengthLimit = FileApplicationService.MaximumRequestBytes);
 builder.WebHost.ConfigureKestrel(options =>
-    options.Limits.MaxRequestBodySize = FileApplicationService.MaximumUploadBytes);
+    options.Limits.MaxRequestBodySize = FileApplicationService.MaximumRequestBytes);
 builder.Services.AddSingleton(_ => StorageClient.Create());
 builder.Services.AddSingleton(serviceProvider => serviceProvider.GetRequiredService<StorageClient>().CreateUrlSigner());
 builder.Services.AddScoped<IObjectStorage, GoogleCloudObjectStorage>();
 builder.Services.AddScoped<IFileSafetyScanner, ClamAvFileSafetyScanner>();
 builder.Services.AddScoped<IUploadRepository, UploadRepository>();
+builder.Services.AddScoped<IUploadIdempotencyStore, RedisUploadIdempotencyStore>();
 builder.Services.AddScoped<ObjectNamePolicy>();
 builder.Services.AddScoped<IFileService, FileApplicationService>();
+builder.Services.AddScoped<IdempotentUploadCoordinator>();
 
 var app = builder.Build();
 
