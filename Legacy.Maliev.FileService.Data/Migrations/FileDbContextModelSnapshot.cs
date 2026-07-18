@@ -110,6 +110,9 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                         .HasMaxLength(1024)
                         .HasColumnType("character varying(1024)");
 
+                    b.Property<Guid?>("FinalizedQuotationRequestId")
+                        .HasColumnType("uuid");
+
                     b.Property<long?>("GcsGeneration")
                         .HasColumnType("bigint");
 

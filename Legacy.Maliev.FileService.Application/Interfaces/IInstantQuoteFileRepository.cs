@@ -27,6 +27,10 @@ public sealed record InstantQuoteReservation<TRecord>(InstantQuoteReservationSta
 /// <summary>An exact session-owned upload and its observed PostgreSQL xmin.</summary>
 public sealed record InstantQuoteStoredUpload(InstantQuoteUploadFile Upload, uint Version);
 
+/// <summary>Raised when a PostgreSQL xmin write loses to another workflow transition.</summary>
+public sealed class InstantQuoteConcurrencyException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
+
 /// <summary>Persistence boundary dedicated to the instant-quotation file workflow.</summary>
 public interface IInstantQuoteFileRepository
 {
