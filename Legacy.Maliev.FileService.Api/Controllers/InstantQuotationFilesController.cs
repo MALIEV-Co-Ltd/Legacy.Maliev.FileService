@@ -14,6 +14,7 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 [ApiController]
 [Route("file/v1/instant-quotation")]
 [Authorize]
+[InstantQuoteValidationProblem]
 public sealed class InstantQuotationFilesController(
     IInstantQuoteFileService service,
     IInstantQuoteMultipartReader multipartReader) : ControllerBase
@@ -24,10 +25,12 @@ public sealed class InstantQuotationFilesController(
     [ProducesResponseType<CreateInstantQuoteSessionResponse>(StatusCodes.Status201Created)]
     public Task<ActionResult<CreateInstantQuoteSessionResponse>> CreateSessionAsync(CancellationToken cancellationToken)
     {
-        var principalId = User.FindFirst("client_id")?.Value
-            ?? User.FindFirst("azp")?.Value
-            ?? User.FindFirst("sub")?.Value
-            ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var subject = User.FindFirst("sub");
+        var principalId = subject is null
+            ? User.FindFirst("client_id")?.Value
+                ?? User.FindFirst("azp")?.Value
+                ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            : $"{subject.Issuer}|{subject.Value}";
         var owner = new InstantQuoteOwner(principalId, User.Identity?.IsAuthenticated == true);
 
         return ExecuteAsync(

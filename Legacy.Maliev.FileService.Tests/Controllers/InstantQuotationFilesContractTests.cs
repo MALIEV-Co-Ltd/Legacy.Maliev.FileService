@@ -1,14 +1,21 @@
+using System.Net;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using Legacy.Maliev.FileService.Api.Controllers;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Maliev.Aspire.ServiceDefaults.Authorization;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Legacy.Maliev.FileService.Tests.Controllers;
 
@@ -72,14 +79,73 @@ public sealed class InstantQuotationFilesContractTests
         var service = new StubService();
         var controller = Controller(service);
         controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim("sub", "customer-42")], "test"));
+            [new Claim("sub", "customer-42", ClaimValueTypes.String, "https://issuer.example")], "test"));
 
         var result = await controller.CreateSessionAsync(default);
 
         var created = Assert.IsType<CreatedResult>(result.Result);
         Assert.Equal(StatusCodes.Status201Created, created.StatusCode);
-        Assert.Equal("customer-42", service.Owner?.PrincipalId);
+        Assert.Equal("https://issuer.example|customer-42", service.Owner?.PrincipalId);
         Assert.True(service.Owner?.IsAuthenticated);
+    }
+
+    [Fact]
+    public async Task CreateSession_PrefersIssuerQualifiedSubjectAndUsesClientFallbackOnlyWithoutSubject()
+    {
+        var userService = new StubService();
+        var userController = Controller(userService);
+        userController.ControllerContext.HttpContext.User = Principal(
+            new Claim("sub", "customer-42", ClaimValueTypes.String, "https://issuer.example"),
+            new Claim("client_id", "browser-client"),
+            new Claim("azp", "authorized-party"));
+
+        await userController.CreateSessionAsync(default);
+
+        Assert.Equal("https://issuer.example|customer-42", userService.Owner?.PrincipalId);
+
+        var clientService = new StubService();
+        var clientController = Controller(clientService);
+        clientController.ControllerContext.HttpContext.User = Principal(
+            new Claim("client_id", "browser-client"),
+            new Claim("azp", "authorized-party"));
+
+        await clientController.CreateSessionAsync(default);
+
+        Assert.Equal("browser-client", clientService.Owner?.PrincipalId);
+
+        var authorizedPartyService = new StubService();
+        var authorizedPartyController = Controller(authorizedPartyService);
+        authorizedPartyController.ControllerContext.HttpContext.User = Principal(
+            new Claim("azp", "authorized-party"));
+
+        await authorizedPartyController.CreateSessionAsync(default);
+
+        Assert.Equal("authorized-party", authorizedPartyService.Owner?.PrincipalId);
+    }
+
+    [Fact]
+    public async Task Pipeline_InvalidRequiredHeadersOrBody_ReturnsStableValidationProblem()
+    {
+        await using var app = await StartPipelineAsync();
+        using var client = app.GetTestClient();
+        var requests = new[]
+        {
+            UploadRequestWithoutRequiredHeaders(),
+            FinalizeRequest(content: null),
+            FinalizeRequest(new StringContent("{", Encoding.UTF8, "application/json")),
+        };
+
+        foreach (var request in requests)
+        {
+            using (request)
+            using (var response = await client.SendAsync(request))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+                Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+                using var problem = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+                Assert.Equal("validation_error", problem.RootElement.GetProperty("code").GetString());
+            }
+        }
     }
 
     [Fact]
@@ -148,6 +214,52 @@ public sealed class InstantQuotationFilesContractTests
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
+    }
+
+    private static ClaimsPrincipal Principal(params Claim[] claims) =>
+        new(new ClaimsIdentity(claims, "test"));
+
+    private static HttpRequestMessage UploadRequestWithoutRequiredHeaders()
+    {
+        var content = new MultipartFormDataContent();
+        content.Add(new ByteArrayContent([1, 2, 3]), "files", "part.stl");
+        return new HttpRequestMessage(HttpMethod.Post, $"/file/v1/instant-quotation/sessions/{SessionId}/files")
+        {
+            Content = content,
+        };
+    }
+
+    private static HttpRequestMessage FinalizeRequest(HttpContent? content)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/file/v1/instant-quotation/sessions/{SessionId}/finalizations")
+        {
+            Content = content,
+        };
+        request.Headers.Add("X-Quote-Session-Token", "token");
+        request.Headers.Add("Idempotency-Key", "finalize-1");
+        return request;
+    }
+
+    private static async Task<WebApplication> StartPipelineAsync()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers()
+            .AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<IAuthorizationPolicyProvider, AllowAllPolicyProvider>();
+        builder.Services.AddSingleton<IPolicyEvaluator, AllowAllPolicyEvaluator>();
+        builder.Services.AddSingleton<IInstantQuoteFileService, StubService>();
+        builder.Services.AddSingleton<IInstantQuoteMultipartReader, StubMultipartReader>();
+
+        var app = builder.Build();
+        app.UseRouting();
+        app.UseAuthorization();
+        app.MapControllers();
+        await app.StartAsync();
+        return app;
     }
 
     private static void AssertMethod(string name, string template)
@@ -227,5 +339,39 @@ public sealed class InstantQuotationFilesContractTests
                 new InstantQuoteFileResponse(FileId, "part.stl", "model/stl", 3, "ABC123", "finalized"),
             ]));
         }
+    }
+
+    private sealed class AllowAllPolicyProvider : IAuthorizationPolicyProvider
+    {
+        private static readonly AuthorizationPolicy Policy = new AuthorizationPolicyBuilder()
+            .RequireAssertion(_ => true)
+            .Build();
+
+        public Task<AuthorizationPolicy> GetDefaultPolicyAsync() => Task.FromResult(Policy);
+
+        public Task<AuthorizationPolicy?> GetFallbackPolicyAsync() => Task.FromResult<AuthorizationPolicy?>(null);
+
+        public Task<AuthorizationPolicy?> GetPolicyAsync(string policyName) =>
+            Task.FromResult<AuthorizationPolicy?>(Policy);
+    }
+
+    private sealed class AllowAllPolicyEvaluator : IPolicyEvaluator
+    {
+        public Task<AuthenticateResult> AuthenticateAsync(AuthorizationPolicy policy, HttpContext context)
+        {
+            var principal = Principal(new Claim(
+                "sub",
+                "pipeline-user",
+                ClaimValueTypes.String,
+                "https://issuer.example"));
+            var ticket = new AuthenticationTicket(principal, "test");
+            return Task.FromResult(AuthenticateResult.Success(ticket));
+        }
+
+        public Task<PolicyAuthorizationResult> AuthorizeAsync(
+            AuthorizationPolicy policy,
+            AuthenticateResult authenticationResult,
+            HttpContext context,
+            object? resource) => Task.FromResult(PolicyAuthorizationResult.Success());
     }
 }
