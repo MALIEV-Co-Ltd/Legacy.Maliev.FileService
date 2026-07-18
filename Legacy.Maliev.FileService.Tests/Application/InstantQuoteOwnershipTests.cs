@@ -61,6 +61,26 @@ public sealed class InstantQuoteOwnershipTests
         Assert.Throws<ArgumentException>(() => CreateSession(Encoding.UTF8.GetBytes("plaintext"), null, false));
     }
 
+    [Theory]
+    [InlineData("ABCDEF")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg")]
+    public void UploadConstructor_InvalidExpectedSha256_Throws(string checksum)
+    {
+        Assert.Throws<ArgumentException>(() => CreateUpload(checksum));
+    }
+
+    [Theory]
+    [InlineData("ABCDEF")]
+    [InlineData("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")]
+    [InlineData("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")]
+    public void ActualSha256_InvalidValue_Throws(string checksum)
+    {
+        var upload = CreateUpload(new string('a', 64));
+
+        Assert.Throws<ArgumentException>(() => upload.ActualSha256 = checksum);
+    }
+
     private static InstantQuoteUploadSession CreateSession(
         byte[] tokenHash,
         string? ownerSubject,
@@ -76,4 +96,8 @@ public sealed class InstantQuoteOwnershipTests
     }
 
     private static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
+
+    private static InstantQuoteUploadFile CreateUpload(string expectedSha256) => new(
+        Guid.NewGuid(), Guid.NewGuid(), Hash("key"), new string('c', 64), "part.stl", ".stl", "model/stl",
+        expectedSha256, null, null, null, "instant-quote/opaque", null, InstantQuoteWorkflowState.Pending, Now, Now);
 }

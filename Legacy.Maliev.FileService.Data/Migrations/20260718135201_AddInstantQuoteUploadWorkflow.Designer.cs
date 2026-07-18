@@ -71,7 +71,8 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("SessionId", "IdempotencyKeyHash")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasDatabaseName("IX_InstantQuoteFinalization_SessionId_IdempotencyKeyHash");
 
                     b.ToTable("InstantQuoteFinalization", null, t =>
                         {
@@ -161,10 +162,15 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("SessionId", "IdempotencyKeyHash")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasDatabaseName("IX_InstantQuoteUploadFile_SessionId_IdempotencyKeyHash");
 
                     b.ToTable("InstantQuoteUploadFile", null, t =>
                         {
+                            t.HasCheckConstraint("CK_InstantQuoteUploadFile_ActualSha256", "\"ActualSha256\" IS NULL OR \"ActualSha256\" ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("CK_InstantQuoteUploadFile_ExpectedSha256", "\"ExpectedSha256\" ~ '^[0-9a-f]{64}$'");
+
                             t.HasCheckConstraint("CK_InstantQuoteUploadFile_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
 
                             t.HasCheckConstraint("CK_InstantQuoteUploadFile_KeyHash_Length", "octet_length(\"IdempotencyKeyHash\") = 32");

@@ -3,6 +3,8 @@ namespace Legacy.Maliev.FileService.Domain;
 /// <summary>State persisted for one instant-quotation upload reservation.</summary>
 public sealed class InstantQuoteUploadFile
 {
+    private string? actualSha256;
+
     private InstantQuoteUploadFile()
     {
     }
@@ -15,6 +17,11 @@ public sealed class InstantQuoteUploadFile
     {
         ValidateHash(idempotencyKeyHash, nameof(idempotencyKeyHash));
         ValidateFingerprint(requestFingerprint, nameof(requestFingerprint));
+        ValidateSha256(expectedSha256, nameof(expectedSha256));
+        if (actualSha256 is not null)
+        {
+            ValidateSha256(actualSha256, nameof(actualSha256));
+        }
         Id = id;
         SessionId = sessionId;
         IdempotencyKeyHash = idempotencyKeyHash.ToArray();
@@ -50,7 +57,19 @@ public sealed class InstantQuoteUploadFile
     /// <summary>Gets the expected lowercase SHA-256 checksum.</summary>
     public string ExpectedSha256 { get; private set; } = string.Empty;
     /// <summary>Gets or sets the authoritative lowercase SHA-256 checksum.</summary>
-    public string? ActualSha256 { get; set; }
+    public string? ActualSha256
+    {
+        get => actualSha256;
+        set
+        {
+            if (value is not null)
+            {
+                ValidateSha256(value, nameof(value));
+            }
+
+            actualSha256 = value;
+        }
+    }
     /// <summary>Gets or sets the authoritative object size.</summary>
     public long? ActualSizeBytes { get; set; }
     /// <summary>Gets or sets the authoritative GCS generation.</summary>
@@ -76,6 +95,12 @@ public sealed class InstantQuoteUploadFile
     {
         if (fingerprint.Length != 64 || fingerprint.Any(value => !char.IsAsciiHexDigit(value) || char.IsUpper(value)))
             throw new ArgumentException("Fingerprints must be 64 lowercase hexadecimal characters.", parameterName);
+    }
+
+    private static void ValidateSha256(string checksum, string parameterName)
+    {
+        if (checksum.Length != 64 || checksum.Any(value => !char.IsAsciiHexDigit(value) || char.IsUpper(value)))
+            throw new ArgumentException("SHA-256 checksums must be 64 lowercase hexadecimal characters.", parameterName);
     }
 }
 

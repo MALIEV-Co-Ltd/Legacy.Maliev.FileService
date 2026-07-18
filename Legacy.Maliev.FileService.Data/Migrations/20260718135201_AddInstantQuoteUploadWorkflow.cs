@@ -82,6 +82,8 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_InstantQuoteUploadFile", x => x.Id);
+                    table.CheckConstraint("CK_InstantQuoteUploadFile_ActualSha256", "\"ActualSha256\" IS NULL OR \"ActualSha256\" ~ '^[0-9a-f]{64}$'");
+                    table.CheckConstraint("CK_InstantQuoteUploadFile_ExpectedSha256", "\"ExpectedSha256\" ~ '^[0-9a-f]{64}$'");
                     table.CheckConstraint("CK_InstantQuoteUploadFile_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
                     table.CheckConstraint("CK_InstantQuoteUploadFile_KeyHash_Length", "octet_length(\"IdempotencyKeyHash\") = 32");
                     table.ForeignKey(

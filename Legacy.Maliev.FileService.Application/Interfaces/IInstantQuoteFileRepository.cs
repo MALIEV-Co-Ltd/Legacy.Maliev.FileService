@@ -21,7 +21,8 @@ public enum InstantQuoteReservationStatus
 /// <typeparam name="TRecord">Persisted workflow record type.</typeparam>
 /// <param name="Status">Reservation classification.</param>
 /// <param name="Record">Authoritative persisted record.</param>
-public sealed record InstantQuoteReservation<TRecord>(InstantQuoteReservationStatus Status, TRecord Record);
+/// <param name="Version">Caller-observed PostgreSQL xmin value required for a state transition.</param>
+public sealed record InstantQuoteReservation<TRecord>(InstantQuoteReservationStatus Status, TRecord Record, uint Version);
 
 /// <summary>Persistence boundary dedicated to the instant-quotation file workflow.</summary>
 public interface IInstantQuoteFileRepository
@@ -36,9 +37,9 @@ public interface IInstantQuoteFileRepository
     /// <summary>Atomically reserves or classifies an upload idempotency key.</summary>
     Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(InstantQuoteUploadFile upload, CancellationToken cancellationToken);
     /// <summary>Persists authoritative upload metadata and state.</summary>
-    Task SaveUploadAsync(InstantQuoteUploadFile upload, CancellationToken cancellationToken);
+    Task<uint> SaveUploadAsync(InstantQuoteUploadFile upload, uint expectedVersion, CancellationToken cancellationToken);
     /// <summary>Atomically reserves or classifies a finalization idempotency key.</summary>
     Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(InstantQuoteFinalization finalization, CancellationToken cancellationToken);
     /// <summary>Persists authoritative finalization state.</summary>
-    Task SaveFinalizationAsync(InstantQuoteFinalization finalization, CancellationToken cancellationToken);
+    Task<uint> SaveFinalizationAsync(InstantQuoteFinalization finalization, uint expectedVersion, CancellationToken cancellationToken);
 }
