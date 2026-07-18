@@ -12,8 +12,11 @@ direct-to-final uploads, and unverified signed URLs with explicit security bound
 
 Dependency direction is `Api -> Application -> Domain`; PostgreSQL, ClamAV, and
 Google Cloud Storage adapters live in `Data`. The service uses Scalar/OpenAPI through
-`Maliev.Aspire.ServiceDefaults`, built-in `ILogger<T>`, granular JWT permissions,
-Application Default Credentials, and Workload Identity in GKE.
+the public `Legacy.Maliev.ServiceDefaults` package while preserving the existing
+`Maliev.Aspire.ServiceDefaults` CLR namespace, built-in `ILogger<T>`, granular JWT permissions,
+Application Default Credentials, and Workload Identity in GKE. CI and image builds also use the
+public `Legacy.Maliev.CompatibilityContracts` source repository, so no new-platform shared-library
+source or private package credentials are required.
 
 The upload state transition is intentionally fail closed:
 
