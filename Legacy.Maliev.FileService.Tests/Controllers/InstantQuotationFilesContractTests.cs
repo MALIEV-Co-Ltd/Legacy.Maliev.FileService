@@ -111,6 +111,8 @@ public sealed class InstantQuotationFilesContractTests
         Assert.Contains("WWW-Authenticate: Bearer", documentation, StringComparison.Ordinal);
         Assert.Contains("Browsers do not call FileService", documentation, StringComparison.Ordinal);
         Assert.Contains("server-side session state", documentation, StringComparison.Ordinal);
+        Assert.Contains("current Web integration does not delegate the member subject", documentation, StringComparison.Ordinal);
+        Assert.Contains("Web service identity", documentation, StringComparison.Ordinal);
         foreach (var code in new[]
         {
             "validation_error", "session_forbidden", "idempotency_conflict", "upload_in_progress",

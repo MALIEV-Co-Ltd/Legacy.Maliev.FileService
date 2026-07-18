@@ -1,12 +1,12 @@
 using System.Net;
 using System.Security.Claims;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using Legacy.Maliev.FileService.Api.Controllers;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Models = Legacy.Maliev.FileService.Application.Models;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Builder;
@@ -14,8 +14,6 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Legacy.Maliev.FileService.Tests.Controllers;
 
@@ -41,8 +39,23 @@ public sealed class InstantQuoteAuthorizationContractTests
         }
 
         using var problem = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
-        Assert.Equal(expectedCode, problem.RootElement.GetProperty("code").GetString());
-        Assert.Equal((int)expectedStatus, problem.RootElement.GetProperty("status").GetInt32());
+        var root = problem.RootElement;
+        Assert.Equal(
+            new[] { "code", "detail", "status", "title", "type" },
+            root.EnumerateObject().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(expectedCode, root.GetProperty("code").GetString());
+        Assert.Equal((int)expectedStatus, root.GetProperty("status").GetInt32());
+        Assert.Equal($"https://docs.maliev.com/problems/{expectedCode}", root.GetProperty("type").GetString());
+        if (expectedCode == "platform_authentication_required")
+        {
+            Assert.Equal("Platform authentication is required", root.GetProperty("title").GetString());
+            Assert.Equal("The caller must provide an accepted platform identity.", root.GetProperty("detail").GetString());
+        }
+        else
+        {
+            Assert.Equal("File operation is not permitted", root.GetProperty("title").GetString());
+            Assert.Equal("The caller does not have permission to perform this file operation.", root.GetProperty("detail").GetString());
+        }
     }
 
     [Fact]
@@ -60,7 +73,7 @@ public sealed class InstantQuoteAuthorizationContractTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
-        builder.Services.AddAuthentication("test").AddScheme<AuthenticationSchemeOptions, ContractAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton<IAuthorizationPolicyProvider, ContractPolicyProvider>();
         builder.Services.AddSingleton<IPolicyEvaluator>(new ContractPolicyEvaluator(authenticated, authorized));
@@ -77,24 +90,11 @@ public sealed class InstantQuoteAuthorizationContractTests
         return app;
     }
 
-    private sealed class ContractAuthenticationHandler(
-        IOptionsMonitor<AuthenticationSchemeOptions> options,
-        ILoggerFactory logger,
-        UrlEncoder encoder) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
-    {
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync() => Task.FromResult(AuthenticateResult.NoResult());
-
-        protected override Task HandleChallengeAsync(AuthenticationProperties properties)
-        {
-            Response.StatusCode = StatusCodes.Status401Unauthorized;
-            Response.Headers.WWWAuthenticate = "Bearer";
-            return Task.CompletedTask;
-        }
-    }
-
     private sealed class ContractPolicyProvider : IAuthorizationPolicyProvider
     {
-        private static readonly AuthorizationPolicy Policy = new AuthorizationPolicyBuilder("test").RequireAuthenticatedUser().Build();
+        private static readonly AuthorizationPolicy Policy = new AuthorizationPolicyBuilder(JwtBearerDefaults.AuthenticationScheme)
+            .RequireAuthenticatedUser()
+            .Build();
         public Task<AuthorizationPolicy> GetDefaultPolicyAsync() => Task.FromResult(Policy);
         public Task<AuthorizationPolicy?> GetFallbackPolicyAsync() => Task.FromResult<AuthorizationPolicy?>(null);
         public Task<AuthorizationPolicy?> GetPolicyAsync(string policyName) => Task.FromResult<AuthorizationPolicy?>(Policy);
@@ -105,8 +105,8 @@ public sealed class InstantQuoteAuthorizationContractTests
         public Task<AuthenticateResult> AuthenticateAsync(AuthorizationPolicy policy, HttpContext context)
         {
             if (!authenticated) return Task.FromResult(AuthenticateResult.NoResult());
-            var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "test-user")], "test"));
-            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, "test")));
+            var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "test-user")], JwtBearerDefaults.AuthenticationScheme));
+            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, JwtBearerDefaults.AuthenticationScheme)));
         }
 
         public Task<PolicyAuthorizationResult> AuthorizeAsync(AuthorizationPolicy policy, AuthenticateResult authenticationResult, HttpContext context, object? resource) =>

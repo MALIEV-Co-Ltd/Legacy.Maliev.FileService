@@ -8,8 +8,8 @@ All JSON property names are camelCase. Customer filenames are metadata only and 
 
 Browsers do not call FileService and never receive a FileService JWT, service credential, Google credential, bucket, or object name. The browser calls the same-origin Web BFF using the Web application's anonymous or member session and normal request-forgery protections.
 
-- For a member workflow, the BFF calls FileService with a short-lived delegated platform JWT that retains the member subject and `legacy-file.uploads.create` permission.
-- For an anonymous workflow, the BFF calls FileService with its least-privilege server identity and retains the quote-session capability in server-side session state.
+- For both anonymous and member workflows, the BFF calls FileService with the Web service's short-lived platform JWT and `legacy-file.uploads.create` permission. The current Web integration does not delegate the member subject to FileService.
+- FileService binds the upload session to that Web service identity and the opaque quote-session capability. The BFF separately retains and binds the capability in server-side session state for the correct anonymous or member Web session.
 - The BFF proxies upload, removal, and finalization. It binds the FileService session to the same Web quote session and does not place `X-Quote-Session-Token` in browser storage or URLs.
 - Google Cloud Storage uses ADC/Workload Identity only inside FileService. Neither Web nor a browser supplies Google credentials.
 
@@ -44,9 +44,23 @@ Required headers:
 
 The multipart body must contain exactly one part named `files`. The file is streamed; the endpoint does not use `IFormFile` buffering. Zero parts, extra parts, a different field name, an empty file, or an invalid digest is rejected.
 
+This is the normative multipart example represented by generated OpenAPI. The example body is a complete minimal ASCII STL file; production callers send the exact selected file bytes and its matching SHA-256 header.
+
 ```http
+POST /file/v1/instant-quotation/sessions/11111111-1111-1111-1111-111111111111/files HTTP/1.1
+Authorization: Bearer <web-service-token>
+X-Quote-Session-Token: <opaque-session-capability>
+Idempotency-Key: upload-2222222222222222
+X-Content-SHA256: <64-hex-sha256-of-the-file-bytes>
+Content-Type: multipart/form-data; boundary=quote-boundary
+
+--quote-boundary
 Content-Disposition: form-data; name="files"; filename="customer-part.stl"
 Content-Type: model/stl
+
+solid example
+endsolid example
+--quote-boundary--
 ```
 
 Success: `201 Created`
@@ -129,6 +143,8 @@ Success: `204 No Content`. Removal is idempotent: retrying an already removed fi
 | `finalized` | Return 403 `session_forbidden`; never delete a file already linked to a quotation request. |
 
 An HTTP request abort cancels the in-flight operation through the request cancellation token. It is not converted to a 2xx response or a definitive failed state. If the durable outcome is ambiguous, retry the identical operation using its original idempotency key where that route requires one.
+
+Removal can return 503 `outcome_unknown` when a conditional object deletion or durable state write has an ambiguous outcome. Because DELETE has no idempotency-key header, retry the same session/file DELETE; its recorded `removed` state makes the successful replay return 204 without another object deletion.
 
 ## Errors
 

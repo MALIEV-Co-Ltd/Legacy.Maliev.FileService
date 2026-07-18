@@ -24,7 +24,10 @@ builder.AddStandardOpenApi(
     title: "Legacy MALIEV File Service API",
     description: "Temporary .NET 10 compatibility service preserving secure legacy upload API contracts.");
 builder.Services.AddOpenApi("v1", options =>
-    options.AddOperationTransformer<InstantQuoteOpenApiTransformer>());
+{
+    options.AddDocumentTransformer<InstantQuoteOpenApiDocumentTransformer>();
+    options.AddOperationTransformer<InstantQuoteOpenApiTransformer>();
+});
 
 builder.Services.AddControllers().AddJsonOptions(options =>
 {

@@ -23,8 +23,14 @@ public sealed class InstantQuoteOpenApiContractTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
 
+        var bearer = document.RootElement.GetProperty("components").GetProperty("securitySchemes").GetProperty("Bearer");
+        Assert.Equal("http", bearer.GetProperty("type").GetString());
+        Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
+        Assert.Equal("JWT", bearer.GetProperty("bearerFormat").GetString());
+
         var paths = document.RootElement.GetProperty("paths");
         var session = paths.GetProperty("/file/v1/instant-quotation/sessions").GetProperty("post");
+        AssertBearerSecurity(session);
         AssertResponse(
             session,
             "201",
@@ -35,12 +41,19 @@ public sealed class InstantQuoteOpenApiContractTests
         AssertProblem(session, "503", "dependency_unavailable");
 
         var upload = paths.GetProperty("/file/v1/instant-quotation/sessions/{sessionId}/files").GetProperty("post");
+        AssertBearerSecurity(upload);
         var multipart = upload.GetProperty("requestBody").GetProperty("content").GetProperty("multipart/form-data");
         Assert.True(upload.GetProperty("requestBody").GetProperty("required").GetBoolean());
         Assert.Contains("files", multipart.GetProperty("schema").GetProperty("required").EnumerateArray().Select(value => value.GetString()));
         var file = multipart.GetProperty("schema").GetProperty("properties").GetProperty("files");
         Assert.Equal("string", file.GetProperty("type").GetString());
         Assert.Equal("binary", file.GetProperty("format").GetString());
+        Assert.Equal(
+            "model/stl, application/sla, application/vnd.ms-pki.stl, model/obj, text/plain, application/x-tgif, application/vnd.ms-package.3dmanufacturing-3dmodel+xml, model/step, application/step, model/iges, application/iges, model/gltf-binary, model/gltf+json, application/octet-stream",
+            multipart.GetProperty("encoding").GetProperty("files").GetProperty("contentType").GetString());
+        Assert.Equal(
+            "solid example\nendsolid example\n",
+            multipart.GetProperty("example").GetProperty("files").GetString());
         AssertHeader(upload, "X-Quote-Session-Token", 32, 512, null);
         AssertHeader(upload, "Idempotency-Key", 16, 128, null);
         AssertHeader(upload, "X-Content-SHA256", null, null, "^[0-9A-Fa-f]{64}$");
@@ -59,6 +72,7 @@ public sealed class InstantQuoteOpenApiContractTests
         AssertProblem(upload, "503", "dependency_unavailable", "outcome_unknown");
 
         var finalize = paths.GetProperty("/file/v1/instant-quotation/sessions/{sessionId}/finalizations").GetProperty("post");
+        AssertBearerSecurity(finalize);
         AssertHeader(finalize, "X-Quote-Session-Token", 32, 512, null);
         AssertHeader(finalize, "Idempotency-Key", 16, 128, null);
         var finalizeRequest = finalize.GetProperty("requestBody").GetProperty("content").GetProperty("application/json");
@@ -78,6 +92,7 @@ public sealed class InstantQuoteOpenApiContractTests
         AssertProblem(finalize, "503", "dependency_unavailable", "outcome_unknown");
 
         var remove = paths.GetProperty("/file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}").GetProperty("delete");
+        AssertBearerSecurity(remove);
         AssertHeader(remove, "X-Quote-Session-Token", 32, 512, null);
         Assert.True(remove.GetProperty("responses").TryGetProperty("204", out var noContent));
         Assert.False(noContent.TryGetProperty("content", out _));
@@ -85,7 +100,14 @@ public sealed class InstantQuoteOpenApiContractTests
         AssertProblem(remove, "401", "platform_authentication_required");
         AssertProblem(remove, "403", "permission_forbidden", "session_forbidden");
         AssertProblem(remove, "409", "upload_in_progress");
-        AssertProblem(remove, "503", "dependency_unavailable");
+        AssertProblem(remove, "503", "dependency_unavailable", "outcome_unknown");
+    }
+
+    private static void AssertBearerSecurity(JsonElement operation)
+    {
+        var requirement = Assert.Single(operation.GetProperty("security").EnumerateArray());
+        Assert.True(requirement.TryGetProperty("Bearer", out var scopes));
+        Assert.Empty(scopes.EnumerateArray());
     }
 
     private static void AssertHeader(JsonElement operation, string name, int? minimum, int? maximum, string? pattern)
@@ -131,7 +153,11 @@ public sealed class InstantQuoteOpenApiContractTests
         builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
         builder.Services.AddSingleton<IInstantQuoteFileService, UnusedInstantQuoteFileService>();
-        builder.Services.AddOpenApi("v1", options => options.AddOperationTransformer<InstantQuoteOpenApiTransformer>());
+        builder.Services.AddOpenApi("v1", options =>
+        {
+            options.AddDocumentTransformer<InstantQuoteOpenApiDocumentTransformer>();
+            options.AddOperationTransformer<InstantQuoteOpenApiTransformer>();
+        });
         var app = builder.Build();
         app.MapControllers();
         app.MapOpenApi();
