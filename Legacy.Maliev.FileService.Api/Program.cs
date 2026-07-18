@@ -1,10 +1,14 @@
 using System.Text.Json.Serialization;
 using Google.Cloud.Storage.V1;
+using Legacy.Maliev.FileService.Api.Http;
+using Legacy.Maliev.FileService.Api.OpenApi;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Data;
 using Maliev.Aspire.ServiceDefaults;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Http.Features;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +23,8 @@ builder.AddStandardMiddleware(options => options.EnableRequestLogging = true);
 builder.AddStandardOpenApi(
     title: "Legacy MALIEV File Service API",
     description: "Temporary .NET 10 compatibility service preserving secure legacy upload API contracts.");
+builder.Services.AddOpenApi("v1", options =>
+    options.AddOperationTransformer<InstantQuoteOpenApiTransformer>());
 
 builder.Services.AddControllers().AddJsonOptions(options =>
 {
@@ -27,6 +33,7 @@ builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.DictionaryKeyPolicy = null;
 });
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, InstantQuoteAuthorizationResultHandler>();
 builder.Services.AddOptions<FileStorageOptions>()
     .Bind(builder.Configuration.GetSection(FileStorageOptions.SectionName))
     .Validate(options => options.AllowedBuckets.Length > 0, "At least one allowed bucket is required")

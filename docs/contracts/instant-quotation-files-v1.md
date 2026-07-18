@@ -2,7 +2,16 @@
 
 This Web-facing API creates an upload session, streams one CAD file at a time, and finalizes selected clean files for a quotation request. FileService returns file and link authority only. GeometryService and the quotation backend own authoritative geometry/DFM analysis and quotation decisions; FileService never calculates geometry, DFM, or price. This API has no price, amount, currency, or quotation-calculation fields.
 
-All JSON property names are camelCase. Customer filenames are metadata only and never become storage object basenames. Temporary private object names, storage credentials, browser/service credentials, stack traces, and dependency details are never returned. The finalized bucket and objectName are returned as the durable file authority for the downstream quotation workflow. The `sessionToken` is an opaque, time-limited capability returned only when its session is created.
+All JSON property names are camelCase. Customer filenames are metadata only and never become storage object basenames. Temporary private object names, storage credentials, browser/service credentials, stack traces, and dependency details are never returned. The finalized bucket and objectName coordinates are returned only on this authenticated FileService-to-BFF boundary so the BFF can create the existing QuotationRequest file link; the BFF must never return those coordinates to a browser or public client. The `sessionToken` is an opaque, time-limited capability returned only when its session is created.
+
+## Authentication and browser boundary
+
+Browsers do not call FileService and never receive a FileService JWT, service credential, Google credential, bucket, or object name. The browser calls the same-origin Web BFF using the Web application's anonymous or member session and normal request-forgery protections.
+
+- For a member workflow, the BFF calls FileService with a short-lived delegated platform JWT that retains the member subject and `legacy-file.uploads.create` permission.
+- For an anonymous workflow, the BFF calls FileService with its least-privilege server identity and retains the quote-session capability in server-side session state.
+- The BFF proxies upload, removal, and finalization. It binds the FileService session to the same Web quote session and does not place `X-Quote-Session-Token` in browser storage or URLs.
+- Google Cloud Storage uses ADC/Workload Identity only inside FileService. Neither Web nor a browser supplies Google credentials.
 
 ## Create a session
 
@@ -20,7 +29,7 @@ Success: `201 Created`
 }
 ```
 
-Keep the token only for the active quote-upload workflow. It proves ownership for upload and finalization calls and cannot be recovered later.
+The BFF keeps the token only for the active quote-upload workflow. It proves ownership for upload, removal, and finalization calls and cannot be recovered later.
 
 ## Upload one file
 
@@ -54,6 +63,18 @@ Success: `201 Created`
 ```
 
 The actual streamed bytes may not exceed 209,715,200 bytes (200 MiB). Supported extensions, matched case-insensitively, are exactly `.stl`, `.obj`, `.3mf`, `.step`, `.stp`, `.iges`, `.igs`, `.glb`, and `.gltf`.
+
+The declared part media type must match this matrix. `application/octet-stream` is also accepted for every listed extension because browsers do not consistently identify CAD formats.
+
+| Extension | Accepted declared media types |
+|---|---|
+| `.stl` | `model/stl`, `application/sla`, `application/vnd.ms-pki.stl`, `application/octet-stream` |
+| `.obj` | `model/obj`, `text/plain`, `application/x-tgif`, `application/octet-stream` |
+| `.3mf` | `application/vnd.ms-package.3dmanufacturing-3dmodel+xml`, `application/octet-stream` |
+| `.step`, `.stp` | `model/step`, `application/step`, `application/octet-stream` |
+| `.iges`, `.igs` | `model/iges`, `application/iges`, `application/octet-stream` |
+| `.glb` | `model/gltf-binary`, `application/octet-stream` |
+| `.gltf` | `model/gltf+json`, `application/octet-stream` |
 
 ## Finalize selected files
 
@@ -90,24 +111,34 @@ Success: `200 OK`
 
 Only file IDs owned by the same unexpired session and already recorded clean can be finalized. A file or token from another session is rejected without disclosing whether that resource exists.
 
+`bucket` and `objectName` are server-only linking coordinates for the BFF's existing QuotationRequest integration. They are not download URLs or public object identifiers and must be removed from any browser-facing response. Replacing these coordinates with an opaque cross-service link requires a coordinated QuotationRequest API change and is outside this compatibility contract.
+
 ## Remove a pre-finalization file
 
 `DELETE /file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}`
 
 Required header: `X-Quote-Session-Token`.
 
-Success: `204 No Content`. Removal is idempotent: retrying an already removed file returns 204 without another storage operation. Clean, failed, or unknown temporary objects are conditionally deleted by their exact generation when one is recorded. Pending or uploaded work returns `upload_in_progress`; a finalized file is protected because it is already linked to a quotation request.
+Success: `204 No Content`. Removal is idempotent: retrying an already removed file returns 204 without another storage operation.
+
+| Recorded file state | Removal result |
+|---|---|
+| `clean`, `failed`, `unknown` | Conditionally delete the temporary object by its exact recorded generation, then record `removed`; return 204. |
+| `removed` | Perform no storage operation; return 204. |
+| `pending`, `uploaded` | Return 409 `upload_in_progress`; retry after the in-flight operation resolves. |
+| `finalized` | Return 403 `session_forbidden`; never delete a file already linked to a quotation request. |
+
+An HTTP request abort cancels the in-flight operation through the request cancellation token. It is not converted to a 2xx response or a definitive failed state. If the durable outcome is ambiguous, retry the identical operation using its original idempotency key where that route requires one.
 
 ## Errors
 
 Errors use `application/problem+json` and RFC ProblemDetails with a stable `code` extension. Titles and details are safe public text.
 
-The 401 response is produced by platform authentication middleware and is not guaranteed to use this API's ProblemDetails body or stable `code`. The application-level ProblemDetails examples below therefore begin at 400 and cover every stable code emitted by this API.
-
 | Status | `code` | Meaning |
 |---:|---|---|
 | 400 | `validation_error` | Headers, filename metadata, multipart shape, digest syntax, or selection is invalid. |
-| 401 | platform authentication challenge | The caller has no accepted authenticated platform identity. |
+| 401 | `platform_authentication_required` | The caller has no accepted authenticated platform identity. |
+| 403 | `permission_forbidden` | The authenticated platform identity lacks `legacy-file.uploads.create`. |
 | 403 | `session_forbidden` | The session token cannot authorize the requested session. |
 | 409 | `idempotency_conflict` | The same idempotency key was already bound to a different request fingerprint. |
 | 409 | `upload_in_progress` | An identical upload or finalization reservation is still pending. |
@@ -117,23 +148,23 @@ The 401 response is produced by platform authentication middleware and is not gu
 | 503 | `dependency_unavailable` | Required storage, scanning, or durable state is temporarily unavailable. |
 | 503 | `outcome_unknown` | A failure left an ambiguous result that requires identical replay. |
 
+Every problem has this exact shape; generated OpenAPI publishes a named example for every code reachable by each operation.
+
 ```json
-[
-  { "status": 400, "code": "validation_error" },
-  { "status": 403, "code": "session_forbidden" },
-  { "status": 409, "code": "idempotency_conflict" },
-  { "status": 409, "code": "upload_in_progress" },
-  { "status": 413, "code": "payload_too_large" },
-  { "status": 415, "code": "unsupported_media_type" },
-  { "status": 422, "code": "unsafe_content" },
-  { "status": 503, "code": "dependency_unavailable" },
-  { "status": 503, "code": "outcome_unknown" }
-]
+{
+  "type": "https://docs.maliev.com/problems/idempotency_conflict",
+  "title": "Idempotency replay conflict",
+  "status": 409,
+  "detail": "The idempotency key is already associated with a different request.",
+  "code": "idempotency_conflict"
+}
 ```
+
+Authentication also produces `WWW-Authenticate: Bearer`. Permission denial uses `permission_forbidden`; a valid platform caller that cannot prove ownership of a particular session receives `session_forbidden` instead.
 
 ## Ownership and retry rules
 
-- Treat `sessionToken` and every idempotency key as secrets; do not put them in URLs or logs.
+- Treat `sessionToken` and every idempotency key as secrets; keep the session token at the BFF and do not put either value in URLs or logs.
 - Retry an interrupted upload or finalization with the same session, token, idempotency key, and identical request content.
 - An identical completed retry returns the recorded result. Reusing a key with changed bytes, digest, metadata, quotation request, or file selection returns `idempotency_conflict`.
 - For `outcome_unknown`, retry the identical request with the same idempotency key until the authoritative result can be reconciled.

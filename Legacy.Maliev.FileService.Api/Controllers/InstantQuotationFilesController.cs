@@ -16,6 +16,7 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 [Route("file/v1/instant-quotation")]
 [Authorize]
 [InstantQuoteValidationProblem]
+[InstantQuoteProblemContract]
 public sealed class InstantQuotationFilesController(
     IInstantQuoteFileService service,
     IInstantQuoteMultipartReader multipartReader) : ControllerBase
