@@ -139,7 +139,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         if (scan.SizeBytes != metadata.SizeBytes ||
             !FixedTimeHexEquals(scan.Sha256, upload.ExpectedSha256))
         {
-            throw new InstantQuoteAmbiguousOutcomeException("Temporary object bytes do not match the upload reservation.");
+            await CleanupAsync(metadata);
+            upload.State = InstantQuoteWorkflowState.Failed;
+            upload.ModifiedAt = _timeProvider.GetUtcNow();
+            await SaveTerminalIgnoringCancellationAsync(upload, reservation.Version);
+            throw new InstantQuoteUnsafeContentException("Temporary object bytes do not match the upload reservation.");
         }
         if (scan.Result == InstantQuoteScanResult.Unsafe)
         {

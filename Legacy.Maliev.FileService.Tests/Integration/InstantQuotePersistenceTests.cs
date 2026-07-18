@@ -1,9 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Application.Models;
+using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Npgsql;
 
 namespace Legacy.Maliev.FileService.Tests.Integration;
@@ -185,6 +189,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
 
         await Assert.ThrowsAsync<InstantQuoteConcurrencyException>(() =>
             staleRepository.SaveUploadAsync(staleReplay.Record, staleReplay.Version, CancellationToken.None));
+        Assert.Equal(EntityState.Detached, staleContext.Entry(staleReplay.Record).State);
     }
 
     [Fact]
@@ -308,6 +313,60 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
+    public async Task Finalize_SameAuthorityXminWinner_RepositoryContextRemainsUsableForFinalizationSave()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var acquired = await repository.ReserveUploadAsync(
+            CreateUpload(session.Id, "same-authority-race"), CancellationToken.None);
+        acquired.Record.ActualSha256 = new string('a', 64);
+        acquired.Record.ActualSizeBytes = 42;
+        acquired.Record.GcsGeneration = 7;
+        acquired.Record.State = InstantQuoteWorkflowState.Clean;
+        await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        var requestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var destination = $"instant-quotation/{requestId:N}/{acquired.Record.Id:N}.stl";
+        var storage = new SameAuthorityRaceStorage(
+            destination,
+            async () =>
+            {
+                await using var winnerContext = fixture.CreateContext();
+                var winner = await winnerContext.InstantQuoteUploadFiles.SingleAsync(
+                    value => value.Id == acquired.Record.Id);
+                winner.FinalBucket = "private-bucket";
+                winner.FinalObjectName = destination;
+                winner.FinalizedQuotationRequestId = requestId;
+                winner.State = InstantQuoteWorkflowState.Finalized;
+                await winnerContext.SaveChangesAsync(CancellationToken.None);
+            });
+        var service = new InstantQuoteFileService(
+            repository,
+            storage,
+            new CleanScanner(),
+            Options.Create(new InstantQuoteFileOptions { StorageBucket = "private-bucket" }),
+            new FakeTimeProvider(Now));
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes("session-token")).TrimEnd('=');
+
+        var response = await service.FinalizeAsync(
+            session.Id,
+            new InstantQuoteOwner(session.OwnerSubject, session.IsAuthenticated),
+            token,
+            "same-authority-key",
+            new FinalizeInstantQuoteFilesRequest(requestId, [acquired.Record.Id]),
+            CancellationToken.None);
+
+        Assert.Equal(destination, Assert.Single(response.Files).ObjectName);
+        context.ChangeTracker.Clear();
+        var finalization = await context.InstantQuoteFinalizations.AsNoTracking().SingleAsync();
+        Assert.Equal(InstantQuoteWorkflowState.Finalized, finalization.State);
+        Assert.Equal(requestId, finalization.QuotationRequestId);
+    }
+
+    [Fact]
     public async Task ReserveFinalization_ConcurrentThenCompleted_ClassifiesReplayAndConflict()
     {
         Guid sessionId;
@@ -415,4 +474,43 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     private static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
 
     private static string Fingerprint(string value) => Convert.ToHexString(Hash(value)).ToLowerInvariant();
+
+    private sealed class SameAuthorityRaceStorage(string destination, Func<Task> beforePromotionReturns)
+        : IInstantQuoteObjectStorage
+    {
+        private readonly InstantQuoteObjectMetadata final = new(
+            "private-bucket", destination, 202, 42, new string('a', 64));
+        private bool promoted;
+
+        public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(
+            string bucket, string objectName, Stream content, string expectedSha256,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(
+            string bucket, string objectName, CancellationToken cancellationToken) =>
+            Task.FromResult<InstantQuoteObjectMetadata?>(promoted ? final : null);
+
+        public Task DownloadGenerationAsync(
+            string bucket, string objectName, long generation, Stream destinationStream,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public async Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(
+            string sourceBucket, string sourceObjectName, long sourceGeneration,
+            string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
+        {
+            await beforePromotionReturns();
+            promoted = true;
+            return final;
+        }
+
+        public Task DeleteGenerationAsync(
+            string bucket, string objectName, long generation, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class CleanScanner : IInstantQuoteFileSafetyScanner
+    {
+        public Task<InstantQuoteScanResult> ScanAsync(Stream content, CancellationToken cancellationToken) =>
+            Task.FromResult(InstantQuoteScanResult.Clean);
+    }
 }

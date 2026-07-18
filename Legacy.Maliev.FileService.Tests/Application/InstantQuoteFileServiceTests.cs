@@ -134,7 +134,7 @@ public sealed class InstantQuoteFileServiceTests
     }
 
     [Fact]
-    public async Task Upload_UnknownReservationWithWrongBodyAndExpectedMetadata_FailsClosed()
+    public async Task Upload_UnknownReservationWithWrongBodyAndExpectedMetadata_PersistsFailedAndCleansGeneration()
     {
         var stored = CreateStoredUpload(InstantQuoteWorkflowState.Unknown);
         var wrongBytes = BinaryStl();
@@ -152,15 +152,49 @@ public sealed class InstantQuoteFileServiceTests
         };
         storage.Seed(wrongBytes);
 
-        await Assert.ThrowsAsync<InstantQuoteAmbiguousOutcomeException>(() =>
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
             CreateService(repository, storage).UploadAsync(
                 stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
                 new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
                 new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
                 CancellationToken.None));
 
-        Assert.Empty(repository.SavedUploads);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, repository.SavedUploads[^1].Upload.State);
         Assert.Equal(1, storage.DownloadCount);
+        Assert.Equal(1, storage.DeleteCount);
+        Assert.Equal(stored.TemporaryBucket, storage.DeletedBucket);
+        Assert.Equal(stored.TemporaryObjectName, storage.DeletedObjectName);
+        Assert.Equal(stored.GcsGeneration, storage.DeletedGeneration);
+    }
+
+    [Fact]
+    public async Task Upload_UnknownReservationWithWrongByteCount_PersistsFailedAndCleansGeneration()
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Unknown);
+        var truncatedBytes = BinaryStl()[..^1];
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Unknown, stored, 17),
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                stored.TemporaryBucket, stored.TemporaryObjectName, stored.GcsGeneration!.Value,
+                stored.ActualSizeBytes!.Value, stored.ExpectedSha256),
+        };
+        storage.Seed(truncatedBytes);
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
+            CreateService(repository, storage).UploadAsync(
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
+                new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+                CancellationToken.None));
+
+        Assert.Equal(InstantQuoteWorkflowState.Failed, repository.SavedUploads[^1].Upload.State);
+        Assert.Equal(1, storage.DeleteCount);
+        Assert.Equal(stored.GcsGeneration, storage.DeletedGeneration);
     }
 
     [Fact]
