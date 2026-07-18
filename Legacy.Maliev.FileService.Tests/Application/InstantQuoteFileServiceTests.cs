@@ -223,6 +223,116 @@ public sealed class InstantQuoteFileServiceTests
         Assert.Equal(17U, repository.SavedUploads[^1].ExpectedVersion);
     }
 
+    [Theory]
+    [InlineData("metadata", typeof(InstantQuoteDependencyUnavailableException))]
+    [InlineData("download", typeof(InstantQuoteDependencyUnavailableException))]
+    [InlineData("save", typeof(InstantQuoteAmbiguousOutcomeException))]
+    public async Task Upload_UnknownBoundaryFailure_MapsStableContract(
+        string failureStage,
+        Type exceptionType)
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Unknown);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Unknown, stored, 17),
+            SaveUploadException = failureStage == "save" ? new IOException("save failed") : null,
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                stored.TemporaryBucket, stored.TemporaryObjectName, stored.GcsGeneration!.Value,
+                stored.ActualSizeBytes!.Value, stored.ExpectedSha256),
+            MetadataException = failureStage == "metadata" ? new IOException("metadata failed") : null,
+            DownloadException = failureStage == "download" ? new IOException("download failed") : null,
+        };
+        storage.Seed(BinaryStl());
+
+        var exception = await Record.ExceptionAsync(() => CreateService(repository, storage).UploadAsync(
+            stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
+            new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+            CancellationToken.None));
+
+        Assert.IsType(exceptionType, exception);
+        Assert.IsType<IOException>(exception!.InnerException);
+    }
+
+    [Fact]
+    public async Task Upload_UnknownMetadataCancellationAndKnownContractFailure_PreserveSemantics()
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Unknown);
+        var cancellation = new OperationCanceledException();
+        var contract = new InstantQuoteUnsafeContentException("known failure");
+
+        var cancelled = await ReconcileWithMetadataFailureAsync(cancellation);
+        var known = await ReconcileWithMetadataFailureAsync(contract);
+
+        Assert.Same(cancellation, cancelled);
+        Assert.Same(contract, known);
+
+        async Task<Exception?> ReconcileWithMetadataFailureAsync(Exception failure)
+        {
+            var repository = new FakeRepository
+            {
+                VerifySessionResult = CreateSessionRecord(),
+                UploadReservation = new(InstantQuoteReservationStatus.Unknown, stored, 17),
+            };
+            var storage = new FakeStorage { MetadataException = failure };
+            return await Record.ExceptionAsync(() => CreateService(repository, storage).UploadAsync(
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
+                new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+                CancellationToken.None));
+        }
+    }
+
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Clean, null)]
+    [InlineData(InstantQuoteWorkflowState.Failed, typeof(InstantQuoteUnsafeContentException))]
+    public async Task Upload_UnknownXminLoser_ReplaysAuthoritativeTerminalState(
+        InstantQuoteWorkflowState winnerState,
+        Type? exceptionType)
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Unknown);
+        var winner = CreateStoredUpload(winnerState);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Unknown, stored, 17),
+            SessionFiles = [new InstantQuoteStoredUpload(winner, 18)],
+            SaveUploadException = new InstantQuoteConcurrencyException("xmin lost"),
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                stored.TemporaryBucket, stored.TemporaryObjectName, stored.GcsGeneration!.Value,
+                stored.ActualSizeBytes!.Value, stored.ExpectedSha256),
+        };
+        var bytes = BinaryStl();
+        if (winnerState == InstantQuoteWorkflowState.Failed)
+        {
+            bytes[10] = 99;
+        }
+        storage.Seed(bytes);
+
+        var operation = CreateService(repository, storage).UploadAsync(
+            stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
+            new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+            CancellationToken.None);
+
+        if (exceptionType is null)
+        {
+            Assert.Equal("clean", (await operation).Status);
+        }
+        else
+        {
+            Assert.IsType(exceptionType, await Record.ExceptionAsync(() => operation));
+        }
+        Assert.Equal(1, repository.SessionFileReadCount);
+    }
+
     [Fact]
     public async Task Upload_UnknownReservationWithWrongBodyAndExpectedMetadata_PersistsFailedAndCleansGeneration()
     {
@@ -960,6 +1070,7 @@ public sealed class InstantQuoteFileServiceTests
         public Exception? GetSessionFilesException { get; init; }
         public int ReserveFinalizationCount { get; private set; }
         private int sessionFileReads;
+        public int SessionFileReadCount => sessionFileReads;
 
         public Task CreateSessionAsync(InstantQuoteUploadSession session, CancellationToken cancellationToken)
         {
@@ -1058,6 +1169,8 @@ public sealed class InstantQuoteFileServiceTests
         public InstantQuoteObjectMetadata? ReconciliationMetadata { get; init; }
         public Exception? PromotionException { get; init; }
         public Exception? UploadException { get; init; }
+        public Exception? MetadataException { get; init; }
+        public Exception? DownloadException { get; init; }
         public InstantQuoteObjectMetadata Metadata { get; private set; } = new(
             "private-bucket", "", 101, 0, new string('0', 64));
 
@@ -1081,6 +1194,10 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken cancellationToken)
         {
             MetadataReadCount++;
+            if (MetadataException is not null)
+            {
+                throw MetadataException;
+            }
             return Task.FromResult(
                 ReconciliationMetadata is not null &&
                 string.Equals(ReconciliationMetadata.Bucket, bucket, StringComparison.Ordinal) &&
@@ -1095,6 +1212,10 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken cancellationToken)
         {
             DownloadCount++;
+            if (DownloadException is not null)
+            {
+                throw DownloadException;
+            }
             await destination.WriteAsync(storedBytes, cancellationToken);
         }
 
