@@ -21,10 +21,13 @@ public sealed class BoundedHashingReadStreamTests
     [Fact]
     public async Task ReadAsync_LimitPlusOne_ThrowsImmediately()
     {
-        await using var stream = new BoundedHashingReadStream(new GeneratedNonSeekableStream(1025), 1024);
+        var source = new GeneratedNonSeekableStream(200);
+        await using var stream = new BoundedHashingReadStream(source, maximumBytes: 10, maximumReadSize: 64);
 
         await Assert.ThrowsAsync<InstantQuotePayloadTooLargeException>(() => DrainAsync(stream));
-        Assert.Equal(1025, stream.BytesRead);
+        Assert.Equal(11, stream.BytesRead);
+        Assert.Equal(11, source.TotalBytesRead);
+        Assert.Equal(11, source.LargestRequestedRead);
     }
 
     [Fact]
@@ -73,6 +76,18 @@ public sealed class BoundedHashingReadStreamTests
         Assert.True(stream.IsComplete);
     }
 
+    [Fact]
+    public async Task ReadAsync_EmptySource_FinalizesEmptySha256()
+    {
+        await using var stream = new BoundedHashingReadStream(new GeneratedNonSeekableStream(0));
+
+        var read = await stream.ReadAsync(new byte[1]);
+
+        Assert.Equal(0, read);
+        Assert.True(stream.IsComplete);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), stream.Sha256);
+    }
+
     private static async Task DrainAsync(Stream stream, int bufferSize = 64 * 1024)
     {
         var buffer = new byte[bufferSize];
@@ -96,6 +111,7 @@ public sealed class BoundedHashingReadStreamTests
         }
 
         public int LargestRequestedRead { get; private set; }
+        public long TotalBytesRead => _position;
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;

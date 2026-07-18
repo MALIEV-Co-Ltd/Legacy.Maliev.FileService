@@ -8,14 +8,35 @@ public sealed class InstantQuoteFilePolicyTests
     public static TheoryData<string, string, string> SupportedTypes => new()
     {
         { "part.stl", "model/stl", ".stl" },
+        { "part.stl", "application/sla", ".stl" },
+        { "part.stl", "application/vnd.ms-pki.stl", ".stl" },
         { "part.OBJ", "model/obj", ".obj" },
+        { "part.obj", "text/plain", ".obj" },
+        { "part.obj", "application/x-tgif", ".obj" },
         { "part.3mf", "application/vnd.ms-package.3dmanufacturing-3dmodel+xml", ".3mf" },
         { "part.step", "model/step", ".step" },
+        { "part.step", "application/step", ".step" },
+        { "part.stp", "model/step", ".stp" },
         { "part.stp", "application/step", ".stp" },
         { "part.iges", "model/iges", ".iges" },
+        { "part.iges", "application/iges", ".iges" },
+        { "part.igs", "model/iges", ".igs" },
         { "part.igs", "application/iges", ".igs" },
         { "part.glb", "model/gltf-binary", ".glb" },
         { "part.gltf", "model/gltf+json", ".gltf" },
+    };
+
+    public static TheoryData<string, string> SupportedExtensions => new()
+    {
+        { "part.stl", ".stl" },
+        { "part.OBJ", ".obj" },
+        { "part.3mf", ".3mf" },
+        { "part.step", ".step" },
+        { "part.stp", ".stp" },
+        { "part.iges", ".iges" },
+        { "part.igs", ".igs" },
+        { "part.glb", ".glb" },
+        { "part.gltf", ".gltf" },
     };
 
     [Theory]
@@ -32,13 +53,11 @@ public sealed class InstantQuoteFilePolicyTests
     }
 
     [Theory]
-    [MemberData(nameof(SupportedTypes))]
+    [MemberData(nameof(SupportedExtensions))]
     public void NormalizeFileMetadata_OctetStreamForSupportedExtension_IsAccepted(
         string fileName,
-        string ignored,
         string expectedExtension)
     {
-        Assert.NotEmpty(ignored);
         var result = InstantQuoteFilePolicy.NormalizeFileMetadata(fileName, "application/octet-stream");
 
         Assert.Equal(expectedExtension, result.Extension);
