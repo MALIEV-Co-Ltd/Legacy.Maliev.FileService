@@ -9,6 +9,15 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
     /// <summary>Gets clean upload metadata.</summary>
     public DbSet<Upload> Uploads => Set<Upload>();
 
+    /// <summary>Gets instant-quotation upload sessions.</summary>
+    public DbSet<InstantQuoteUploadSession> InstantQuoteUploadSessions => Set<InstantQuoteUploadSession>();
+
+    /// <summary>Gets instant-quotation upload reservations.</summary>
+    public DbSet<InstantQuoteUploadFile> InstantQuoteUploadFiles => Set<InstantQuoteUploadFile>();
+
+    /// <summary>Gets instant-quotation finalization reservations.</summary>
+    public DbSet<InstantQuoteFinalization> InstantQuoteFinalizations => Set<InstantQuoteFinalization>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -29,5 +38,55 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         upload.HasIndex(value => new { value.Bucket, value.Name })
             .IsUnique()
             .HasDatabaseName("IX_Upload_Bucket_Name");
+
+        var session = modelBuilder.Entity<InstantQuoteUploadSession>();
+        session.ToTable("InstantQuoteUploadSession", table =>
+            table.HasCheckConstraint("CK_InstantQuoteUploadSession_TokenHash_Length", "octet_length(\"TokenHash\") = 32"));
+        session.HasKey(value => value.Id);
+        session.Property(value => value.OwnerSubject).HasMaxLength(512);
+        session.Property(value => value.TokenHash).HasColumnType("bytea").IsRequired();
+        session.Property(value => value.ExpiresAt).HasColumnType("timestamp with time zone");
+        session.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
+        session.Property<uint>("xmin").HasColumnType("xid").IsRowVersion();
+
+        var instantFile = modelBuilder.Entity<InstantQuoteUploadFile>();
+        instantFile.ToTable("InstantQuoteUploadFile", table =>
+        {
+            table.HasCheckConstraint("CK_InstantQuoteUploadFile_KeyHash_Length", "octet_length(\"IdempotencyKeyHash\") = 32");
+            table.HasCheckConstraint("CK_InstantQuoteUploadFile_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
+        });
+        instantFile.HasKey(value => value.Id);
+        instantFile.Property(value => value.IdempotencyKeyHash).HasColumnType("bytea").IsRequired();
+        instantFile.Property(value => value.RequestFingerprint).HasMaxLength(64).IsFixedLength().IsRequired();
+        instantFile.Property(value => value.OriginalFileName).HasMaxLength(1024).IsRequired();
+        instantFile.Property(value => value.ValidatedExtension).HasMaxLength(16).IsRequired();
+        instantFile.Property(value => value.ValidatedContentType).HasMaxLength(255).IsRequired();
+        instantFile.Property(value => value.ExpectedSha256).HasMaxLength(64).IsFixedLength().IsRequired();
+        instantFile.Property(value => value.ActualSha256).HasMaxLength(64).IsFixedLength();
+        instantFile.Property(value => value.TemporaryObjectName).HasMaxLength(1024).IsRequired();
+        instantFile.Property(value => value.FinalObjectName).HasMaxLength(1024);
+        instantFile.Property(value => value.State).HasConversion<string>().HasMaxLength(16).IsRequired();
+        instantFile.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
+        instantFile.Property(value => value.ModifiedAt).HasColumnType("timestamp with time zone");
+        instantFile.Property<uint>("xmin").HasColumnType("xid").IsRowVersion();
+        instantFile.HasIndex(value => new { value.SessionId, value.IdempotencyKeyHash }).IsUnique();
+        instantFile.HasOne<InstantQuoteUploadSession>().WithMany().HasForeignKey(value => value.SessionId).OnDelete(DeleteBehavior.Cascade);
+
+        var finalization = modelBuilder.Entity<InstantQuoteFinalization>();
+        finalization.ToTable("InstantQuoteFinalization", table =>
+        {
+            table.HasCheckConstraint("CK_InstantQuoteFinalization_KeyHash_Length", "octet_length(\"IdempotencyKeyHash\") = 32");
+            table.HasCheckConstraint("CK_InstantQuoteFinalization_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
+        });
+        finalization.HasKey(value => value.Id);
+        finalization.Property(value => value.IdempotencyKeyHash).HasColumnType("bytea").IsRequired();
+        finalization.Property(value => value.RequestFingerprint).HasMaxLength(64).IsFixedLength().IsRequired();
+        finalization.Property(value => value.SelectedFileIds).HasColumnType("uuid[]").IsRequired();
+        finalization.Property(value => value.State).HasConversion<string>().HasMaxLength(16).IsRequired();
+        finalization.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
+        finalization.Property(value => value.ModifiedAt).HasColumnType("timestamp with time zone");
+        finalization.Property<uint>("xmin").HasColumnType("xid").IsRowVersion();
+        finalization.HasIndex(value => new { value.SessionId, value.IdempotencyKeyHash }).IsUnique();
+        finalization.HasOne<InstantQuoteUploadSession>().WithMany().HasForeignKey(value => value.SessionId).OnDelete(DeleteBehavior.Cascade);
     }
 }
