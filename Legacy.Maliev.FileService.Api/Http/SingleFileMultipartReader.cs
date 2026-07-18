@@ -46,7 +46,7 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
             var normalized = InstantQuoteFilePolicy.NormalizeFileMetadata(
                 fileName ?? string.Empty,
                 section.ContentType ?? string.Empty);
-            var body = new BoundedHashingReadStream(section.Body);
+            var body = new BoundedHashingReadStream(new MultipartSectionReadStream(section.Body));
 
             return new InstantQuoteMultipartFile(
                 body,
@@ -58,9 +58,16 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
                         throw new InstantQuoteValidationException("The uploaded file was not fully consumed.");
                     }
 
-                    if (await reader.ReadNextSectionAsync(completionCancellationToken) is not null)
+                    try
                     {
-                        throw new InstantQuoteValidationException("Additional multipart sections are not allowed.");
+                        if (await reader.ReadNextSectionAsync(completionCancellationToken) is not null)
+                        {
+                            throw new InstantQuoteValidationException("Additional multipart sections are not allowed.");
+                        }
+                    }
+                    catch (Exception exception) when (exception is InvalidDataException or IOException)
+                    {
+                        throw new InstantQuoteValidationException("Multipart request is invalid.");
                     }
                 });
         }
@@ -90,6 +97,62 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
         }
 
         return boundary;
+    }
+
+    private sealed class MultipartSectionReadStream(Stream source) : Stream
+    {
+        public override bool CanRead => source.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            try
+            {
+                return source.Read(buffer, offset, count);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                throw new InstantQuoteValidationException("Multipart request is invalid.");
+            }
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await source.ReadAsync(buffer, cancellationToken);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                throw new InstantQuoteValidationException("Multipart request is invalid.");
+            }
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                source.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await source.DisposeAsync();
+            GC.SuppressFinalize(this);
+        }
     }
 }
 

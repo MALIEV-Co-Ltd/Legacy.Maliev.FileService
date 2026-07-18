@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
@@ -11,6 +12,7 @@ public sealed class BoundedHashingReadStream : Stream
     private readonly long _maximumBytes;
     private readonly int _maximumReadSize;
     private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    private bool _payloadTooLarge;
     private string? _sha256;
 
     /// <summary>Creates a bounded hashing wrapper that owns the source stream.</summary>
@@ -65,10 +67,22 @@ public sealed class BoundedHashingReadStream : Stream
     /// <inheritdoc />
     public override int Read(Span<byte> buffer)
     {
-        var rented = new byte[Math.Min(buffer.Length, _maximumReadSize)];
-        var read = Read(rented, 0, rented.Length);
-        rented.AsSpan(0, read).CopyTo(buffer);
-        return read;
+        if (buffer.IsEmpty)
+        {
+            return 0;
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(Math.Min(buffer.Length, _maximumReadSize));
+        try
+        {
+            var read = Read(rented, 0, Math.Min(buffer.Length, _maximumReadSize));
+            rented.AsSpan(0, read).CopyTo(buffer);
+            return read;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <inheritdoc />
@@ -82,20 +96,30 @@ public sealed class BoundedHashingReadStream : Stream
             return 0;
         }
 
-        var read = await _source.ReadAsync(buffer[..Math.Min(buffer.Length, _maximumReadSize)], cancellationToken);
+        if (_payloadTooLarge)
+        {
+            throw new InstantQuotePayloadTooLargeException("Uploaded file exceeds the maximum size.");
+        }
+
+        var remaining = _maximumBytes - BytesRead;
+        var maximumRead = remaining < _maximumReadSize
+            ? checked((int)remaining + 1)
+            : _maximumReadSize;
+        var read = await _source.ReadAsync(buffer[..Math.Min(buffer.Length, maximumRead)], cancellationToken);
         if (read == 0)
         {
             _sha256 ??= Convert.ToHexString(_hash.GetHashAndReset()).ToLowerInvariant();
             return 0;
         }
 
-        _hash.AppendData(buffer.Span[..read]);
         BytesRead += read;
         if (BytesRead > _maximumBytes)
         {
+            _payloadTooLarge = true;
             throw new InstantQuotePayloadTooLargeException("Uploaded file exceeds the maximum size.");
         }
 
+        _hash.AppendData(buffer.Span[..read]);
         return read;
     }
 

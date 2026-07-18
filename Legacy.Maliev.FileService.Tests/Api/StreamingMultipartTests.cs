@@ -52,6 +52,9 @@ public sealed class StreamingMultipartTests
         Assert.Equal(3, service.BytesRead);
         Assert.Equal(new string('a', 64), service.ExpectedSha256);
         Assert.Equal("part.STL", service.Metadata?.FileName);
+        var reader = app.Services.GetRequiredService<RecordingMultipartReader>();
+        Assert.False(reader.RequestBodyCanSeek);
+        Assert.Null(reader.RequestContentLength);
     }
 
     [Theory]
@@ -101,6 +104,60 @@ public sealed class StreamingMultipartTests
     }
 
     [Fact]
+    public async Task Pipeline_TruncatedFirstFilePart_ReturnsStableValidationError()
+    {
+        await using var app = await StartPipelineAsync();
+        using var client = app.GetTestClient();
+        using var content = RawContent(
+            "--boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: model/stl\r\n\r\nabc");
+        using var request = UploadRequest(content);
+
+        using var response = await client.SendAsync(request);
+
+        await AssertProblemAsync(response, HttpStatusCode.BadRequest, "validation_error");
+    }
+
+    [Fact]
+    public async Task Pipeline_MalformedTrailingSection_ReturnsStableValidationError()
+    {
+        await using var app = await StartPipelineAsync();
+        using var client = app.GetTestClient();
+        using var content = RawContent(
+            "--boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: model/stl\r\n\r\nabc\r\n--boundary\r\nContent-Disposition:");
+        using var request = UploadRequest(content);
+
+        using var response = await client.SendAsync(request);
+
+        await AssertProblemAsync(response, HttpStatusCode.BadRequest, "validation_error");
+    }
+
+    [Fact]
+    public async Task Pipeline_FiniteChunkedRequestCancellation_AbortsReaderAndService()
+    {
+        using var coordinator = new CancellationCoordinator();
+        await using var app = await StartPipelineAsync(coordinator);
+        using var client = app.GetTestClient();
+        var service = app.Services.GetRequiredService<ConsumingService>();
+        using var request = UploadRequest(RawMultipart("files", "part.stl", "model/stl", "abc"));
+        var send = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+
+        await coordinator.ServiceStarted.WaitAsync(TimeSpan.FromSeconds(5));
+        coordinator.CancelRequest();
+        try
+        {
+            await service.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            coordinator.Release();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => send);
+        Assert.True(service.ObservedCancellationToken.IsCancellationRequested);
+        Assert.True(app.Services.GetRequiredService<RecordingMultipartReader>().ObservedCancellationToken.IsCancellationRequested);
+    }
+
+    [Fact]
     public async Task Controller_RequestAborted_PropagatesCancellationToReaderAndService()
     {
         using var cancellation = new CancellationTokenSource();
@@ -127,6 +184,30 @@ public sealed class StreamingMultipartTests
 
         Assert.Equal(context.RequestAborted, reader.ObservedCancellationToken);
         Assert.Equal(context.RequestAborted, service.ObservedCancellationToken);
+    }
+
+    [Fact]
+    public async Task Controller_ServiceIOException_IsNotTranslatedAsMultipartValidation()
+    {
+        var expected = new IOException("storage failed");
+        var controller = new InstantQuotationFilesController(
+            new ConsumingService(throwCancellation: false, uploadException: expected),
+            new FiniteMultipartReader())
+        {
+            ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext
+            {
+                HttpContext = new DefaultHttpContext(),
+            },
+        };
+
+        var actual = await Assert.ThrowsAsync<IOException>(() => controller.UploadAsync(
+            SessionId,
+            new string('t', 32),
+            new string('i', 16),
+            new string('a', 64),
+            default));
+
+        Assert.Same(expected, actual);
     }
 
     private static HttpRequestMessage UploadRequest(HttpContent content)
@@ -166,10 +247,15 @@ public sealed class StreamingMultipartTests
         return content;
     }
 
-    private static ByteArrayContent RawMultipart(string name, string fileName, string contentType, string body)
+    private static FiniteChunkedContent RawMultipart(string name, string fileName, string contentType, string body)
     {
         var raw = $"--boundary\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{fileName}\"\r\nContent-Type: {contentType}\r\n\r\n{body}\r\n--boundary--\r\n";
-        var content = new ByteArrayContent(Encoding.ASCII.GetBytes(raw));
+        return RawContent(raw);
+    }
+
+    private static FiniteChunkedContent RawContent(string raw)
+    {
+        var content = new FiniteChunkedContent(Encoding.ASCII.GetBytes(raw));
         content.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=boundary");
         return content;
     }
@@ -185,7 +271,7 @@ public sealed class StreamingMultipartTests
         Assert.Equal(code, problem.RootElement.GetProperty("code").GetString());
     }
 
-    private static async Task<WebApplication> StartPipelineAsync()
+    private static async Task<WebApplication> StartPipelineAsync(CancellationCoordinator? cancellationCoordinator = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -193,12 +279,21 @@ public sealed class StreamingMultipartTests
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton<IAuthorizationPolicyProvider, AllowAllPolicyProvider>();
         builder.Services.AddSingleton<IPolicyEvaluator, AllowAllPolicyEvaluator>();
-        builder.Services.AddSingleton(new ConsumingService(throwCancellation: false));
+        builder.Services.AddSingleton(new ConsumingService(throwCancellation: false, cancellationCoordinator));
         builder.Services.AddSingleton<IInstantQuoteFileService>(provider => provider.GetRequiredService<ConsumingService>());
         builder.Services.AddSingleton<RecordingMultipartReader>();
         builder.Services.AddSingleton<IInstantQuoteMultipartReader>(provider => provider.GetRequiredService<RecordingMultipartReader>());
 
         var app = builder.Build();
+        if (cancellationCoordinator is not null)
+        {
+            app.Use((context, next) =>
+            {
+                context.RequestAborted = cancellationCoordinator.RequestAborted;
+                return next();
+            });
+        }
+
         app.UseRouting();
         app.UseAuthorization();
         app.MapControllers();
@@ -208,12 +303,17 @@ public sealed class StreamingMultipartTests
 
     private static Stream RawBody(string value) => new NonSeekableByteStream(Encoding.ASCII.GetBytes(value));
 
-    private sealed class ConsumingService(bool throwCancellation) : IInstantQuoteFileService
+    private sealed class ConsumingService(
+        bool throwCancellation,
+        CancellationCoordinator? cancellationCoordinator = null,
+        Exception? uploadException = null) : IInstantQuoteFileService
     {
         public long BytesRead { get; private set; }
         public string? ExpectedSha256 { get; private set; }
         public InstantQuoteUploadMetadata? Metadata { get; private set; }
         public CancellationToken ObservedCancellationToken { get; private set; }
+        public Task CancellationObserved => _cancellationObserved.Task;
+        private readonly TaskCompletionSource _cancellationObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<CreateInstantQuoteSessionResponse> CreateInstantQuoteSessionAsync(
             InstantQuoteOwner owner,
@@ -229,16 +329,43 @@ public sealed class StreamingMultipartTests
             CancellationToken cancellationToken)
         {
             ObservedCancellationToken = cancellationToken;
+            if (uploadException is not null)
+            {
+                throw uploadException;
+            }
+
             if (throwCancellation)
             {
                 throw new OperationCanceledException(cancellationToken);
             }
 
+            if (cancellationCoordinator is not null)
+            {
+                cancellationCoordinator.MarkServiceStarted();
+                try
+                {
+                    await cancellationCoordinator.WaitForReleaseAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                    throw;
+                }
+            }
+
             var buffer = new byte[64 * 1024];
             int read;
-            while ((read = await body.ReadAsync(buffer, cancellationToken)) != 0)
+            try
             {
-                BytesRead += read;
+                while ((read = await body.ReadAsync(buffer, cancellationToken)) != 0)
+                {
+                    BytesRead += read;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _cancellationObserved.TrySetResult();
+                throw;
             }
 
             ExpectedSha256 = expectedSha256;
@@ -273,6 +400,9 @@ public sealed class StreamingMultipartTests
     private sealed class RecordingMultipartReader : IInstantQuoteMultipartReader
     {
         public string? ExceptionMessage { get; private set; }
+        public bool RequestBodyCanSeek { get; private set; }
+        public long? RequestContentLength { get; private set; }
+        public CancellationToken ObservedCancellationToken { get; private set; }
 
         public async Task<InstantQuoteMultipartFile> ReadSingleAsync(
             HttpRequest request,
@@ -281,6 +411,9 @@ public sealed class StreamingMultipartTests
         {
             try
             {
+                RequestBodyCanSeek = request.Body.CanSeek;
+                RequestContentLength = request.ContentLength;
+                ObservedCancellationToken = cancellationToken;
                 return await new SingleFileMultipartReader().ReadSingleAsync(request, requiredPartName, cancellationToken);
             }
             catch (Exception exception)
@@ -288,6 +421,41 @@ public sealed class StreamingMultipartTests
                 ExceptionMessage = exception.Message;
                 throw;
             }
+        }
+    }
+
+    private sealed class FiniteChunkedContent(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(bytes).AsTask();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class CancellationCoordinator : IDisposable
+    {
+        private readonly CancellationTokenSource _requestAborted = new();
+        private readonly TaskCompletionSource _serviceStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationToken RequestAborted => _requestAborted.Token;
+        public Task ServiceStarted => _serviceStarted.Task;
+
+        public void MarkServiceStarted() => _serviceStarted.TrySetResult();
+        public void CancelRequest() => _requestAborted.Cancel();
+        public void Release() => _release.TrySetResult();
+
+        public Task WaitForReleaseAsync(CancellationToken cancellationToken) =>
+            _release.Task.WaitAsync(cancellationToken);
+
+        public void Dispose()
+        {
+            Release();
+            _requestAborted.Dispose();
         }
     }
 
