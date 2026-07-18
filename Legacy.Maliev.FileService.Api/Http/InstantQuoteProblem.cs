@@ -1,6 +1,7 @@
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 
 namespace Legacy.Maliev.FileService.Api.Http;
 
@@ -25,6 +26,27 @@ public sealed class InstantQuoteMultipartFile(Stream body, InstantQuoteUploadMet
 
     /// <inheritdoc />
     public ValueTask DisposeAsync() => Body.DisposeAsync();
+}
+
+/// <summary>Maps controller model-validation failures to the instant-quotation error contract.</summary>
+[AttributeUsage(AttributeTargets.Class)]
+public sealed class InstantQuoteValidationProblemAttribute : ActionFilterAttribute
+{
+    /// <summary>Creates a filter that runs before the built-in ApiController model-state filter.</summary>
+    public InstantQuoteValidationProblemAttribute()
+    {
+        Order = -4000;
+    }
+
+    /// <inheritdoc />
+    public override void OnActionExecuting(ActionExecutingContext context)
+    {
+        if (!context.ModelState.IsValid)
+        {
+            context.Result = InstantQuoteProblem.Create(
+                new InstantQuoteValidationException("Request model validation failed."));
+        }
+    }
 }
 
 /// <summary>Creates safe RFC ProblemDetails responses for public contract failures.</summary>
