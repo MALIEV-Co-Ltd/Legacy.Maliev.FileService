@@ -2,7 +2,7 @@
 
 This Web-facing API creates an upload session, streams one CAD file at a time, and finalizes selected clean files for a quotation request. FileService returns file and link authority only. GeometryService and the quotation backend own authoritative geometry/DFM analysis and quotation decisions; FileService never calculates geometry, DFM, or price. This API has no price, amount, currency, or quotation-calculation fields.
 
-All JSON property names are camelCase. Customer filenames are metadata only and never become storage object basenames. Storage credentials, browser/service credentials, private object names, stack traces, and dependency details are never returned. The `sessionToken` is an opaque, time-limited capability returned only when its session is created.
+All JSON property names are camelCase. Customer filenames are metadata only and never become storage object basenames. Temporary private object names, storage credentials, browser/service credentials, stack traces, and dependency details are never returned. The finalized bucket and objectName are returned as the durable file authority for the downstream quotation workflow. The `sessionToken` is an opaque, time-limited capability returned only when its session is created.
 
 ## Create a session
 
@@ -102,6 +102,8 @@ Success: `204 No Content`. Removal is idempotent: retrying an already removed fi
 
 Errors use `application/problem+json` and RFC ProblemDetails with a stable `code` extension. Titles and details are safe public text.
 
+The 401 response is produced by platform authentication middleware and is not guaranteed to use this API's ProblemDetails body or stable `code`. The application-level ProblemDetails examples below therefore begin at 400 and cover every stable code emitted by this API.
+
 | Status | `code` | Meaning |
 |---:|---|---|
 | 400 | `validation_error` | Headers, filename metadata, multipart shape, digest syntax, or selection is invalid. |
@@ -117,12 +119,14 @@ Errors use `application/problem+json` and RFC ProblemDetails with a stable `code
 
 ```json
 [
-  { "status": 401, "code": "platform_authentication_required" },
+  { "status": 400, "code": "validation_error" },
   { "status": 403, "code": "session_forbidden" },
   { "status": 409, "code": "idempotency_conflict" },
+  { "status": 409, "code": "upload_in_progress" },
   { "status": 413, "code": "payload_too_large" },
   { "status": 415, "code": "unsupported_media_type" },
   { "status": 422, "code": "unsafe_content" },
+  { "status": 503, "code": "dependency_unavailable" },
   { "status": 503, "code": "outcome_unknown" }
 ]
 ```

@@ -130,12 +130,17 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         var upload = reservation.Record;
         var metadata = await _storage.GetMetadataAsync(
             upload.TemporaryBucket, upload.TemporaryObjectName, cancellationToken);
-        if (metadata is null || metadata.SizeBytes <= 0 || !FixedTimeHexEquals(metadata.Sha256, upload.ExpectedSha256))
+        if (metadata is null || metadata.SizeBytes <= 0)
         {
             throw new InstantQuoteAmbiguousOutcomeException("Temporary object could not be reconciled.");
         }
 
         var scan = await ScanStoredGenerationAsync(metadata, cancellationToken);
+        if (scan.SizeBytes != metadata.SizeBytes ||
+            !FixedTimeHexEquals(scan.Sha256, upload.ExpectedSha256))
+        {
+            throw new InstantQuoteAmbiguousOutcomeException("Temporary object bytes do not match the upload reservation.");
+        }
         if (scan.Result == InstantQuoteScanResult.Unsafe)
         {
             await CleanupAsync(metadata);
@@ -162,8 +167,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             throw;
         }
 
-        upload.ActualSha256 = metadata.Sha256;
-        upload.ActualSizeBytes = metadata.SizeBytes;
+        upload.ActualSha256 = scan.Sha256;
+        upload.ActualSizeBytes = scan.SizeBytes;
         upload.GcsGeneration = metadata.Generation;
         upload.State = InstantQuoteWorkflowState.Clean;
         upload.ModifiedAt = _timeProvider.GetUtcNow();
@@ -280,6 +285,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteOwnershipException("One or more selected files could not be authorized.");
         }
+        if (files.Any(value => value.Upload.State == InstantQuoteWorkflowState.Finalized &&
+            value.Upload.FinalizedQuotationRequestId != request.QuotationRequestId))
+        {
+            throw new InstantQuoteReplayConflictException("A selected file is already finalized for another quotation request.");
+        }
         var fingerprint = HashText($"{sessionId:N}\n{request.QuotationRequestId:N}\n{string.Join(',', selected.Select(value => value.ToString("N")))}");
         var now = _timeProvider.GetUtcNow();
         var reservation = await _repository.ReserveFinalizationAsync(new InstantQuoteFinalization(
@@ -318,6 +328,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                         throw new InstantQuoteAmbiguousOutcomeException("Clean upload generation is unavailable.");
                     }
                     var existing = await _storage.GetMetadataAsync(_options.StorageBucket, destination, cancellationToken);
+                    var promoted = false;
                     if (existing is not null)
                     {
                         if (existing.SizeBytes != upload.ActualSizeBytes ||
@@ -332,12 +343,42 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                         final = await _storage.PromoteGenerationAsync(
                             upload.TemporaryBucket, upload.TemporaryObjectName, upload.GcsGeneration.Value,
                             _options.StorageBucket, destination, cancellationToken);
+                        promoted = true;
                     }
                     upload.FinalBucket = final.Bucket;
                     upload.FinalObjectName = final.ObjectName;
+                    upload.FinalizedQuotationRequestId = request.QuotationRequestId;
                     upload.State = InstantQuoteWorkflowState.Finalized;
                     upload.ModifiedAt = _timeProvider.GetUtcNow();
-                    await _repository.SaveUploadAsync(upload, stored.Version, cancellationToken);
+                    try
+                    {
+                        await _repository.SaveUploadAsync(upload, stored.Version, cancellationToken);
+                    }
+                    catch (InstantQuoteConcurrencyException)
+                    {
+                        var reloaded = await _repository.GetSessionFilesAsync(sessionId, [upload.Id], cancellationToken);
+                        var winner = reloaded.Count == 1 ? reloaded[0].Upload : null;
+                        if (winner?.State == InstantQuoteWorkflowState.Finalized &&
+                            winner.FinalizedQuotationRequestId == request.QuotationRequestId &&
+                            !string.IsNullOrWhiteSpace(winner.FinalBucket) &&
+                            !string.IsNullOrWhiteSpace(winner.FinalObjectName))
+                        {
+                            upload = winner;
+                            final = await _storage.GetMetadataAsync(
+                                winner.FinalBucket, winner.FinalObjectName, cancellationToken)
+                                ?? throw new InstantQuoteAmbiguousOutcomeException(
+                                    "The concurrently finalized object metadata is unavailable.");
+                        }
+                        else
+                        {
+                            if (promoted)
+                            {
+                                await DeleteLoserDestinationAsync(final);
+                            }
+                            throw new InstantQuoteReplayConflictException(
+                                "The selected file was concurrently finalized for another quotation request.");
+                        }
+                    }
                 }
                 results.Add(new FinalizedInstantQuoteFileResponse(
                     upload.Id, final.Bucket, final.ObjectName, upload.OriginalFileName, upload.ValidatedContentType,
@@ -464,7 +505,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         await using var reader = pipe.Reader.AsStream(leaveOpen: true);
         await using var writer = pipe.Writer.AsStream(leaveOpen: true);
-        await using var captured = new PrefixCapturingReadStream(reader, 4096);
+        await using var hashing = new BoundedHashingReadStream(reader);
+        await using var captured = new PrefixCapturingReadStream(hashing, 4096);
         var producerCompleted = false;
         var download = DownloadAsync();
         var scan = _scanner.ScanAsync(captured, linkedCancellation.Token);
@@ -488,7 +530,12 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                 throw new InstantQuoteDependencyUnavailableException(
                     "The complete object could not be delivered to the safety scanner.");
             }
-            return new InstantQuoteScanOutcome(result, captured.Prefix.ToArray());
+            if (!hashing.IsComplete)
+            {
+                throw new InstantQuoteDependencyUnavailableException(
+                    "The complete object was not consumed by the safety scanner.");
+            }
+            return new InstantQuoteScanOutcome(result, captured.Prefix.ToArray(), hashing.Sha256, hashing.BytesRead);
         }
         finally
         {
@@ -557,6 +604,21 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         catch (Exception)
         {
             // Cleanup is bounded and best effort; the failed state remains non-authoritative.
+        }
+    }
+
+    private async Task DeleteLoserDestinationAsync(InstantQuoteObjectMetadata stored)
+    {
+        using var cleanup = new CancellationTokenSource(_options.CleanupTimeout, _timeProvider);
+        try
+        {
+            await _storage.DeleteGenerationAsync(
+                stored.Bucket, stored.ObjectName, stored.Generation, cleanup.Token);
+        }
+        catch (Exception exception)
+        {
+            throw new InstantQuoteAmbiguousOutcomeException(
+                "A concurrent finalization left a destination requiring reconciliation.", exception);
         }
     }
 
@@ -649,5 +711,9 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         public override async ValueTask DisposeAsync() { await source.DisposeAsync(); await _prefix.DisposeAsync(); GC.SuppressFinalize(this); }
     }
 
-    private sealed record InstantQuoteScanOutcome(InstantQuoteScanResult Result, byte[] Prefix);
+    private sealed record InstantQuoteScanOutcome(
+        InstantQuoteScanResult Result,
+        byte[] Prefix,
+        string Sha256,
+        long SizeBytes);
 }

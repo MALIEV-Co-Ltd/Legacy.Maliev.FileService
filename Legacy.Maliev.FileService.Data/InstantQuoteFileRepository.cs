@@ -76,7 +76,14 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
         }
 
         entry.Property<uint>("xmin").OriginalValue = expectedVersion;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException exception)
+        {
+            throw new InstantQuoteConcurrencyException("The upload state was changed concurrently.", exception);
+        }
         return GetVersion(upload);
     }
 

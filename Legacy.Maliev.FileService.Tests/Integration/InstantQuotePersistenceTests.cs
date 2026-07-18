@@ -150,6 +150,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var upload = context.Model.FindEntityType(typeof(InstantQuoteUploadFile))!;
         Assert.False(upload.FindProperty("TemporaryBucket")!.IsNullable);
         Assert.True(upload.FindProperty("FinalBucket")!.IsNullable);
+        Assert.True(upload.FindProperty("FinalizedQuotationRequestId")!.IsNullable);
     }
 
     [Fact]
@@ -182,7 +183,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
 
         staleReplay.Record.State = InstantQuoteWorkflowState.Failed;
 
-        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() =>
+        await Assert.ThrowsAsync<InstantQuoteConcurrencyException>(() =>
             staleRepository.SaveUploadAsync(staleReplay.Record, staleReplay.Version, CancellationToken.None));
     }
 
@@ -255,6 +256,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var acquired = await repository.ReserveUploadAsync(CreateUpload(session.Id, "removed"), CancellationToken.None);
         acquired.Record.FinalBucket = "final-bucket";
         acquired.Record.FinalObjectName = "instant-quotation/final.stl";
+        acquired.Record.FinalizedQuotationRequestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
         acquired.Record.State = InstantQuoteWorkflowState.Removed;
         await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
 
@@ -262,7 +264,47 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             session.Id, [acquired.Record.Id], CancellationToken.None));
         Assert.Equal("private-bucket", stored.Upload.TemporaryBucket);
         Assert.Equal("final-bucket", stored.Upload.FinalBucket);
+        Assert.Equal(acquired.Record.FinalizedQuotationRequestId, stored.Upload.FinalizedQuotationRequestId);
         Assert.Equal(InstantQuoteWorkflowState.Removed, stored.Upload.State);
+    }
+
+    [Fact]
+    public async Task SaveUpload_ConcurrentQuotationAuthorities_XminAllowsOnlyOneWinner()
+    {
+        Guid sessionId;
+        Guid fileId;
+        await using (var setup = await CreateMigratedContextAsync())
+        {
+            var repository = new InstantQuoteFileRepository(setup);
+            var session = CreateSession();
+            sessionId = session.Id;
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            var acquired = await repository.ReserveUploadAsync(CreateUpload(session.Id, "quotation-race"), CancellationToken.None);
+            acquired.Record.State = InstantQuoteWorkflowState.Clean;
+            await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
+            fileId = acquired.Record.Id;
+        }
+
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var firstRepository = new InstantQuoteFileRepository(firstContext);
+        var secondRepository = new InstantQuoteFileRepository(secondContext);
+        var first = Assert.Single(await firstRepository.GetSessionFilesAsync(sessionId, [fileId], CancellationToken.None));
+        var second = Assert.Single(await secondRepository.GetSessionFilesAsync(sessionId, [fileId], CancellationToken.None));
+        var firstAuthority = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var secondAuthority = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        first.Upload.FinalizedQuotationRequestId = firstAuthority;
+        first.Upload.State = InstantQuoteWorkflowState.Finalized;
+        second.Upload.FinalizedQuotationRequestId = secondAuthority;
+        second.Upload.State = InstantQuoteWorkflowState.Finalized;
+
+        await firstRepository.SaveUploadAsync(first.Upload, first.Version, CancellationToken.None);
+        await Assert.ThrowsAsync<InstantQuoteConcurrencyException>(() =>
+            secondRepository.SaveUploadAsync(second.Upload, second.Version, CancellationToken.None));
+
+        await using var verify = fixture.CreateContext();
+        var stored = await verify.InstantQuoteUploadFiles.AsNoTracking().SingleAsync(value => value.Id == fileId);
+        Assert.Equal(firstAuthority, stored.FinalizedQuotationRequestId);
     }
 
     [Fact]
