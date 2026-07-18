@@ -132,30 +132,28 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         CancellationToken cancellationToken)
     {
         var upload = reservation.Record;
-        var metadata = await _storage.GetMetadataAsync(
-            upload.TemporaryBucket, upload.TemporaryObjectName, cancellationToken);
+        var metadata = await ExecuteDependencyReadAsync(() => _storage.GetMetadataAsync(
+            upload.TemporaryBucket, upload.TemporaryObjectName, cancellationToken));
         if (metadata is null || metadata.SizeBytes <= 0)
         {
             throw new InstantQuoteAmbiguousOutcomeException("Temporary object could not be reconciled.");
         }
 
-        var scan = await ScanStoredGenerationAsync(metadata, cancellationToken);
+        var scan = await ExecuteDependencyReadAsync(() => ScanStoredGenerationAsync(metadata, cancellationToken));
         if (scan.SizeBytes != metadata.SizeBytes ||
             !FixedTimeHexEquals(scan.Sha256, upload.ExpectedSha256))
         {
             await CleanupAsync(metadata);
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
-            await SaveTerminalIgnoringCancellationAsync(upload, reservation.Version);
-            throw new InstantQuoteUnsafeContentException("Temporary object bytes do not match the upload reservation.");
+            return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
         }
         if (scan.Result == InstantQuoteScanResult.Unsafe)
         {
             await CleanupAsync(metadata);
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
-            await SaveTerminalIgnoringCancellationAsync(upload, reservation.Version);
-            throw new InstantQuoteUnsafeContentException("Uploaded content is unsafe.");
+            return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
         }
         if (scan.Result != InstantQuoteScanResult.Clean)
         {
@@ -171,8 +169,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             await CleanupAsync(metadata);
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
-            await SaveTerminalIgnoringCancellationAsync(upload, reservation.Version);
-            throw;
+            return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
         }
 
         upload.ActualSha256 = scan.Sha256;
@@ -180,8 +177,43 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         upload.GcsGeneration = metadata.Generation;
         upload.State = InstantQuoteWorkflowState.Clean;
         upload.ModifiedAt = _timeProvider.GetUtcNow();
-        await _repository.SaveUploadAsync(upload, reservation.Version, cancellationToken);
-        return ToUploadResponse(upload);
+        return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
+    }
+
+    private async Task<InstantQuoteFileResponse> PersistReconciledUploadAsync(
+        InstantQuoteUploadFile upload,
+        uint expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _repository.SaveUploadAsync(upload, expectedVersion, cancellationToken);
+            return ToUploadResponse(upload);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (InstantQuoteConcurrencyException)
+        {
+            var authoritative = await ExecuteDurableStateAsync(() => _repository.GetSessionFilesAsync(
+                upload.SessionId, [upload.Id], cancellationToken));
+            if (authoritative.Count != 1)
+            {
+                throw new InstantQuoteAmbiguousOutcomeException(
+                    "The reconciled upload authority could not be reloaded.");
+            }
+            return ToUploadResponse(authoritative[0].Upload);
+        }
+        catch (InstantQuoteContractException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new InstantQuoteAmbiguousOutcomeException(
+                "The reconciled upload outcome could not be persisted.", exception);
+        }
     }
 
     /// <inheritdoc />
@@ -681,6 +713,27 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteDependencyUnavailableException(
                 "Durable instant quotation state is unavailable.", exception);
+        }
+    }
+
+    private static async Task<T> ExecuteDependencyReadAsync<T>(Func<Task<T>> operation)
+    {
+        try
+        {
+            return await operation();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (InstantQuoteContractException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new InstantQuoteDependencyUnavailableException(
+                "A required instant quotation dependency is unavailable.", exception);
         }
     }
 

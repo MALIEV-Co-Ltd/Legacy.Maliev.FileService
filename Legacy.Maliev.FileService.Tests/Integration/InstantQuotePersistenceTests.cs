@@ -367,6 +367,57 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
+    public async Task Upload_ConcurrentUnknownReconciliation_BothCallersReturnAuthoritativeClean()
+    {
+        Guid sessionId;
+        Guid fileId;
+        var bytes = new byte[84];
+        Encoding.ASCII.GetBytes("binary stl").CopyTo(bytes, 0);
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        const string idempotencyKey = "iiiiiiiiiiiiiiii";
+        const string fileName = "part.stl";
+        const string contentType = "model/stl";
+        var tokenBytes = Encoding.UTF8.GetBytes(new string('t', 32));
+        var token = Convert.ToBase64String(tokenBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        await using (var setup = await CreateMigratedContextAsync())
+        {
+            var repository = new InstantQuoteFileRepository(setup);
+            var session = new InstantQuoteUploadSession(
+                Guid.NewGuid(), "https://issuer.example|user-42", true, SHA256.HashData(tokenBytes),
+                Now.AddHours(1), Now);
+            sessionId = session.Id;
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            var upload = new InstantQuoteUploadFile(
+                Guid.NewGuid(), session.Id, Hash(idempotencyKey),
+                Fingerprint($"{session.Id:N}\n{fileName}\n{contentType}\n{sha}"),
+                fileName, ".stl", contentType, sha, sha, bytes.Length, 101, "private-bucket",
+                $"instant-quotation/temp/{session.Id:N}/part.stl", null, null,
+                InstantQuoteWorkflowState.Unknown, Now, Now);
+            var acquired = await repository.ReserveUploadAsync(upload, CancellationToken.None);
+            fileId = acquired.Record.Id;
+        }
+
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var storage = new ConcurrentReconciliationStorage(bytes, sessionId, sha);
+        var first = CreateReconciliationService(new InstantQuoteFileRepository(firstContext), storage);
+        var second = CreateReconciliationService(new InstantQuoteFileRepository(secondContext), storage);
+        var owner = new InstantQuoteOwner("https://issuer.example|user-42", true);
+
+        var results = await Task.WhenAll(
+            first.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
+                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None),
+            second.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
+                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None));
+
+        Assert.All(results, result => Assert.Equal("clean", result.Status));
+        await using var verify = fixture.CreateContext();
+        var stored = await verify.InstantQuoteUploadFiles.AsNoTracking().SingleAsync(value => value.Id == fileId);
+        Assert.Equal(InstantQuoteWorkflowState.Clean, stored.State);
+        Assert.Equal(sha, stored.ActualSha256);
+    }
+
+    [Fact]
     public async Task ReserveFinalization_ConcurrentThenCompleted_ClassifiesReplayAndConflict()
     {
         Guid sessionId;
@@ -475,6 +526,15 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
 
     private static string Fingerprint(string value) => Convert.ToHexString(Hash(value)).ToLowerInvariant();
 
+    private static InstantQuoteFileService CreateReconciliationService(
+        InstantQuoteFileRepository repository,
+        IInstantQuoteObjectStorage storage) => new(
+        repository,
+        storage,
+        new CleanScanner(),
+        Options.Create(new InstantQuoteFileOptions { StorageBucket = "private-bucket" }),
+        new FakeTimeProvider(Now));
+
     private sealed class SameAuthorityRaceStorage(string destination, Func<Task> beforePromotionReturns)
         : IInstantQuoteObjectStorage
     {
@@ -510,7 +570,49 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
 
     private sealed class CleanScanner : IInstantQuoteFileSafetyScanner
     {
-        public Task<InstantQuoteScanResult> ScanAsync(Stream content, CancellationToken cancellationToken) =>
-            Task.FromResult(InstantQuoteScanResult.Clean);
+        public async Task<InstantQuoteScanResult> ScanAsync(Stream content, CancellationToken cancellationToken)
+        {
+            await content.CopyToAsync(Stream.Null, cancellationToken);
+            return InstantQuoteScanResult.Clean;
+        }
+    }
+
+    private sealed class ConcurrentReconciliationStorage(
+        byte[] bytes,
+        Guid sessionId,
+        string sha256) : IInstantQuoteObjectStorage
+    {
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int downloadCount;
+
+        public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(
+            string bucket, string objectName, Stream content, string expectedSha256,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(
+            string bucket, string objectName, CancellationToken cancellationToken) =>
+            Task.FromResult<InstantQuoteObjectMetadata?>(new InstantQuoteObjectMetadata(
+                "private-bucket", $"instant-quotation/temp/{sessionId:N}/part.stl", 101, bytes.Length, sha256));
+
+        public async Task DownloadGenerationAsync(
+            string bucket, string objectName, long generation, Stream destination,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref downloadCount) == 2)
+            {
+                release.TrySetResult();
+            }
+            await release.Task.WaitAsync(cancellationToken);
+            await destination.WriteAsync(bytes, cancellationToken);
+        }
+
+        public Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(
+            string sourceBucket, string sourceObjectName, long sourceGeneration,
+            string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task DeleteGenerationAsync(
+            string bucket, string objectName, long generation, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }
