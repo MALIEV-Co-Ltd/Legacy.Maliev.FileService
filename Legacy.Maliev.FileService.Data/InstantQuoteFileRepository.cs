@@ -8,6 +8,9 @@ namespace Legacy.Maliev.FileService.Data;
 /// <summary>PostgreSQL persistence for instant-quotation ownership and workflow state.</summary>
 public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInstantQuoteFileRepository
 {
+    private const string UploadIdempotencyIndexName = "IX_InstantQuoteUploadFile_SessionId_IdempotencyKeyHash";
+    private const string FinalizationIdempotencyIndexName = "IX_InstantQuoteFinalization_SessionId_IdempotencyKeyHash";
+
     /// <inheritdoc />
     public async Task CreateSessionAsync(InstantQuoteUploadSession session, CancellationToken cancellationToken)
     {
@@ -38,38 +41,43 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
         try
         {
             await dbContext.SaveChangesAsync(cancellationToken);
-            return new(InstantQuoteReservationStatus.Acquired, upload);
+            return new(InstantQuoteReservationStatus.Acquired, upload, GetVersion(upload));
         }
-        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception, UploadIdempotencyIndexName))
         {
             dbContext.Entry(upload).State = EntityState.Detached;
-            var existing = await dbContext.InstantQuoteUploadFiles.AsNoTracking().SingleAsync(
-                value => value.SessionId == upload.SessionId && value.IdempotencyKeyHash == upload.IdempotencyKeyHash,
-                cancellationToken);
-            return new(Classify(existing.RequestFingerprint, upload.RequestFingerprint, existing.State), existing);
+            var existing = await dbContext.InstantQuoteUploadFiles
+                .AsNoTracking()
+                .Where(value => value.SessionId == upload.SessionId && value.IdempotencyKeyHash == upload.IdempotencyKeyHash)
+                .Select(value => new { Record = value, Version = EF.Property<uint>(value, "xmin") })
+                .SingleAsync(cancellationToken);
+            return new(Classify(existing.Record.RequestFingerprint, upload.RequestFingerprint, existing.Record.State),
+                existing.Record, existing.Version);
         }
     }
 
     /// <inheritdoc />
-    public async Task SaveUploadAsync(InstantQuoteUploadFile upload, CancellationToken cancellationToken)
+    public async Task<uint> SaveUploadAsync(
+        InstantQuoteUploadFile upload,
+        uint expectedVersion,
+        CancellationToken cancellationToken)
     {
         var tracked = dbContext.InstantQuoteUploadFiles.Local.SingleOrDefault(value => value.Id == upload.Id);
-        if (tracked is null)
+        if (tracked is not null && !ReferenceEquals(tracked, upload))
         {
-            tracked = await dbContext.InstantQuoteUploadFiles.SingleAsync(value => value.Id == upload.Id, cancellationToken);
+            dbContext.Entry(tracked).State = EntityState.Detached;
         }
 
-        if (!ReferenceEquals(tracked, upload))
+        var entry = dbContext.Entry(upload);
+        if (entry.State == EntityState.Detached)
         {
-            tracked.ActualSha256 = upload.ActualSha256;
-            tracked.ActualSizeBytes = upload.ActualSizeBytes;
-            tracked.GcsGeneration = upload.GcsGeneration;
-            tracked.FinalObjectName = upload.FinalObjectName;
-            tracked.State = upload.State;
-            tracked.ModifiedAt = upload.ModifiedAt;
+            dbContext.Attach(upload);
+            entry.State = EntityState.Modified;
         }
 
+        entry.Property<uint>("xmin").OriginalValue = expectedVersion;
         await dbContext.SaveChangesAsync(cancellationToken);
+        return GetVersion(upload);
     }
 
     /// <inheritdoc />
@@ -81,35 +89,44 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
         try
         {
             await dbContext.SaveChangesAsync(cancellationToken);
-            return new(InstantQuoteReservationStatus.Acquired, finalization);
+            return new(InstantQuoteReservationStatus.Acquired, finalization, GetVersion(finalization));
         }
-        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception, FinalizationIdempotencyIndexName))
         {
             dbContext.Entry(finalization).State = EntityState.Detached;
-            var existing = await dbContext.InstantQuoteFinalizations.AsNoTracking().SingleAsync(
-                value => value.SessionId == finalization.SessionId
-                    && value.IdempotencyKeyHash == finalization.IdempotencyKeyHash,
-                cancellationToken);
-            return new(Classify(existing.RequestFingerprint, finalization.RequestFingerprint, existing.State), existing);
+            var existing = await dbContext.InstantQuoteFinalizations
+                .AsNoTracking()
+                .Where(value => value.SessionId == finalization.SessionId
+                    && value.IdempotencyKeyHash == finalization.IdempotencyKeyHash)
+                .Select(value => new { Record = value, Version = EF.Property<uint>(value, "xmin") })
+                .SingleAsync(cancellationToken);
+            return new(Classify(existing.Record.RequestFingerprint, finalization.RequestFingerprint, existing.Record.State),
+                existing.Record, existing.Version);
         }
     }
 
     /// <inheritdoc />
-    public async Task SaveFinalizationAsync(InstantQuoteFinalization finalization, CancellationToken cancellationToken)
+    public async Task<uint> SaveFinalizationAsync(
+        InstantQuoteFinalization finalization,
+        uint expectedVersion,
+        CancellationToken cancellationToken)
     {
         var tracked = dbContext.InstantQuoteFinalizations.Local.SingleOrDefault(value => value.Id == finalization.Id);
-        if (tracked is null)
+        if (tracked is not null && !ReferenceEquals(tracked, finalization))
         {
-            tracked = await dbContext.InstantQuoteFinalizations.SingleAsync(value => value.Id == finalization.Id, cancellationToken);
+            dbContext.Entry(tracked).State = EntityState.Detached;
         }
 
-        if (!ReferenceEquals(tracked, finalization))
+        var entry = dbContext.Entry(finalization);
+        if (entry.State == EntityState.Detached)
         {
-            tracked.State = finalization.State;
-            tracked.ModifiedAt = finalization.ModifiedAt;
+            dbContext.Attach(finalization);
+            entry.State = EntityState.Modified;
         }
 
+        entry.Property<uint>("xmin").OriginalValue = expectedVersion;
         await dbContext.SaveChangesAsync(cancellationToken);
+        return GetVersion(finalization);
     }
 
     private static InstantQuoteReservationStatus Classify(
@@ -130,6 +147,14 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
         };
     }
 
-    private static bool IsUniqueViolation(DbUpdateException exception) =>
-        exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
+    private uint GetVersion<TEntity>(TEntity entity) where TEntity : class =>
+        dbContext.Entry(entity).Property<uint>("xmin").CurrentValue;
+
+    private static bool IsUniqueViolation(DbUpdateException exception, string constraintName) =>
+        exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: var actualConstraint,
+        }
+        && string.Equals(actualConstraint, constraintName, StringComparison.Ordinal);
 }

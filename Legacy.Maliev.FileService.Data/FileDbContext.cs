@@ -6,6 +6,9 @@ namespace Legacy.Maliev.FileService.Data;
 /// <summary>PostgreSQL context preserving the legacy Upload table contract.</summary>
 public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbContext(options)
 {
+    private const string UploadIdempotencyIndexName = "IX_InstantQuoteUploadFile_SessionId_IdempotencyKeyHash";
+    private const string FinalizationIdempotencyIndexName = "IX_InstantQuoteFinalization_SessionId_IdempotencyKeyHash";
+
     /// <summary>Gets clean upload metadata.</summary>
     public DbSet<Upload> Uploads => Set<Upload>();
 
@@ -54,6 +57,8 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         {
             table.HasCheckConstraint("CK_InstantQuoteUploadFile_KeyHash_Length", "octet_length(\"IdempotencyKeyHash\") = 32");
             table.HasCheckConstraint("CK_InstantQuoteUploadFile_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
+            table.HasCheckConstraint("CK_InstantQuoteUploadFile_ExpectedSha256", "\"ExpectedSha256\" ~ '^[0-9a-f]{64}$'");
+            table.HasCheckConstraint("CK_InstantQuoteUploadFile_ActualSha256", "\"ActualSha256\" IS NULL OR \"ActualSha256\" ~ '^[0-9a-f]{64}$'");
         });
         instantFile.HasKey(value => value.Id);
         instantFile.Property(value => value.IdempotencyKeyHash).HasColumnType("bytea").IsRequired();
@@ -69,7 +74,9 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         instantFile.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
         instantFile.Property(value => value.ModifiedAt).HasColumnType("timestamp with time zone");
         instantFile.Property<uint>("xmin").HasColumnType("xid").IsRowVersion();
-        instantFile.HasIndex(value => new { value.SessionId, value.IdempotencyKeyHash }).IsUnique();
+        instantFile.HasIndex(value => new { value.SessionId, value.IdempotencyKeyHash })
+            .IsUnique()
+            .HasDatabaseName(UploadIdempotencyIndexName);
         instantFile.HasOne<InstantQuoteUploadSession>().WithMany().HasForeignKey(value => value.SessionId).OnDelete(DeleteBehavior.Cascade);
 
         var finalization = modelBuilder.Entity<InstantQuoteFinalization>();
@@ -86,7 +93,9 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         finalization.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
         finalization.Property(value => value.ModifiedAt).HasColumnType("timestamp with time zone");
         finalization.Property<uint>("xmin").HasColumnType("xid").IsRowVersion();
-        finalization.HasIndex(value => new { value.SessionId, value.IdempotencyKeyHash }).IsUnique();
+        finalization.HasIndex(value => new { value.SessionId, value.IdempotencyKeyHash })
+            .IsUnique()
+            .HasDatabaseName(FinalizationIdempotencyIndexName);
         finalization.HasOne<InstantQuoteUploadSession>().WithMany().HasForeignKey(value => value.SessionId).OnDelete(DeleteBehavior.Cascade);
     }
 }

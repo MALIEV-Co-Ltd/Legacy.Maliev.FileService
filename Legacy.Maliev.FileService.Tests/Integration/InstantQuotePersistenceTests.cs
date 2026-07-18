@@ -4,6 +4,7 @@ using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Domain;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Legacy.Maliev.FileService.Tests.Integration;
 
@@ -61,7 +62,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         acquired.Record.ActualSizeBytes = 42;
         acquired.Record.GcsGeneration = 7;
         acquired.Record.ModifiedAt = Now.AddMinutes(1);
-        await repository.SaveUploadAsync(acquired.Record, CancellationToken.None);
+        await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
         context.ChangeTracker.Clear();
         var replay = await repository.ReserveUploadAsync(CreateUpload(session.Id, "fingerprint-a"), CancellationToken.None);
         context.ChangeTracker.Clear();
@@ -113,7 +114,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var acquired = await repository.ReserveFinalizationAsync(finalization, CancellationToken.None);
         acquired.Record.State = InstantQuoteWorkflowState.Unknown;
         acquired.Record.ModifiedAt = Now.AddMinutes(1);
-        await repository.SaveFinalizationAsync(acquired.Record, CancellationToken.None);
+        await repository.SaveFinalizationAsync(acquired.Record, acquired.Version, CancellationToken.None);
         context.ChangeTracker.Clear();
         var unknown = await repository.ReserveFinalizationAsync(
             new InstantQuoteFinalization(Guid.NewGuid(), session.Id, Hash("finalize-key"), new string('c', 64),
@@ -149,29 +150,153 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
-    public async Task SaveUpload_StaleXmin_RejectsLostUpdate()
+    public async Task SaveUpload_DetachedReplayWithStaleXmin_RejectsLostUpdate()
     {
-        Guid uploadId;
+        Guid sessionId;
         await using (var setupContext = await CreateMigratedContextAsync())
         {
             var repository = new InstantQuoteFileRepository(setupContext);
             var session = CreateSession();
             await repository.CreateSessionAsync(session, CancellationToken.None);
             var acquired = await repository.ReserveUploadAsync(CreateUpload(session.Id, "concurrency"), CancellationToken.None);
-            uploadId = acquired.Record.Id;
+            acquired.Record.State = InstantQuoteWorkflowState.Clean;
+            await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
+            sessionId = session.Id;
         }
 
-        await using var firstContext = fixture.CreateContext();
         await using var staleContext = fixture.CreateContext();
-        var first = await firstContext.InstantQuoteUploadFiles.SingleAsync(value => value.Id == uploadId);
-        var stale = await staleContext.InstantQuoteUploadFiles.SingleAsync(value => value.Id == uploadId);
-        first.State = InstantQuoteWorkflowState.Uploaded;
-        stale.State = InstantQuoteWorkflowState.Failed;
+        var staleRepository = new InstantQuoteFileRepository(staleContext);
+        var staleReplay = await staleRepository.ReserveUploadAsync(CreateUpload(sessionId, "concurrency"), CancellationToken.None);
+        Assert.Equal(InstantQuoteReservationStatus.Replay, staleReplay.Status);
+        Assert.Equal(EntityState.Detached, staleContext.Entry(staleReplay.Record).State);
 
-        await new InstantQuoteFileRepository(firstContext).SaveUploadAsync(first, CancellationToken.None);
+        await using (var advancingContext = fixture.CreateContext())
+        {
+            var advancing = await advancingContext.InstantQuoteUploadFiles.SingleAsync(value => value.Id == staleReplay.Record.Id);
+            advancing.State = InstantQuoteWorkflowState.Finalized;
+            await advancingContext.SaveChangesAsync(CancellationToken.None);
+        }
+
+        staleReplay.Record.State = InstantQuoteWorkflowState.Failed;
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() =>
-            new InstantQuoteFileRepository(staleContext).SaveUploadAsync(stale, CancellationToken.None));
+            staleRepository.SaveUploadAsync(staleReplay.Record, staleReplay.Version, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SaveFinalization_DetachedReplayWithStaleXmin_RejectsLostUpdate()
+    {
+        Guid sessionId;
+        var quotationRequestId = Guid.NewGuid();
+        await using (var setupContext = await CreateMigratedContextAsync())
+        {
+            var repository = new InstantQuoteFileRepository(setupContext);
+            var session = CreateSession();
+            sessionId = session.Id;
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            var acquired = await repository.ReserveFinalizationAsync(
+                CreateFinalization(session.Id, quotationRequestId, "finalization-concurrency"), CancellationToken.None);
+            acquired.Record.State = InstantQuoteWorkflowState.Finalized;
+            await repository.SaveFinalizationAsync(acquired.Record, acquired.Version, CancellationToken.None);
+        }
+
+        await using var staleContext = fixture.CreateContext();
+        var staleRepository = new InstantQuoteFileRepository(staleContext);
+        var staleReplay = await staleRepository.ReserveFinalizationAsync(
+            CreateFinalization(sessionId, quotationRequestId, "finalization-concurrency"), CancellationToken.None);
+        Assert.Equal(InstantQuoteReservationStatus.Replay, staleReplay.Status);
+        Assert.Equal(EntityState.Detached, staleContext.Entry(staleReplay.Record).State);
+
+        await using (var advancingContext = fixture.CreateContext())
+        {
+            var advancing = await advancingContext.InstantQuoteFinalizations.SingleAsync(
+                value => value.Id == staleReplay.Record.Id);
+            advancing.State = InstantQuoteWorkflowState.Unknown;
+            await advancingContext.SaveChangesAsync(CancellationToken.None);
+        }
+
+        staleReplay.Record.State = InstantQuoteWorkflowState.Failed;
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() =>
+            staleRepository.SaveFinalizationAsync(staleReplay.Record, staleReplay.Version, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReserveFinalization_ConcurrentThenCompleted_ClassifiesReplayAndConflict()
+    {
+        Guid sessionId;
+        await using (var setupContext = await CreateMigratedContextAsync())
+        {
+            var session = CreateSession();
+            sessionId = session.Id;
+            await new InstantQuoteFileRepository(setupContext).CreateSessionAsync(session, CancellationToken.None);
+        }
+
+        var quotationRequestId = Guid.NewGuid();
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var concurrent = await Task.WhenAll(
+            new InstantQuoteFileRepository(firstContext).ReserveFinalizationAsync(
+                CreateFinalization(sessionId, quotationRequestId, "same-finalization"), CancellationToken.None),
+            new InstantQuoteFileRepository(secondContext).ReserveFinalizationAsync(
+                CreateFinalization(sessionId, quotationRequestId, "same-finalization"), CancellationToken.None));
+
+        Assert.Single(concurrent, result => result.Status == InstantQuoteReservationStatus.Acquired);
+        Assert.Single(concurrent, result => result.Status == InstantQuoteReservationStatus.InProgress);
+        Assert.Equal(concurrent[0].Record.Id, concurrent[1].Record.Id);
+
+        await using (var completingContext = fixture.CreateContext())
+        {
+            var stored = await completingContext.InstantQuoteFinalizations.SingleAsync();
+            stored.State = InstantQuoteWorkflowState.Finalized;
+            await completingContext.SaveChangesAsync(CancellationToken.None);
+        }
+
+        await using var replayContext = fixture.CreateContext();
+        var replayRepository = new InstantQuoteFileRepository(replayContext);
+        var replay = await replayRepository.ReserveFinalizationAsync(
+            CreateFinalization(sessionId, quotationRequestId, "same-finalization"), CancellationToken.None);
+        var conflict = await replayRepository.ReserveFinalizationAsync(
+            CreateFinalization(sessionId, quotationRequestId, "changed-finalization"), CancellationToken.None);
+
+        Assert.Equal(InstantQuoteReservationStatus.Replay, replay.Status);
+        Assert.Equal(InstantQuoteReservationStatus.Conflict, conflict.Status);
+    }
+
+    [Fact]
+    public async Task ReserveUpload_PrimaryKeyCollision_IsNotClassifiedAsIdempotency()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var existing = CreateUpload(session.Id, "first", id: Guid.NewGuid(), idempotencyKey: "first-key");
+        await repository.ReserveUploadAsync(existing, CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        var exception = await Assert.ThrowsAsync<DbUpdateException>(() => repository.ReserveUploadAsync(
+            CreateUpload(session.Id, "second", existing.Id, "different-key"), CancellationToken.None));
+
+        var postgresException = Assert.IsType<PostgresException>(exception.InnerException);
+        Assert.Equal("PK_InstantQuoteUploadFile", postgresException.ConstraintName);
+    }
+
+    [Fact]
+    public async Task ChecksumConstraints_InvalidExpectedOrActualSha256_PostgreSqlRejectsWrite()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var acquired = await repository.ReserveUploadAsync(CreateUpload(session.Id, "checksum"), CancellationToken.None);
+
+        var expectedException = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE \"InstantQuoteUploadFile\" SET \"ExpectedSha256\" = {'A'} WHERE \"Id\" = {acquired.Record.Id}"));
+        var actualException = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE \"InstantQuoteUploadFile\" SET \"ActualSha256\" = {'B'} WHERE \"Id\" = {acquired.Record.Id}"));
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, expectedException.SqlState);
+        Assert.Equal(PostgresErrorCodes.CheckViolation, actualException.SqlState);
     }
 
     private async Task<FileDbContext> CreateMigratedContextAsync()
@@ -187,10 +312,18 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     private static InstantQuoteUploadSession CreateSession() => new(
         Guid.NewGuid(), "https://issuer.example|user-42", true, Hash("session-token"), Now.AddHours(1), Now);
 
-    private static InstantQuoteUploadFile CreateUpload(Guid sessionId, string fingerprint) => new(
-        Guid.NewGuid(), sessionId, Hash("upload-key"), Fingerprint(fingerprint), "part.stl", ".stl", "model/stl",
+    private static InstantQuoteUploadFile CreateUpload(
+        Guid sessionId,
+        string fingerprint,
+        Guid? id = null,
+        string idempotencyKey = "upload-key") => new(
+        id ?? Guid.NewGuid(), sessionId, Hash(idempotencyKey), Fingerprint(fingerprint), "part.stl", ".stl", "model/stl",
         new string('a', 64), null, null, null, $"instant-quote/{sessionId:N}/{Guid.NewGuid():N}", null,
         InstantQuoteWorkflowState.Pending, Now, Now);
+
+    private static InstantQuoteFinalization CreateFinalization(Guid sessionId, Guid quotationRequestId, string fingerprint) => new(
+        Guid.NewGuid(), sessionId, Hash("finalize-key"), Fingerprint(fingerprint), quotationRequestId,
+        [Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")], InstantQuoteWorkflowState.Pending, Now, Now);
 
     private static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
 
