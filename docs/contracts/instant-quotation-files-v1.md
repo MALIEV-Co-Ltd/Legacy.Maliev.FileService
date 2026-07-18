@@ -14,7 +14,9 @@ Success: `201 Created`
 {
   "sessionId": "11111111-1111-1111-1111-111111111111",
   "sessionToken": "opaque-session-capability",
-  "expiresAt": "2026-07-18T12:00:00+00:00"
+  "expiresAt": "2026-07-18T12:00:00+00:00",
+  "maxUploadBytes": 209715200,
+  "supportedExtensions": [".stl", ".obj", ".3mf", ".step", ".stp", ".iges", ".igs", ".glb", ".gltf"]
 }
 ```
 
@@ -74,6 +76,8 @@ Success: `200 OK`
   "files": [
     {
       "fileId": "22222222-2222-2222-2222-222222222222",
+      "bucket": "private-upload-bucket",
+      "objectName": "instant-quotation/33333333333333333333333333333333/22222222222222222222222222222222.stl",
       "fileName": "customer-part.stl",
       "contentType": "model/stl",
       "sizeBytes": 123456,
@@ -95,7 +99,9 @@ Errors use `application/problem+json` and RFC ProblemDetails with a stable `code
 | 400 | `validation_error` | Headers, metadata, multipart shape, digest, extension, or selection is invalid. |
 | 403 | `session_forbidden` | The session token cannot authorize the requested session. |
 | 409 | `idempotency_conflict` | The same idempotency key was already bound to a different request fingerprint. |
+| 409 | `upload_in_progress` | An identical upload or finalization reservation is still pending. |
 | 413 | `payload_too_large` | Actual streamed file bytes exceed 200 MiB. |
+| 422 | `unsafe_content` | The file signature, digest, or malware scan made the upload unsafe to accept. |
 | 503 | `dependency_unavailable` | Required storage, scanning, or durable state is temporarily unavailable. |
 | 503 | `outcome_unknown` | A failure left an ambiguous result that requires identical replay. |
 

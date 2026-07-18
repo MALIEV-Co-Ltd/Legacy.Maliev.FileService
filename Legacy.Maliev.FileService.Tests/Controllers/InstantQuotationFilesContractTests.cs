@@ -55,13 +55,26 @@ public sealed class InstantQuotationFilesContractTests
     [Fact]
     public void Contracts_SerializeSuccessJsonAsCamelCase()
     {
-        var response = new CreateInstantQuoteSessionResponse(SessionId, "opaque-token", DateTimeOffset.Parse("2026-07-18T12:00:00Z"));
+        var response = new CreateInstantQuoteSessionResponse(
+            SessionId,
+            "opaque-token",
+            DateTimeOffset.Parse("2026-07-18T12:00:00Z"),
+            InstantQuoteFileContract.MaximumUploadBytes,
+            InstantQuoteFileContract.SupportedExtensions);
         var json = JsonSerializer.Serialize(response);
 
         Assert.Contains("\"sessionId\"", json, StringComparison.Ordinal);
         Assert.Contains("\"sessionToken\"", json, StringComparison.Ordinal);
         Assert.Contains("\"expiresAt\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"maxUploadBytes\":209715200", json, StringComparison.Ordinal);
+        Assert.Contains("\"supportedExtensions\":[\".stl\",\".obj\",\".3mf\",\".step\",\".stp\",\".iges\",\".igs\",\".glb\",\".gltf\"]", json, StringComparison.Ordinal);
         Assert.DoesNotContain("\"SessionId\"", json, StringComparison.Ordinal);
+
+        var finalized = JsonSerializer.Serialize(new FinalizedInstantQuoteFileResponse(
+            FileId, "private-bucket", "instant-quotation/final", "part.stl", "model/stl", 3,
+            new string('a', 64), "finalized"));
+        Assert.Contains("\"bucket\":\"private-bucket\"", finalized, StringComparison.Ordinal);
+        Assert.Contains("\"objectName\":\"instant-quotation/final\"", finalized, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -202,6 +215,8 @@ public sealed class InstantQuotationFilesContractTests
     [InlineData(typeof(InstantQuoteValidationException), StatusCodes.Status400BadRequest, "validation_error")]
     [InlineData(typeof(InstantQuoteOwnershipException), StatusCodes.Status403Forbidden, "session_forbidden")]
     [InlineData(typeof(InstantQuoteReplayConflictException), StatusCodes.Status409Conflict, "idempotency_conflict")]
+    [InlineData(typeof(InstantQuoteUploadInProgressException), StatusCodes.Status409Conflict, "upload_in_progress")]
+    [InlineData(typeof(InstantQuoteUnsafeContentException), StatusCodes.Status422UnprocessableEntity, "unsafe_content")]
     [InlineData(typeof(InstantQuotePayloadTooLargeException), StatusCodes.Status413PayloadTooLarge, "payload_too_large")]
     [InlineData(typeof(InstantQuoteDependencyUnavailableException), StatusCodes.Status503ServiceUnavailable, "dependency_unavailable")]
     [InlineData(typeof(InstantQuoteAmbiguousOutcomeException), StatusCodes.Status503ServiceUnavailable, "outcome_unknown")]
@@ -326,11 +341,14 @@ public sealed class InstantQuotationFilesContractTests
             return Task.FromResult(new CreateInstantQuoteSessionResponse(
                 SessionId,
                 "opaque-token",
-                DateTimeOffset.Parse("2026-07-18T12:00:00Z")));
+                DateTimeOffset.Parse("2026-07-18T12:00:00Z"),
+                InstantQuoteFileContract.MaximumUploadBytes,
+                InstantQuoteFileContract.SupportedExtensions));
         }
 
         public Task<InstantQuoteFileResponse> UploadAsync(
             Guid sessionId,
+            InstantQuoteOwner owner,
             string token,
             string idempotencyKey,
             string expectedSha256,
@@ -350,6 +368,7 @@ public sealed class InstantQuotationFilesContractTests
 
         public Task<FinalizeInstantQuoteFilesResponse> FinalizeAsync(
             Guid sessionId,
+            InstantQuoteOwner owner,
             string token,
             string idempotencyKey,
             FinalizeInstantQuoteFilesRequest request,
@@ -357,7 +376,7 @@ public sealed class InstantQuotationFilesContractTests
         {
             FinalizeRequest = request;
             return Task.FromResult(new FinalizeInstantQuoteFilesResponse(request.QuotationRequestId, [
-                new InstantQuoteFileResponse(FileId, "part.stl", "model/stl", 3, "ABC123", "finalized"),
+                new FinalizedInstantQuoteFileResponse(FileId, "private-bucket", "instant-quotation/final", "part.stl", "model/stl", 3, "ABC123", "finalized"),
             ]));
         }
     }
