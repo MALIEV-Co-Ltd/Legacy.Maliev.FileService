@@ -16,13 +16,20 @@ public interface IInstantQuoteMultipartReader
 }
 
 /// <summary>Owns the streamed multipart body and its safe request metadata.</summary>
-public sealed class InstantQuoteMultipartFile(Stream body, InstantQuoteUploadMetadata metadata) : IAsyncDisposable
+public sealed class InstantQuoteMultipartFile(
+    Stream body,
+    InstantQuoteUploadMetadata metadata,
+    Func<CancellationToken, Task>? complete = null) : IAsyncDisposable
 {
     /// <summary>Gets the unbuffered file body.</summary>
     public Stream Body { get; } = body;
 
     /// <summary>Gets customer filename and declared media-type metadata.</summary>
     public InstantQuoteUploadMetadata Metadata { get; } = metadata;
+
+    /// <summary>Checks that no multipart sections follow the consumed file section.</summary>
+    public Task CompleteAsync(CancellationToken cancellationToken) =>
+        complete?.Invoke(cancellationToken) ?? Task.CompletedTask;
 
     /// <inheritdoc />
     public ValueTask DisposeAsync() => Body.DisposeAsync();
