@@ -46,7 +46,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             SHA256.HashData(token),
             now.Add(_options.SessionLifetime),
             now);
-        await _repository.CreateSessionAsync(session, cancellationToken);
+        await ExecuteDurableStateAsync(async () =>
+        {
+            await _repository.CreateSessionAsync(session, cancellationToken);
+            return true;
+        });
         return new CreateInstantQuoteSessionResponse(
             session.Id,
             Convert.ToBase64String(token).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
@@ -80,8 +84,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         var headers = InstantQuoteFilePolicy.NormalizeHeaders(token, idempotencyKey, expectedSha256);
         var normalized = InstantQuoteFilePolicy.NormalizeFileMetadata(metadata.FileName, metadata.ContentType);
         var tokenHash = SHA256.HashData(DecodeBase64Url(headers.Token));
-        var session = await _repository.VerifySessionAsync(
-            sessionId, tokenHash, owner.PrincipalId, owner.IsAuthenticated, _timeProvider.GetUtcNow(), cancellationToken);
+        var session = await ExecuteDurableStateAsync(() => _repository.VerifySessionAsync(
+            sessionId, tokenHash, owner.PrincipalId, owner.IsAuthenticated, _timeProvider.GetUtcNow(), cancellationToken));
         if (session is null)
         {
             throw new InstantQuoteOwnershipException("The upload session could not be authorized.");
@@ -97,11 +101,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteDependencyUnavailableException("Instant quotation storage is not configured.");
         }
-        var reservation = await _repository.ReserveUploadAsync(new InstantQuoteUploadFile(
+        var reservation = await ExecuteDurableStateAsync(() => _repository.ReserveUploadAsync(new InstantQuoteUploadFile(
             fileId, sessionId, idempotencyHash, fingerprint, normalized.Metadata.FileName, normalized.Extension,
             normalized.Metadata.ContentType, headers.ExpectedSha256, null, null, null, _options.StorageBucket,
             temporaryName, null, null,
-            InstantQuoteWorkflowState.Pending, now, now), cancellationToken);
+            InstantQuoteWorkflowState.Pending, now, now), cancellationToken));
 
         if (reservation.Status == InstantQuoteReservationStatus.Conflict)
         {
@@ -202,14 +206,15 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteValidationException("File identifier is invalid.");
         }
-        var verified = await _repository.VerifySessionAsync(
+        var verified = await ExecuteDurableStateAsync(() => _repository.VerifySessionAsync(
             sessionId, SHA256.HashData(DecodeBase64Url(token)), owner.PrincipalId, owner.IsAuthenticated,
-            _timeProvider.GetUtcNow(), cancellationToken);
+            _timeProvider.GetUtcNow(), cancellationToken));
         if (verified is null)
         {
             throw new InstantQuoteOwnershipException("The upload session could not be authorized.");
         }
-        var files = await _repository.GetSessionFilesAsync(sessionId, [fileId], cancellationToken);
+        var files = await ExecuteDurableStateAsync(() =>
+            _repository.GetSessionFilesAsync(sessionId, [fileId], cancellationToken));
         if (files.Count != 1)
         {
             throw new InstantQuoteOwnershipException("The file could not be authorized.");
@@ -275,15 +280,16 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
 
         var tokenHash = SHA256.HashData(DecodeBase64Url(token));
-        var verified = await _repository.VerifySessionAsync(
-            sessionId, tokenHash, owner.PrincipalId, owner.IsAuthenticated, _timeProvider.GetUtcNow(), cancellationToken);
+        var verified = await ExecuteDurableStateAsync(() => _repository.VerifySessionAsync(
+            sessionId, tokenHash, owner.PrincipalId, owner.IsAuthenticated, _timeProvider.GetUtcNow(), cancellationToken));
         if (verified is null)
         {
             throw new InstantQuoteOwnershipException("The upload session could not be authorized.");
         }
 
         var selected = request.FileIds.Order().ToArray();
-        var files = await _repository.GetSessionFilesAsync(sessionId, selected, cancellationToken);
+        var files = await ExecuteDurableStateAsync(() =>
+            _repository.GetSessionFilesAsync(sessionId, selected, cancellationToken));
         if (files.Count != selected.Length ||
             files.Any(value => value.Upload.State is not (InstantQuoteWorkflowState.Clean or InstantQuoteWorkflowState.Finalized)))
         {
@@ -296,9 +302,9 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
         var fingerprint = HashText($"{sessionId:N}\n{request.QuotationRequestId:N}\n{string.Join(',', selected.Select(value => value.ToString("N")))}");
         var now = _timeProvider.GetUtcNow();
-        var reservation = await _repository.ReserveFinalizationAsync(new InstantQuoteFinalization(
+        var reservation = await ExecuteDurableStateAsync(() => _repository.ReserveFinalizationAsync(new InstantQuoteFinalization(
             Guid.NewGuid(), sessionId, SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)), fingerprint,
-            request.QuotationRequestId, selected, InstantQuoteWorkflowState.Pending, now, now), cancellationToken);
+            request.QuotationRequestId, selected, InstantQuoteWorkflowState.Pending, now, now), cancellationToken));
         if (reservation.Status == InstantQuoteReservationStatus.Conflict)
         {
             throw new InstantQuoteReplayConflictException("Idempotency key belongs to another finalization.");
@@ -655,6 +661,27 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
         return new(upload.Id, upload.OriginalFileName, upload.ValidatedContentType, upload.ActualSizeBytes.Value,
             upload.ActualSha256, upload.State == InstantQuoteWorkflowState.Clean ? "clean" : "finalized");
+    }
+
+    private static async Task<T> ExecuteDurableStateAsync<T>(Func<Task<T>> operation)
+    {
+        try
+        {
+            return await operation();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (InstantQuoteContractException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new InstantQuoteDependencyUnavailableException(
+                "Durable instant quotation state is unavailable.", exception);
+        }
     }
 
     private static byte[] DecodeBase64Url(string value)
