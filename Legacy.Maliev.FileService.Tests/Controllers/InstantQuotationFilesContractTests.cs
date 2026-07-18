@@ -124,6 +124,22 @@ public sealed class InstantQuotationFilesContractTests
     }
 
     [Fact]
+    public async Task CreateSession_PrefersIssuerQualifiedMappedNameIdentifierOverClientClaims()
+    {
+        var service = new StubService();
+        var controller = Controller(service);
+        controller.ControllerContext.HttpContext.User = Principal(
+            new Claim("iss", "https://issuer.example"),
+            new Claim(ClaimTypes.NameIdentifier, "mapped-customer-42"),
+            new Claim("client_id", "browser-client"),
+            new Claim("azp", "authorized-party"));
+
+        await controller.CreateSessionAsync(default);
+
+        Assert.Equal("https://issuer.example|mapped-customer-42", service.Owner?.PrincipalId);
+    }
+
+    [Fact]
     public async Task Pipeline_InvalidRequiredHeadersOrBody_ReturnsStableValidationProblem()
     {
         await using var app = await StartPipelineAsync();
