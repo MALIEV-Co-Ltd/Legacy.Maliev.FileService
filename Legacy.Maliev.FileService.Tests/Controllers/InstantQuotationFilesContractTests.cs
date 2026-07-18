@@ -34,6 +34,7 @@ public sealed class InstantQuotationFilesContractTests
         AssertMethod(nameof(InstantQuotationFilesController.CreateSessionAsync), "sessions");
         AssertMethod(nameof(InstantQuotationFilesController.UploadAsync), "sessions/{sessionId}/files");
         AssertMethod(nameof(InstantQuotationFilesController.FinalizeAsync), "sessions/{sessionId}/finalizations");
+        AssertMethod(nameof(InstantQuotationFilesController.RemoveAsync), "sessions/{sessionId}/files/{fileId}");
     }
 
     [Fact]
@@ -84,6 +85,25 @@ public sealed class InstantQuotationFilesContractTests
             [".stl", ".obj", ".3mf", ".step", ".stp", ".iges", ".igs", ".glb", ".gltf"],
             InstantQuoteFileContract.SupportedExtensions);
         Assert.Equal(200L * 1024 * 1024, InstantQuoteFileContract.MaximumUploadBytes);
+    }
+
+    [Fact]
+    public async Task Documentation_FreezesRemovalErrorsCancellationAndAuthorityBoundary()
+    {
+        var path = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "docs", "contracts", "instant-quotation-files-v1.md"));
+        var documentation = await File.ReadAllTextAsync(path);
+
+        Assert.Contains("DELETE /file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}", documentation, StringComparison.Ordinal);
+        foreach (var value in new[] { "401", "403", "409", "413", "415", "422", "503" })
+        {
+            Assert.Contains(value, documentation, StringComparison.Ordinal);
+        }
+        Assert.Contains("unsupported_media_type", documentation, StringComparison.Ordinal);
+        Assert.Contains("request abort", documentation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GeometryService", documentation, StringComparison.Ordinal);
+        Assert.Contains("authoritative geometry/DFM", documentation, StringComparison.Ordinal);
+        Assert.Contains("never calculates geometry, DFM, or price", documentation, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -211,6 +231,24 @@ public sealed class InstantQuotationFilesContractTests
         Assert.Equal(FileId, Assert.Single(service.FinalizeRequest!.FileIds));
     }
 
+    [Fact]
+    public async Task Remove_RequiresSessionTokenAndReturns204()
+    {
+        var service = new StubService();
+        var controller = Controller(service);
+        controller.ControllerContext.HttpContext.User = Principal(
+            new Claim("sub", "customer-42", ClaimValueTypes.String, "https://issuer.example"));
+
+        var result = await controller.RemoveAsync(SessionId, FileId, "token", default);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Equal(FileId, service.RemovedFileId);
+        Assert.Equal("https://issuer.example|customer-42", service.RemoveOwner?.PrincipalId);
+        var method = typeof(InstantQuotationFilesController).GetMethod(nameof(InstantQuotationFilesController.RemoveAsync))!;
+        Assert.Contains(method.GetParameters(), parameter =>
+            parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "X-Quote-Session-Token");
+    }
+
     [Theory]
     [InlineData(typeof(InstantQuoteValidationException), StatusCodes.Status400BadRequest, "validation_error")]
     [InlineData(typeof(InstantQuoteOwnershipException), StatusCodes.Status403Forbidden, "session_forbidden")]
@@ -218,6 +256,7 @@ public sealed class InstantQuotationFilesContractTests
     [InlineData(typeof(InstantQuoteUploadInProgressException), StatusCodes.Status409Conflict, "upload_in_progress")]
     [InlineData(typeof(InstantQuoteUnsafeContentException), StatusCodes.Status422UnprocessableEntity, "unsafe_content")]
     [InlineData(typeof(InstantQuotePayloadTooLargeException), StatusCodes.Status413PayloadTooLarge, "payload_too_large")]
+    [InlineData(typeof(InstantQuoteUnsupportedMediaTypeException), StatusCodes.Status415UnsupportedMediaType, "unsupported_media_type")]
     [InlineData(typeof(InstantQuoteDependencyUnavailableException), StatusCodes.Status503ServiceUnavailable, "dependency_unavailable")]
     [InlineData(typeof(InstantQuoteAmbiguousOutcomeException), StatusCodes.Status503ServiceUnavailable, "outcome_unknown")]
     public async Task Exceptions_MapToStableProblemDetails(Type exceptionType, int expectedStatus, string expectedCode)
@@ -301,7 +340,8 @@ public sealed class InstantQuotationFilesContractTests
     private static void AssertMethod(string name, string template)
     {
         var method = typeof(InstantQuotationFilesController).GetMethod(name)!;
-        Assert.Equal(template, method.GetCustomAttribute<HttpPostAttribute>()?.Template);
+        var route = Assert.Single(method.GetCustomAttributes().OfType<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>());
+        Assert.Equal(template, route.Template);
         var permission = Assert.Single(method.GetCustomAttributes<RequirePermissionAttribute>());
         Assert.Equal("legacy-file.uploads.create", permission.Permission);
     }
@@ -327,6 +367,8 @@ public sealed class InstantQuotationFilesContractTests
         public InstantQuoteOwner? Owner { get; private set; }
         public InstantQuoteUploadMetadata? UploadMetadata { get; private set; }
         public FinalizeInstantQuoteFilesRequest? FinalizeRequest { get; private set; }
+        public Guid? RemovedFileId { get; private set; }
+        public InstantQuoteOwner? RemoveOwner { get; private set; }
 
         public Task<CreateInstantQuoteSessionResponse> CreateInstantQuoteSessionAsync(
             InstantQuoteOwner owner,
@@ -378,6 +420,14 @@ public sealed class InstantQuotationFilesContractTests
             return Task.FromResult(new FinalizeInstantQuoteFilesResponse(request.QuotationRequestId, [
                 new FinalizedInstantQuoteFileResponse(FileId, "private-bucket", "instant-quotation/final", "part.stl", "model/stl", 3, "ABC123", "finalized"),
             ]));
+        }
+
+        public Task RemoveAsync(Guid sessionId, InstantQuoteOwner owner, string token, Guid fileId,
+            CancellationToken cancellationToken)
+        {
+            RemovedFileId = fileId;
+            RemoveOwner = owner;
+            return Task.CompletedTask;
         }
     }
 

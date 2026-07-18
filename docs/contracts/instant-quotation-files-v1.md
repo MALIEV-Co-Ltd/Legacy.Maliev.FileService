@@ -1,6 +1,6 @@
 # Instant quotation files API v1
 
-This Web-facing API creates an upload session, streams one CAD file at a time, and finalizes selected clean files for a quotation request. The FileService owns file intake and authoritative file-link state only. Web continues to own pricing and downstream quotation submission; this API has no price, amount, currency, or quotation-calculation fields.
+This Web-facing API creates an upload session, streams one CAD file at a time, and finalizes selected clean files for a quotation request. FileService returns file and link authority only. GeometryService and the quotation backend own authoritative geometry/DFM analysis and quotation decisions; FileService never calculates geometry, DFM, or price. This API has no price, amount, currency, or quotation-calculation fields.
 
 All JSON property names are camelCase. Customer filenames are metadata only and never become storage object basenames. Storage credentials, browser/service credentials, private object names, stack traces, and dependency details are never returned. The `sessionToken` is an opaque, time-limited capability returned only when its session is created.
 
@@ -90,29 +90,41 @@ Success: `200 OK`
 
 Only file IDs owned by the same unexpired session and already recorded clean can be finalized. A file or token from another session is rejected without disclosing whether that resource exists.
 
+## Remove a pre-finalization file
+
+`DELETE /file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}`
+
+Required header: `X-Quote-Session-Token`.
+
+Success: `204 No Content`. Removal is idempotent: retrying an already removed file returns 204 without another storage operation. Clean, failed, or unknown temporary objects are conditionally deleted by their exact generation when one is recorded. Pending or uploaded work returns `upload_in_progress`; a finalized file is protected because it is already linked to a quotation request.
+
 ## Errors
 
 Errors use `application/problem+json` and RFC ProblemDetails with a stable `code` extension. Titles and details are safe public text.
 
 | Status | `code` | Meaning |
 |---:|---|---|
-| 400 | `validation_error` | Headers, metadata, multipart shape, digest, extension, or selection is invalid. |
+| 400 | `validation_error` | Headers, filename metadata, multipart shape, digest syntax, or selection is invalid. |
+| 401 | platform authentication challenge | The caller has no accepted authenticated platform identity. |
 | 403 | `session_forbidden` | The session token cannot authorize the requested session. |
 | 409 | `idempotency_conflict` | The same idempotency key was already bound to a different request fingerprint. |
 | 409 | `upload_in_progress` | An identical upload or finalization reservation is still pending. |
 | 413 | `payload_too_large` | Actual streamed file bytes exceed 200 MiB. |
+| 415 | `unsupported_media_type` | The declared media type is invalid, unsupported, or mismatched with the extension. |
 | 422 | `unsafe_content` | The file signature, digest, or malware scan made the upload unsafe to accept. |
 | 503 | `dependency_unavailable` | Required storage, scanning, or durable state is temporarily unavailable. |
 | 503 | `outcome_unknown` | A failure left an ambiguous result that requires identical replay. |
 
 ```json
-{
-  "type": "https://docs.maliev.com/problems/idempotency_conflict",
-  "title": "Idempotency replay conflict",
-  "status": 409,
-  "detail": "The idempotency key is already associated with a different request.",
-  "code": "idempotency_conflict"
-}
+[
+  { "status": 401, "code": "platform_authentication_required" },
+  { "status": 403, "code": "session_forbidden" },
+  { "status": 409, "code": "idempotency_conflict" },
+  { "status": 413, "code": "payload_too_large" },
+  { "status": 415, "code": "unsupported_media_type" },
+  { "status": 422, "code": "unsafe_content" },
+  { "status": 503, "code": "outcome_unknown" }
+]
 ```
 
 ## Ownership and retry rules
@@ -121,4 +133,4 @@ Errors use `application/problem+json` and RFC ProblemDetails with a stable `code
 - Retry an interrupted upload or finalization with the same session, token, idempotency key, and identical request content.
 - An identical completed retry returns the recorded result. Reusing a key with changed bytes, digest, metadata, quotation request, or file selection returns `idempotency_conflict`.
 - For `outcome_unknown`, retry the identical request with the same idempotency key until the authoritative result can be reconciled.
-- For `dependency_unavailable`, retry with backoff. Cancellation itself is propagated and is not rewritten as a successful or definitive failed outcome.
+- For `dependency_unavailable`, retry with backoff. Cancellation is driven by the HTTP request abort token, remains a request abort, and is not rewritten as a successful or definitive failed outcome.

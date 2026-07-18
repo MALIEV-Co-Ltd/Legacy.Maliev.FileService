@@ -66,9 +66,10 @@ public sealed class InstantQuoteFilePolicyTests
     [Theory]
     [InlineData("part.exe", "application/octet-stream")]
     [InlineData("part.stl", "image/png")]
+    [InlineData("part.stl", "not a media type")]
     public void NormalizeFileMetadata_UnsupportedOrMismatchedType_Throws(string fileName, string contentType)
     {
-        Assert.Throws<InstantQuoteValidationException>(() =>
+        Assert.Throws<InstantQuoteUnsupportedMediaTypeException>(() =>
             InstantQuoteFilePolicy.NormalizeFileMetadata(fileName, contentType));
     }
 

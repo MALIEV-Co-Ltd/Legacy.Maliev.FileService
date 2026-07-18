@@ -12,8 +12,9 @@ public sealed class InstantQuoteUploadFile
     /// <summary>Creates an upload reservation.</summary>
     public InstantQuoteUploadFile(Guid id, Guid sessionId, byte[] idempotencyKeyHash, string requestFingerprint,
         string originalFileName, string validatedExtension, string validatedContentType, string expectedSha256,
-        string? actualSha256, long? actualSizeBytes, long? gcsGeneration, string temporaryObjectName,
-        string? finalObjectName, InstantQuoteWorkflowState state, DateTimeOffset createdAt, DateTimeOffset modifiedAt)
+        string? actualSha256, long? actualSizeBytes, long? gcsGeneration, string temporaryBucket,
+        string temporaryObjectName, string? finalBucket, string? finalObjectName, InstantQuoteWorkflowState state,
+        DateTimeOffset createdAt, DateTimeOffset modifiedAt)
     {
         ValidateHash(idempotencyKeyHash, nameof(idempotencyKeyHash));
         ValidateFingerprint(requestFingerprint, nameof(requestFingerprint));
@@ -33,7 +34,9 @@ public sealed class InstantQuoteUploadFile
         ActualSha256 = actualSha256;
         ActualSizeBytes = actualSizeBytes;
         GcsGeneration = gcsGeneration;
+        TemporaryBucket = temporaryBucket;
         TemporaryObjectName = temporaryObjectName;
+        FinalBucket = finalBucket;
         FinalObjectName = finalObjectName;
         State = state;
         CreatedAt = createdAt;
@@ -74,8 +77,12 @@ public sealed class InstantQuoteUploadFile
     public long? ActualSizeBytes { get; set; }
     /// <summary>Gets or sets the authoritative GCS generation.</summary>
     public long? GcsGeneration { get; set; }
+    /// <summary>Gets the durable private bucket containing the temporary generation.</summary>
+    public string TemporaryBucket { get; private set; } = string.Empty;
     /// <summary>Gets the opaque temporary object name.</summary>
     public string TemporaryObjectName { get; private set; } = string.Empty;
+    /// <summary>Gets or sets the durable private bucket containing the final object.</summary>
+    public string? FinalBucket { get; set; }
     /// <summary>Gets or sets the opaque final object name.</summary>
     public string? FinalObjectName { get; set; }
     /// <summary>Gets or sets the workflow state.</summary>
@@ -119,4 +126,6 @@ public enum InstantQuoteWorkflowState
     Failed,
     /// <summary>The outcome cannot be determined safely.</summary>
     Unknown,
+    /// <summary>The pre-finalization file was explicitly removed.</summary>
+    Removed,
 }

@@ -13,6 +13,7 @@ public interface IInstantQuoteObjectStorage
 {
     /// <summary>Uploads a private temporary object without overwriting an existing object.</summary>
     Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(
+        string bucket,
         string objectName,
         Stream content,
         string expectedSha256,
@@ -37,6 +38,7 @@ public interface IInstantQuoteObjectStorage
         string sourceBucket,
         string sourceObjectName,
         long sourceGeneration,
+        string destinationBucket,
         string destinationObjectName,
         CancellationToken cancellationToken);
 
