@@ -6,6 +6,28 @@ using Microsoft.OpenApi;
 
 namespace Legacy.Maliev.FileService.Api.OpenApi;
 
+/// <summary>Publishes the bearer scheme used by the Web BFF for FileService calls.</summary>
+public sealed class InstantQuoteOpenApiDocumentTransformer : IOpenApiDocumentTransformer
+{
+    /// <inheritdoc />
+    public Task TransformAsync(
+        OpenApiDocument document,
+        OpenApiDocumentTransformerContext context,
+        CancellationToken cancellationToken)
+    {
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT",
+            Description = "Short-lived Web service token. Browsers never receive this credential.",
+        };
+        return Task.CompletedTask;
+    }
+}
+
 /// <summary>Publishes the exact generated OpenAPI contract consumed by the Web BFF.</summary>
 public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransformer
 {
@@ -25,6 +47,13 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         }
 
         operation.Responses ??= new OpenApiResponses();
+        operation.Security =
+        [
+            new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference("Bearer", context.Document, externalResource: null)] = [],
+            },
+        ];
         AddAuthenticationResponses(operation);
         var action = (context.Description.ActionDescriptor as ControllerActionDescriptor)?.MethodInfo.Name;
         switch (action)
@@ -87,6 +116,17 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
                             },
                         },
                     },
+                    Encoding = new Dictionary<string, OpenApiEncoding>
+                    {
+                        ["files"] = new()
+                        {
+                            ContentType = "model/stl, application/sla, application/vnd.ms-pki.stl, model/obj, text/plain, application/x-tgif, application/vnd.ms-package.3dmanufacturing-3dmodel+xml, model/step, application/step, model/iges, application/iges, model/gltf-binary, model/gltf+json, application/octet-stream",
+                        },
+                    },
+                    Example = new JsonObject
+                    {
+                        ["files"] = "solid example\nendsolid example\n",
+                    },
                 },
             },
         };
@@ -138,7 +178,7 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         AddProblemResponse(operation, "400", "validation_error");
         AddProblemResponse(operation, "403", "session_forbidden", append: true);
         AddProblemResponse(operation, "409", "upload_in_progress");
-        AddProblemResponse(operation, "503", "dependency_unavailable");
+        AddProblemResponse(operation, "503", "dependency_unavailable", "outcome_unknown");
     }
 
     private static void AddAuthenticationResponses(OpenApiOperation operation)
