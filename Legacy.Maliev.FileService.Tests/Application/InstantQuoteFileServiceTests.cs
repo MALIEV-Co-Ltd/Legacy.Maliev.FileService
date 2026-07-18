@@ -34,6 +34,96 @@ public sealed class InstantQuoteFileServiceTests
     }
 
     [Fact]
+    public async Task CreateSession_DurableFailure_ReturnsDependencyUnavailable()
+    {
+        var repository = new FakeRepository { CreateSessionException = new IOException("database offline") };
+
+        var exception = await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
+            CreateService(repository).CreateInstantQuoteSessionAsync(
+                new InstantQuoteOwner("https://issuer.example|user-42", true), CancellationToken.None));
+
+        Assert.IsType<IOException>(exception.InnerException);
+    }
+
+    [Fact]
+    public async Task CreateSession_CancellationAndKnownContractFailure_PreserveSemantics()
+    {
+        var cancellation = new OperationCanceledException();
+        var contract = new InstantQuoteValidationException("known contract failure");
+
+        var cancelled = await Record.ExceptionAsync(() =>
+            CreateService(new FakeRepository { CreateSessionException = cancellation }).CreateInstantQuoteSessionAsync(
+                new InstantQuoteOwner("https://issuer.example|user-42", true), CancellationToken.None));
+        var known = await Record.ExceptionAsync(() =>
+            CreateService(new FakeRepository { CreateSessionException = contract }).CreateInstantQuoteSessionAsync(
+                new InstantQuoteOwner("https://issuer.example|user-42", true), CancellationToken.None));
+
+        Assert.Same(cancellation, cancelled);
+        Assert.Same(contract, known);
+    }
+
+    [Theory]
+    [InlineData("verify")]
+    [InlineData("reserve")]
+    public async Task Upload_PreExecutionDurableFailure_ReturnsDependencyUnavailable(string failureStage)
+    {
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            VerifySessionException = failureStage == "verify" ? new IOException("verify failed") : null,
+            ReserveUploadException = failureStage == "reserve" ? new IOException("reserve failed") : null,
+        };
+        var bytes = BinaryStl();
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
+            CreateService(repository).UploadAsync(
+                repository.VerifySessionResult.Id,
+                new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43), new string('i', 16), sha, new MemoryStream(bytes),
+                new InstantQuoteUploadMetadata("part.stl", "model/stl"), CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("verify")]
+    [InlineData("files")]
+    [InlineData("reserve")]
+    public async Task Finalize_PreExecutionDurableFailure_ReturnsDependencyUnavailable(string failureStage)
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+            VerifySessionException = failureStage == "verify" ? new IOException("verify failed") : null,
+            GetSessionFilesException = failureStage == "files" ? new IOException("lookup failed") : null,
+            ReserveFinalizationException = failureStage == "reserve" ? new IOException("reserve failed") : null,
+        };
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
+            CreateService(repository).FinalizeAsync(
+                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                new string('k', 16), new FinalizeInstantQuoteFilesRequest(Guid.NewGuid(), [upload.Id]),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Remove_DurableFileLookupFailure_ReturnsDependencyUnavailable()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            GetSessionFilesException = new IOException("lookup failed"),
+        };
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
+            CreateService(repository).RemoveAsync(
+                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                upload.Id, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Upload_ValidNonSeekableStl_ScansExactGenerationAndPersistsCleanWithObservedVersion()
     {
         var bytes = BinaryStl();
@@ -863,11 +953,20 @@ public sealed class InstantQuoteFileServiceTests
         public (InstantQuoteFinalization Finalization, uint ExpectedVersion)? SavedFinalization { get; private set; }
         public InstantQuoteReservationStatus FinalizationStatus { get; init; } = InstantQuoteReservationStatus.Acquired;
         public Exception? SaveUploadException { get; init; }
+        public Exception? CreateSessionException { get; init; }
+        public Exception? VerifySessionException { get; init; }
+        public Exception? ReserveUploadException { get; init; }
+        public Exception? ReserveFinalizationException { get; init; }
+        public Exception? GetSessionFilesException { get; init; }
         public int ReserveFinalizationCount { get; private set; }
         private int sessionFileReads;
 
         public Task CreateSessionAsync(InstantQuoteUploadSession session, CancellationToken cancellationToken)
         {
+            if (CreateSessionException is not null)
+            {
+                throw CreateSessionException;
+            }
             CreatedSession = session;
             return Task.CompletedTask;
         }
@@ -876,13 +975,25 @@ public sealed class InstantQuoteFileServiceTests
             Task.FromResult<InstantQuoteUploadSession?>(null);
 
         public Task<InstantQuoteUploadSession?> VerifySessionAsync(Guid sessionId, byte[] tokenHash, string? ownerSubject,
-            bool isAuthenticated, DateTimeOffset now, CancellationToken cancellationToken) =>
-            Task.FromResult(VerifySessionResult);
+            bool isAuthenticated, DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            if (VerifySessionException is not null)
+            {
+                throw VerifySessionException;
+            }
+            return Task.FromResult(VerifySessionResult);
+        }
 
         public Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(
-            InstantQuoteUploadFile upload, CancellationToken cancellationToken) =>
-            Task.FromResult(UploadReservation ?? new InstantQuoteReservation<InstantQuoteUploadFile>(
+            InstantQuoteUploadFile upload, CancellationToken cancellationToken)
+        {
+            if (ReserveUploadException is not null)
+            {
+                throw ReserveUploadException;
+            }
+            return Task.FromResult(UploadReservation ?? new InstantQuoteReservation<InstantQuoteUploadFile>(
                 InstantQuoteReservationStatus.Acquired, upload, 17));
+        }
 
         public Task<uint> SaveUploadAsync(InstantQuoteUploadFile upload, uint expectedVersion,
             CancellationToken cancellationToken)
@@ -898,6 +1009,10 @@ public sealed class InstantQuoteFileServiceTests
         public Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
             InstantQuoteFinalization finalization, CancellationToken cancellationToken)
         {
+            if (ReserveFinalizationException is not null)
+            {
+                throw ReserveFinalizationException;
+            }
             ReserveFinalizationCount++;
             return Task.FromResult(new InstantQuoteReservation<InstantQuoteFinalization>(
                 FinalizationStatus, finalization, 31));
@@ -913,6 +1028,10 @@ public sealed class InstantQuoteFileServiceTests
         public Task<IReadOnlyList<InstantQuoteStoredUpload>> GetSessionFilesAsync(Guid sessionId,
             IReadOnlyCollection<Guid> fileIds, CancellationToken cancellationToken)
         {
+            if (GetSessionFilesException is not null)
+            {
+                throw GetSessionFilesException;
+            }
             sessionFileReads++;
             return Task.FromResult(sessionFileReads > 1 && ReloadedSessionFiles is not null
                 ? ReloadedSessionFiles
