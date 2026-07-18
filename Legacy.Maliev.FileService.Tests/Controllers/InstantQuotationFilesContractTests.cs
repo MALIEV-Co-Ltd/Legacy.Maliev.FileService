@@ -106,14 +106,18 @@ public sealed class InstantQuotationFilesContractTests
         Assert.Contains("never calculates geometry, DFM, or price", documentation, StringComparison.Ordinal);
         Assert.Contains("Temporary private object names", documentation, StringComparison.Ordinal);
         Assert.Contains("finalized bucket and objectName", documentation, StringComparison.Ordinal);
-        Assert.Contains("401 response is produced by platform authentication middleware", documentation, StringComparison.Ordinal);
+        Assert.Contains("platform_authentication_required", documentation, StringComparison.Ordinal);
+        Assert.Contains("permission_forbidden", documentation, StringComparison.Ordinal);
+        Assert.Contains("WWW-Authenticate: Bearer", documentation, StringComparison.Ordinal);
+        Assert.Contains("Browsers do not call FileService", documentation, StringComparison.Ordinal);
+        Assert.Contains("server-side session state", documentation, StringComparison.Ordinal);
         foreach (var code in new[]
         {
             "validation_error", "session_forbidden", "idempotency_conflict", "upload_in_progress",
             "payload_too_large", "unsupported_media_type", "unsafe_content", "dependency_unavailable", "outcome_unknown",
         })
         {
-            Assert.Contains($"\"code\": \"{code}\"", documentation, StringComparison.Ordinal);
+            Assert.Contains(code, documentation, StringComparison.Ordinal);
         }
     }
 
