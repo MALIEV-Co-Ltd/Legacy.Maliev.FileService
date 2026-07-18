@@ -4,6 +4,7 @@ using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
+using Legacy.Maliev.FileService.Application.Services;
 using Maliev.Aspire.ServiceDefaults.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -41,6 +42,7 @@ public sealed class InstantQuotationFilesController(
     /// <summary>Uploads exactly one streamed multipart section named files.</summary>
     [HttpPost("sessions/{sessionId}/files")]
     [RequirePermission(FilePermissions.Create)]
+    [DisableFormValueModelBinding]
     [ProducesResponseType<InstantQuoteFileResponse>(StatusCodes.Status201Created)]
     public Task<ActionResult<InstantQuoteFileResponse>> UploadAsync(
         [FromRoute] Guid sessionId,
@@ -52,15 +54,18 @@ public sealed class InstantQuotationFilesController(
         return ExecuteAsync(
             async () =>
             {
+                var headers = InstantQuoteFilePolicy.NormalizeHeaders(token, idempotencyKey, expectedSha256);
                 await using var file = await multipartReader.ReadSingleAsync(Request, "files", cancellationToken);
-                return await service.UploadAsync(
+                var response = await service.UploadAsync(
                     sessionId,
-                    token,
-                    idempotencyKey,
-                    expectedSha256,
+                    headers.Token,
+                    headers.IdempotencyKey,
+                    headers.ExpectedSha256,
                     file.Body,
                     file.Metadata,
                     cancellationToken);
+                await file.CompleteAsync(cancellationToken);
+                return response;
             },
             response => Created($"/file/v1/instant-quotation/sessions/{sessionId}/files/{response.FileId}", response));
     }

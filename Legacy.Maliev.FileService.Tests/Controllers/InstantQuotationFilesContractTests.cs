@@ -171,7 +171,12 @@ public sealed class InstantQuotationFilesContractTests
         var reader = new StubMultipartReader();
         var controller = Controller(service, reader);
 
-        var result = await controller.UploadAsync(SessionId, "token", "upload-1", "ABC123", default);
+        var result = await controller.UploadAsync(
+            SessionId,
+            new string('t', 32),
+            new string('i', 16),
+            new string('a', 64),
+            default);
 
         var created = Assert.IsType<CreatedResult>(result.Result);
         Assert.Equal(StatusCodes.Status201Created, created.StatusCode);
