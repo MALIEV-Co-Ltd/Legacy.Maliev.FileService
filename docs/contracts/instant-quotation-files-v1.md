@@ -44,14 +44,14 @@ Required headers:
 
 The multipart body must contain exactly one part named `files`. The file is streamed; the endpoint does not use `IFormFile` buffering. Zero parts, extra parts, a different field name, an empty file, or an invalid digest is rejected.
 
-This is the normative multipart example represented by generated OpenAPI. The example body is a complete minimal ASCII STL file; production callers send the exact selected file bytes and its matching SHA-256 header.
+This is the normative multipart example represented by generated OpenAPI. The example file bytes are exactly `solid example\nendsolid example\n` in UTF-8, whose SHA-256 is shown below; production callers send the exact selected file bytes and their matching digest.
 
 ```http
 POST /file/v1/instant-quotation/sessions/11111111-1111-1111-1111-111111111111/files HTTP/1.1
 Authorization: Bearer <web-service-token>
 X-Quote-Session-Token: <opaque-session-capability>
 Idempotency-Key: upload-2222222222222222
-X-Content-SHA256: <64-hex-sha256-of-the-file-bytes>
+X-Content-SHA256: dd75bf848e9a50028634377f2fad2b571fdd40b0461ee62359a95e27bbc62498
 Content-Type: multipart/form-data; boundary=quote-boundary
 
 --quote-boundary
