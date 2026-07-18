@@ -94,6 +94,11 @@ public static class InstantQuoteProblem
                 "payload_too_large",
                 "Upload is too large",
                 $"The uploaded file exceeds {InstantQuoteFileContract.MaximumUploadBytes} bytes."),
+            InstantQuoteUnsupportedMediaTypeException => (
+                StatusCodes.Status415UnsupportedMediaType,
+                "unsupported_media_type",
+                "Upload media type is unsupported",
+                "The declared media type or file extension is not supported."),
             InstantQuoteDependencyUnavailableException => (
                 StatusCodes.Status503ServiceUnavailable,
                 "dependency_unavailable",

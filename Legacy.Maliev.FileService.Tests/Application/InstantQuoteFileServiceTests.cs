@@ -58,6 +58,7 @@ public sealed class InstantQuoteFileServiceTests
         Assert.Equal(expectedSha, response.Sha256);
         Assert.Equal(bytes.Length, response.SizeBytes);
         Assert.Equal(bytes, storage.UploadedBytes);
+        Assert.Equal("private-bucket", storage.UploadedBucket);
         Assert.Equal(bytes, scanner.ScannedBytes);
         Assert.Equal(1, storage.DownloadCount);
         Assert.Equal(2, repository.SavedUploads.Count);
@@ -133,6 +134,42 @@ public sealed class InstantQuoteFileServiceTests
     }
 
     [Fact]
+    public async Task Upload_UnknownReservationWithImplausibleDownloadedSignature_PersistsFailed()
+    {
+        var invalidBytes = new byte[84];
+        invalidBytes[80] = 1;
+        var sha = Convert.ToHexString(SHA256.HashData(invalidBytes)).ToLowerInvariant();
+        var template = CreateStoredUpload(InstantQuoteWorkflowState.Unknown);
+        var stored = new InstantQuoteUploadFile(
+            template.Id, template.SessionId, template.IdempotencyKeyHash, template.RequestFingerprint,
+            template.OriginalFileName, template.ValidatedExtension, template.ValidatedContentType, sha, sha,
+            invalidBytes.Length, template.GcsGeneration, template.TemporaryBucket, template.TemporaryObjectName,
+            null, null, InstantQuoteWorkflowState.Unknown, Now, Now);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Unknown, stored, 17),
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                stored.TemporaryBucket, stored.TemporaryObjectName, stored.GcsGeneration!.Value,
+                invalidBytes.Length, sha),
+        };
+        storage.Seed(invalidBytes);
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
+            CreateService(repository, storage).UploadAsync(
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                new string('i', 16), sha, new MemoryStream(invalidBytes),
+                new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+                CancellationToken.None));
+
+        Assert.Equal(InstantQuoteWorkflowState.Failed, repository.SavedUploads[^1].Upload.State);
+        Assert.Equal(1, storage.DeleteCount);
+    }
+
+    [Fact]
     public async Task Upload_CompletedMatchingReservation_ReplaysWithoutStorageOrScanner()
     {
         var stored = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
@@ -156,6 +193,28 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken.None);
 
         Assert.Equal(stored.Id, response.FileId);
+        Assert.Equal(0, storage.UploadCount);
+        Assert.Empty(scanner.ScannedBytes);
+    }
+
+    [Fact]
+    public async Task Upload_FailedReservation_ReplaysStableUnsafeWithoutStorageOrScanner()
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Failed);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Replay, stored, 19),
+        };
+        var storage = new FakeStorage();
+        var scanner = new FakeScanner();
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
+            CreateService(repository, storage, scanner).UploadAsync(
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
+                new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType), CancellationToken.None));
+
         Assert.Equal(0, storage.UploadCount);
         Assert.Empty(scanner.ScannedBytes);
     }
@@ -215,7 +274,10 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken.None));
 
         Assert.IsType(exceptionType, exception);
-        Assert.Equal(1, storage.DeleteCount);
+        Assert.Equal(result == InstantQuoteScanResult.Unsafe ? 1 : 0, storage.DeleteCount);
+        Assert.Equal(
+            result == InstantQuoteScanResult.Unsafe ? InstantQuoteWorkflowState.Failed : InstantQuoteWorkflowState.Unknown,
+            repository.SavedUploads[^1].Upload.State);
     }
 
     [Fact]
@@ -232,6 +294,7 @@ public sealed class InstantQuoteFileServiceTests
 
         Assert.Equal(1, serviceContext.Storage.DeleteCount);
         Assert.Empty(serviceContext.Scanner.ScannedBytes);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, serviceContext.Repository.SavedUploads[^1].Upload.State);
     }
 
     [Fact]
@@ -250,6 +313,7 @@ public sealed class InstantQuoteFileServiceTests
 
         Assert.Equal(1, serviceContext.Storage.DeleteCount);
         Assert.Empty(serviceContext.Scanner.ScannedBytes);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, serviceContext.Repository.SavedUploads[^1].Upload.State);
     }
 
     [Fact]
@@ -258,18 +322,78 @@ public sealed class InstantQuoteFileServiceTests
         var bytes = BinaryStl();
         var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
         var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
-        var scanner = new FakeScanner { Exception = new OperationCanceledException() };
+        using var cancellation = new CancellationTokenSource();
+        var scanner = new FakeScanner
+        {
+            BeforeScan = cancellation.Cancel,
+            Exception = new OperationCanceledException(cancellation.Token),
+        };
         var service = CreateService(repository, new FakeStorage(), scanner);
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => service.UploadAsync(
             repository.VerifySessionResult.Id,
             new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
             sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
-            CancellationToken.None));
+            cancellation.Token));
 
         Assert.Equal(2, repository.SavedUploads.Count);
         Assert.Equal(18U, repository.SavedUploads[^1].ExpectedVersion);
         Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedUploads[^1].Upload.State);
+    }
+
+    [Fact]
+    public async Task Finalize_UnknownAfterPromotionBeforeSave_ReconcilesDestinationWithoutRepromotion()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var requestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var destination = $"instant-quotation/{requestId:N}/{upload.Id:N}.stl";
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            FinalizationStatus = InstantQuoteReservationStatus.Unknown,
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 24)],
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                "private-bucket", destination, 404, upload.ActualSizeBytes!.Value, upload.ActualSha256!),
+        };
+
+        var response = await CreateService(repository, storage).FinalizeAsync(
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            new string('k', 16), new FinalizeInstantQuoteFilesRequest(requestId, [upload.Id]), CancellationToken.None);
+
+        Assert.Equal(destination, Assert.Single(response.Files).ObjectName);
+        Assert.Equal(0, storage.PromotionCount);
+        Assert.Equal("private-bucket", upload.FinalBucket);
+        Assert.Equal(InstantQuoteWorkflowState.Finalized, upload.State);
+    }
+
+    [Fact]
+    public async Task Finalize_MismatchedExistingDestination_PersistsUnknownWithoutPromotion()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var requestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var destination = $"instant-quotation/{requestId:N}/{upload.Id:N}.stl";
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 24)],
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                "private-bucket", destination, 404, upload.ActualSizeBytes!.Value, new string('b', 64)),
+        };
+
+        await Assert.ThrowsAsync<InstantQuoteAmbiguousOutcomeException>(() =>
+            CreateService(repository, storage).FinalizeAsync(
+                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                new string('k', 16), new FinalizeInstantQuoteFilesRequest(requestId, [upload.Id]),
+                CancellationToken.None));
+
+        Assert.Equal(0, storage.PromotionCount);
+        Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedFinalization?.Finalization.State);
     }
 
     [Fact]
@@ -288,6 +412,54 @@ public sealed class InstantQuoteFileServiceTests
                 CancellationToken.None));
 
         Assert.Equal(17U, repository.SavedUploads[^1].ExpectedVersion);
+        Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedUploads[^1].Upload.State);
+    }
+
+    [Fact]
+    public async Task Upload_RequestCancellationBeforeStorageMetadata_PersistsUnknownReservation()
+    {
+        var bytes = BinaryStl();
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var storage = new FakeStorage { UploadException = new OperationCanceledException(cancellation.Token) };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            CreateService(repository, storage).UploadAsync(
+                repository.VerifySessionResult.Id,
+                new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+                sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
+                cancellation.Token));
+
+        Assert.Equal(17U, repository.SavedUploads[^1].ExpectedVersion);
+        Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedUploads[^1].Upload.State);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Upload_LargeGenerationWhenScannerStopsEarly_TerminatesAndPersistsUnknown(bool scannerFaults)
+    {
+        var bytes = new byte[2 * 1024 * 1024];
+        Encoding.ASCII.GetBytes("solid large-stl\n").CopyTo(bytes, 0);
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
+        var scanner = new FakeScanner
+        {
+            Exception = scannerFaults ? new IOException("scanner failed early") : null,
+            ReturnWithoutReading = !scannerFaults,
+        };
+        var service = CreateService(repository, new FakeStorage(), scanner);
+
+        var operation = service.UploadAsync(
+            repository.VerifySessionResult.Id,
+            new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+            sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("large.stl", "model/stl"),
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
+            operation.WaitAsync(TimeSpan.FromSeconds(1)));
         Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedUploads[^1].Upload.State);
     }
 
@@ -322,6 +494,7 @@ public sealed class InstantQuoteFileServiceTests
         InstantQuoteReservationStatus status)
     {
         var upload = CreateStoredUpload(InstantQuoteWorkflowState.Finalized);
+        upload.FinalBucket = "private-bucket";
         upload.FinalObjectName = $"instant-quotation/{Guid.NewGuid():N}/{upload.Id:N}.stl";
         var repository = new FakeRepository
         {
@@ -347,12 +520,14 @@ public sealed class InstantQuoteFileServiceTests
     public async Task Finalize_PartialRetry_ReusesFinalizedLinkAndPromotesOnlyRemainingCleanFile()
     {
         var finalized = CreateStoredUpload(InstantQuoteWorkflowState.Finalized);
+        finalized.FinalBucket = "private-bucket";
         finalized.FinalObjectName = $"instant-quotation/{Guid.NewGuid():N}/{finalized.Id:N}.stl";
         var clean = new InstantQuoteUploadFile(
             Guid.Parse("44444444-4444-4444-4444-444444444444"), finalized.SessionId,
             SHA256.HashData(Encoding.UTF8.GetBytes("other-idempotency")), new string('e', 64), "other.stl", ".stl",
             "model/stl", finalized.ExpectedSha256, finalized.ActualSha256, finalized.ActualSizeBytes,
-            303, "instant-quotation/temp/other.stl", null, InstantQuoteWorkflowState.Clean, Now, Now);
+            303, "private-bucket", "instant-quotation/temp/other.stl", null, null,
+            InstantQuoteWorkflowState.Clean, Now, Now);
         var repository = new FakeRepository
         {
             VerifySessionResult = CreateSessionRecord(),
@@ -391,6 +566,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => service.FinalizeAsync(
             upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(Guid.NewGuid(), [upload.Id]), CancellationToken.None));
+        Assert.Equal(0, repository.ReserveFinalizationCount);
     }
 
     [Fact]
@@ -406,6 +582,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository).FinalizeAsync(
             upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(Guid.NewGuid(), [upload.Id]), CancellationToken.None));
+        Assert.Equal(0, repository.ReserveFinalizationCount);
     }
 
     [Theory]
@@ -431,6 +608,76 @@ public sealed class InstantQuoteFileServiceTests
         Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedFinalization?.Finalization.State);
     }
 
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Clean)]
+    [InlineData(InstantQuoteWorkflowState.Failed)]
+    [InlineData(InstantQuoteWorkflowState.Unknown)]
+    public async Task Remove_PreFinalizationState_DeletesExactGenerationAndPersistsRemoved(
+        InstantQuoteWorkflowState state)
+    {
+        var upload = CreateStoredUpload(state);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 27)],
+        };
+        var storage = new FakeStorage();
+
+        await CreateService(repository, storage).RemoveAsync(
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.Id, CancellationToken.None);
+
+        Assert.Equal(1, storage.DeleteCount);
+        Assert.Equal(upload.TemporaryBucket, storage.DeletedBucket);
+        Assert.Equal(upload.GcsGeneration, storage.DeletedGeneration);
+        Assert.Equal(InstantQuoteWorkflowState.Removed, repository.SavedUploads[^1].Upload.State);
+        Assert.Equal(27U, repository.SavedUploads[^1].ExpectedVersion);
+    }
+
+    [Fact]
+    public async Task Remove_AlreadyRemoved_IsIdempotentWithoutIoOrSave()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Removed);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 27)],
+        };
+        var storage = new FakeStorage();
+
+        await CreateService(repository, storage).RemoveAsync(
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.Id, CancellationToken.None);
+
+        Assert.Equal(0, storage.DeleteCount);
+        Assert.Empty(repository.SavedUploads);
+    }
+
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Pending, typeof(InstantQuoteUploadInProgressException))]
+    [InlineData(InstantQuoteWorkflowState.Uploaded, typeof(InstantQuoteUploadInProgressException))]
+    [InlineData(InstantQuoteWorkflowState.Finalized, typeof(InstantQuoteOwnershipException))]
+    public async Task Remove_ProtectedState_FailsWithoutDelete(
+        InstantQuoteWorkflowState state,
+        Type exceptionType)
+    {
+        var upload = CreateStoredUpload(state);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 27)],
+        };
+        var storage = new FakeStorage();
+
+        var exception = await Record.ExceptionAsync(() => CreateService(repository, storage).RemoveAsync(
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.Id, CancellationToken.None));
+
+        Assert.IsType(exceptionType, exception);
+        Assert.Equal(0, storage.DeleteCount);
+        Assert.Empty(repository.SavedUploads);
+    }
+
     private static InstantQuoteFileService CreateService(
         FakeRepository repository,
         FakeStorage? storage = null,
@@ -438,7 +685,7 @@ public sealed class InstantQuoteFileServiceTests
         repository,
         storage ?? new FakeStorage(),
         scanner ?? new FakeScanner(),
-        Options.Create(new InstantQuoteFileOptions()),
+        Options.Create(new InstantQuoteFileOptions { StorageBucket = "private-bucket" }),
         new FakeTimeProvider(Now));
 
     private static (InstantQuoteFileService Service, FakeRepository Repository, FakeStorage Storage, FakeScanner Scanner)
@@ -481,7 +728,8 @@ public sealed class InstantQuoteFileServiceTests
             Guid.Parse("11111111-1111-1111-1111-111111111111"),
             SHA256.HashData(Encoding.UTF8.GetBytes(new string('i', 16))),
             new string('f', 64), "customer-part.STL", ".stl", "model/stl", sha,
-            sha, bytes.Length, 101, "instant-quotation/temp/opaque.stl", null, state, Now, Now);
+            sha, bytes.Length, 101, "private-bucket", "instant-quotation/temp/opaque.stl", null, null,
+            state, Now, Now);
     }
 
     private sealed class FakeRepository : IInstantQuoteFileRepository
@@ -494,6 +742,7 @@ public sealed class InstantQuoteFileServiceTests
         public (InstantQuoteFinalization Finalization, uint ExpectedVersion)? SavedFinalization { get; private set; }
         public InstantQuoteReservationStatus FinalizationStatus { get; init; } = InstantQuoteReservationStatus.Acquired;
         public Exception? SaveUploadException { get; init; }
+        public int ReserveFinalizationCount { get; private set; }
 
         public Task CreateSessionAsync(InstantQuoteUploadSession session, CancellationToken cancellationToken)
         {
@@ -525,9 +774,12 @@ public sealed class InstantQuoteFileServiceTests
         }
 
         public Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
-            InstantQuoteFinalization finalization, CancellationToken cancellationToken) =>
-            Task.FromResult(new InstantQuoteReservation<InstantQuoteFinalization>(
+            InstantQuoteFinalization finalization, CancellationToken cancellationToken)
+        {
+            ReserveFinalizationCount++;
+            return Task.FromResult(new InstantQuoteReservation<InstantQuoteFinalization>(
                 FinalizationStatus, finalization, 31));
+        }
 
         public Task<uint> SaveFinalizationAsync(InstantQuoteFinalization finalization, uint expectedVersion,
             CancellationToken cancellationToken)
@@ -548,18 +800,24 @@ public sealed class InstantQuoteFileServiceTests
         public int DownloadCount { get; private set; }
         public long? PromotedGeneration { get; private set; }
         public int DeleteCount { get; private set; }
+        public string? DeletedBucket { get; private set; }
+        public long? DeletedGeneration { get; private set; }
         public int MetadataReadCount { get; private set; }
         public int PromotionCount { get; private set; }
+        public string? UploadedBucket { get; private set; }
+        public string? PromotionSourceBucket { get; private set; }
+        public string? PromotionDestinationBucket { get; private set; }
         public InstantQuoteObjectMetadata? ReconciliationMetadata { get; init; }
         public Exception? PromotionException { get; init; }
         public Exception? UploadException { get; init; }
         public InstantQuoteObjectMetadata Metadata { get; private set; } = new(
             "private-bucket", "", 101, 0, new string('0', 64));
 
-        public async Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(string objectName, Stream content,
+        public async Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(string bucket, string objectName, Stream content,
             string expectedSha256, CancellationToken cancellationToken)
         {
             UploadCount++;
+            UploadedBucket = bucket;
             if (UploadException is not null)
             {
                 throw UploadException;
@@ -575,7 +833,12 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken cancellationToken)
         {
             MetadataReadCount++;
-            return Task.FromResult(ReconciliationMetadata);
+            return Task.FromResult(
+                ReconciliationMetadata is not null &&
+                string.Equals(ReconciliationMetadata.Bucket, bucket, StringComparison.Ordinal) &&
+                string.Equals(ReconciliationMetadata.ObjectName, objectName, StringComparison.Ordinal)
+                    ? ReconciliationMetadata
+                    : null);
         }
 
         public void Seed(byte[] bytes) => storedBytes = bytes;
@@ -588,13 +851,16 @@ public sealed class InstantQuoteFileServiceTests
         }
 
         public Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(string sourceBucket, string sourceObjectName,
-            long sourceGeneration, string destinationObjectName, CancellationToken cancellationToken)
+            long sourceGeneration, string destinationBucket, string destinationObjectName,
+            CancellationToken cancellationToken)
         {
             if (PromotionException is not null)
             {
                 throw PromotionException;
             }
             PromotionCount++;
+            PromotionSourceBucket = sourceBucket;
+            PromotionDestinationBucket = destinationBucket;
             PromotedGeneration = sourceGeneration;
             return Task.FromResult(new InstantQuoteObjectMetadata(
                 "private-bucket", destinationObjectName, 202, storedBytes.Length, Metadata.Sha256));
@@ -604,6 +870,8 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken cancellationToken)
         {
             DeleteCount++;
+            DeletedBucket = bucket;
+            DeletedGeneration = generation;
             return Task.CompletedTask;
         }
     }
@@ -613,12 +881,19 @@ public sealed class InstantQuoteFileServiceTests
         public byte[] ScannedBytes { get; private set; } = [];
         public InstantQuoteScanResult Result { get; init; } = InstantQuoteScanResult.Clean;
         public Exception? Exception { get; init; }
+        public bool ReturnWithoutReading { get; init; }
+        public Action? BeforeScan { get; init; }
 
         public async Task<InstantQuoteScanResult> ScanAsync(Stream content, CancellationToken cancellationToken)
         {
+            BeforeScan?.Invoke();
             if (Exception is not null)
             {
                 throw Exception;
+            }
+            if (ReturnWithoutReading)
+            {
+                return Result;
             }
             await using var destination = new MemoryStream();
             await content.CopyToAsync(destination, cancellationToken);

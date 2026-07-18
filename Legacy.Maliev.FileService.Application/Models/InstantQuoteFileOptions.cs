@@ -3,6 +3,9 @@ namespace Legacy.Maliev.FileService.Application.Models;
 /// <summary>Application limits and lifetimes for instant-quotation file intake.</summary>
 public sealed class InstantQuoteFileOptions
 {
+    /// <summary>Gets or sets the explicit private bucket used by this workflow.</summary>
+    public string StorageBucket { get; set; } = string.Empty;
+
     /// <summary>Gets or sets the lifetime of a newly created upload session.</summary>
     public TimeSpan SessionLifetime { get; set; } = TimeSpan.FromHours(24);
 

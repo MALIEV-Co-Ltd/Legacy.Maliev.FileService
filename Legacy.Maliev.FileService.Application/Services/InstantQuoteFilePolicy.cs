@@ -54,20 +54,20 @@ public static class InstantQuoteFilePolicy
         var extension = Path.GetExtension(fileName).ToLowerInvariant();
         if (!MediaTypes.TryGetValue(extension, out var allowedMediaTypes))
         {
-            throw new InstantQuoteValidationException("File extension is not supported.");
+            throw new InstantQuoteUnsupportedMediaTypeException("File extension is not supported.");
         }
 
         if (!MediaTypeHeaderValue.TryParse(contentType, out var parsedContentType) ||
             string.IsNullOrEmpty(parsedContentType.MediaType))
         {
-            throw new InstantQuoteValidationException("Declared media type is invalid.");
+            throw new InstantQuoteUnsupportedMediaTypeException("Declared media type is invalid.");
         }
 
         var mediaType = parsedContentType.MediaType.ToLowerInvariant();
         if (!mediaType.Equals("application/octet-stream", StringComparison.Ordinal) &&
             !allowedMediaTypes.Contains(mediaType))
         {
-            throw new InstantQuoteValidationException("Declared media type does not match the file extension.");
+            throw new InstantQuoteUnsupportedMediaTypeException("Declared media type does not match the file extension.");
         }
 
         return new InstantQuoteNormalizedFile(

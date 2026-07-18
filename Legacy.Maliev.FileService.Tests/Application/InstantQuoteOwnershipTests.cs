@@ -81,6 +81,18 @@ public sealed class InstantQuoteOwnershipTests
         Assert.Throws<ArgumentException>(() => upload.ActualSha256 = checksum);
     }
 
+    [Fact]
+    public void UploadConstructor_DurableBuckets_AreRetained()
+    {
+        var upload = new InstantQuoteUploadFile(
+            Guid.NewGuid(), Guid.NewGuid(), Hash("key"), new string('c', 64), "part.stl", ".stl", "model/stl",
+            new string('a', 64), null, null, null, "temporary-bucket", "instant-quote/opaque",
+            "final-bucket", "instant-quotation/final.stl", InstantQuoteWorkflowState.Pending, Now, Now);
+
+        Assert.Equal("temporary-bucket", upload.TemporaryBucket);
+        Assert.Equal("final-bucket", upload.FinalBucket);
+    }
+
     private static InstantQuoteUploadSession CreateSession(
         byte[] tokenHash,
         string? ownerSubject,
@@ -99,5 +111,6 @@ public sealed class InstantQuoteOwnershipTests
 
     private static InstantQuoteUploadFile CreateUpload(string expectedSha256) => new(
         Guid.NewGuid(), Guid.NewGuid(), Hash("key"), new string('c', 64), "part.stl", ".stl", "model/stl",
-        expectedSha256, null, null, null, "instant-quote/opaque", null, InstantQuoteWorkflowState.Pending, Now, Now);
+        expectedSha256, null, null, null, "temporary-bucket", "instant-quote/opaque", null, null,
+        InstantQuoteWorkflowState.Pending, Now, Now);
 }

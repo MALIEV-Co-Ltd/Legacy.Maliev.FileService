@@ -381,6 +381,9 @@ public sealed class StreamingMultipartTests
             string idempotencyKey,
             FinalizeInstantQuoteFilesRequest request,
             CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RemoveAsync(Guid sessionId, InstantQuoteOwner owner, string token, Guid fileId,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FiniteMultipartReader : IInstantQuoteMultipartReader

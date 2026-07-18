@@ -79,6 +79,27 @@ public sealed class InstantQuotationFilesController(
             response => Ok(response));
     }
 
+    /// <summary>Idempotently removes one pre-finalization upload.</summary>
+    [HttpDelete("sessions/{sessionId}/files/{fileId}")]
+    [RequirePermission(FilePermissions.Create)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> RemoveAsync(
+        [FromRoute] Guid sessionId,
+        [FromRoute] Guid fileId,
+        [FromHeader(Name = "X-Quote-Session-Token"), Required] string token,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await service.RemoveAsync(sessionId, ResolveOwner(), token, fileId, cancellationToken);
+            return NoContent();
+        }
+        catch (InstantQuoteContractException exception)
+        {
+            return InstantQuoteProblem.Create(exception);
+        }
+    }
+
     private InstantQuoteOwner ResolveOwner()
     {
         var subject = User.FindFirst("sub")

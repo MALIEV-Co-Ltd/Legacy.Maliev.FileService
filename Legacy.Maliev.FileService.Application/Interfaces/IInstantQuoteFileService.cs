@@ -29,6 +29,14 @@ public interface IInstantQuoteFileService
         string idempotencyKey,
         FinalizeInstantQuoteFilesRequest request,
         CancellationToken cancellationToken);
+
+    /// <summary>Idempotently removes a pre-finalization upload owned by the session.</summary>
+    Task RemoveAsync(
+        Guid sessionId,
+        InstantQuoteOwner owner,
+        string token,
+        Guid fileId,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>Base type for failures that have a stable public HTTP representation.</summary>
@@ -52,6 +60,9 @@ public sealed class InstantQuoteUnsafeContentException(string message) : Instant
 
 /// <summary>Raised when actual uploaded bytes exceed the contract limit.</summary>
 public sealed class InstantQuotePayloadTooLargeException(string message) : InstantQuoteContractException(message);
+
+/// <summary>Raised when the declared or inferred upload media type is unsupported.</summary>
+public sealed class InstantQuoteUnsupportedMediaTypeException(string message) : InstantQuoteContractException(message);
 
 /// <summary>Raised when a required storage, scan, or state dependency is unavailable.</summary>
 public sealed class InstantQuoteDependencyUnavailableException : InstantQuoteContractException

@@ -68,7 +68,9 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         instantFile.Property(value => value.ValidatedContentType).HasMaxLength(255).IsRequired();
         instantFile.Property(value => value.ExpectedSha256).HasMaxLength(64).IsFixedLength().IsRequired();
         instantFile.Property(value => value.ActualSha256).HasMaxLength(64).IsFixedLength();
+        instantFile.Property(value => value.TemporaryBucket).HasMaxLength(255).IsRequired();
         instantFile.Property(value => value.TemporaryObjectName).HasMaxLength(1024).IsRequired();
+        instantFile.Property(value => value.FinalBucket).HasMaxLength(255);
         instantFile.Property(value => value.FinalObjectName).HasMaxLength(1024);
         instantFile.Property(value => value.State).HasConversion<string>().HasMaxLength(16).IsRequired();
         instantFile.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");

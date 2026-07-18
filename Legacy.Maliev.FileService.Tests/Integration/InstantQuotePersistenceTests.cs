@@ -147,6 +147,9 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         Assert.True(context.Model.FindEntityType(typeof(InstantQuoteUploadSession))!.FindProperty("xmin")!.IsConcurrencyToken);
         Assert.True(context.Model.FindEntityType(typeof(InstantQuoteUploadFile))!.FindProperty("xmin")!.IsConcurrencyToken);
         Assert.True(context.Model.FindEntityType(typeof(InstantQuoteFinalization))!.FindProperty("xmin")!.IsConcurrencyToken);
+        var upload = context.Model.FindEntityType(typeof(InstantQuoteUploadFile))!;
+        Assert.False(upload.FindProperty("TemporaryBucket")!.IsNullable);
+        Assert.True(upload.FindProperty("FinalBucket")!.IsNullable);
     }
 
     [Fact]
@@ -240,6 +243,26 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var stored = Assert.Single(result);
         Assert.Equal(owned.Record.Id, stored.Upload.Id);
         Assert.NotEqual(0U, stored.Version);
+    }
+
+    [Fact]
+    public async Task SaveUpload_RemovedStateAndDurableBuckets_RoundTrips()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var acquired = await repository.ReserveUploadAsync(CreateUpload(session.Id, "removed"), CancellationToken.None);
+        acquired.Record.FinalBucket = "final-bucket";
+        acquired.Record.FinalObjectName = "instant-quotation/final.stl";
+        acquired.Record.State = InstantQuoteWorkflowState.Removed;
+        await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
+
+        var stored = Assert.Single(await repository.GetSessionFilesAsync(
+            session.Id, [acquired.Record.Id], CancellationToken.None));
+        Assert.Equal("private-bucket", stored.Upload.TemporaryBucket);
+        Assert.Equal("final-bucket", stored.Upload.FinalBucket);
+        Assert.Equal(InstantQuoteWorkflowState.Removed, stored.Upload.State);
     }
 
     [Fact]
@@ -339,7 +362,8 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         Guid? id = null,
         string idempotencyKey = "upload-key") => new(
         id ?? Guid.NewGuid(), sessionId, Hash(idempotencyKey), Fingerprint(fingerprint), "part.stl", ".stl", "model/stl",
-        new string('a', 64), null, null, null, $"instant-quote/{sessionId:N}/{Guid.NewGuid():N}", null,
+        new string('a', 64), null, null, null, "private-bucket",
+        $"instant-quote/{sessionId:N}/{Guid.NewGuid():N}", null, null,
         InstantQuoteWorkflowState.Pending, Now, Now);
 
     private static InstantQuoteFinalization CreateFinalization(Guid sessionId, Guid quotationRequestId, string fingerprint) => new(
