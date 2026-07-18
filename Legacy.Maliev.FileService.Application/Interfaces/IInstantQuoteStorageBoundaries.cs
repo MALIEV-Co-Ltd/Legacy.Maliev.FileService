@@ -42,7 +42,7 @@ public interface IInstantQuoteObjectStorage
         string destinationObjectName,
         CancellationToken cancellationToken);
 
-    /// <summary>Conditionally deletes an exact temporary generation.</summary>
+    /// <summary>Conditionally deletes an exact object generation, whether temporary or finalized.</summary>
     Task DeleteGenerationAsync(
         string bucket,
         string objectName,

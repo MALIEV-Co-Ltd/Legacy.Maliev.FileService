@@ -82,6 +82,7 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
         }
         catch (DbUpdateConcurrencyException exception)
         {
+            entry.State = EntityState.Detached;
             throw new InstantQuoteConcurrencyException("The upload state was changed concurrently.", exception);
         }
         return GetVersion(upload);

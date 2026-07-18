@@ -11,6 +11,9 @@ namespace Legacy.Maliev.FileService.Data.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.Sql(
+                "LOCK TABLE \"InstantQuoteUploadFile\" IN ACCESS EXCLUSIVE MODE;");
+
+            migrationBuilder.Sql(
                 """
                 DO $$
                 BEGIN
@@ -32,8 +35,7 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                 table: "InstantQuoteUploadFile",
                 type: "character varying(255)",
                 maxLength: 255,
-                nullable: false,
-                defaultValue: "");
+                nullable: false);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "FinalizedQuotationRequestId",
