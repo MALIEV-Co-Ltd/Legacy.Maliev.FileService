@@ -26,16 +26,8 @@ public sealed class InstantQuotationFilesController(
     [ProducesResponseType<CreateInstantQuoteSessionResponse>(StatusCodes.Status201Created)]
     public Task<ActionResult<CreateInstantQuoteSessionResponse>> CreateSessionAsync(CancellationToken cancellationToken)
     {
-        var subject = User.FindFirst("sub")
-            ?? User.FindFirst(ClaimTypes.NameIdentifier);
-        var principalId = subject is null
-            ? User.FindFirst("client_id")?.Value
-                ?? User.FindFirst("azp")?.Value
-            : $"{User.FindFirst("iss")?.Value ?? subject.Issuer}|{subject.Value}";
-        var owner = new InstantQuoteOwner(principalId, User.Identity?.IsAuthenticated == true);
-
         return ExecuteAsync(
-            () => service.CreateInstantQuoteSessionAsync(owner, cancellationToken),
+            () => service.CreateInstantQuoteSessionAsync(ResolveOwner(), cancellationToken),
             response => Created($"/file/v1/instant-quotation/sessions/{response.SessionId}", response));
     }
 
@@ -58,6 +50,7 @@ public sealed class InstantQuotationFilesController(
                 await using var file = await multipartReader.ReadSingleAsync(Request, "files", cancellationToken);
                 var response = await service.UploadAsync(
                     sessionId,
+                    ResolveOwner(),
                     headers.Token,
                     headers.IdempotencyKey,
                     headers.ExpectedSha256,
@@ -82,8 +75,19 @@ public sealed class InstantQuotationFilesController(
         CancellationToken cancellationToken)
     {
         return ExecuteAsync(
-            () => service.FinalizeAsync(sessionId, token, idempotencyKey, request, cancellationToken),
+            () => service.FinalizeAsync(sessionId, ResolveOwner(), token, idempotencyKey, request, cancellationToken),
             response => Ok(response));
+    }
+
+    private InstantQuoteOwner ResolveOwner()
+    {
+        var subject = User.FindFirst("sub")
+            ?? User.FindFirst(ClaimTypes.NameIdentifier);
+        var principalId = subject is null
+            ? User.FindFirst("client_id")?.Value
+                ?? User.FindFirst("azp")?.Value
+            : $"{User.FindFirst("iss")?.Value ?? subject.Issuer}|{subject.Value}";
+        return new InstantQuoteOwner(principalId, User.Identity?.IsAuthenticated == true);
     }
 
     private static async Task<ActionResult<T>> ExecuteAsync<T>(

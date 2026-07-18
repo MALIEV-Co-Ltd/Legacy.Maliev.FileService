@@ -33,10 +33,14 @@ public sealed record InstantQuoteOwner(
 /// <param name="SessionId">Opaque session identifier.</param>
 /// <param name="SessionToken">One-time-disclosed capability token used to prove session ownership.</param>
 /// <param name="ExpiresAt">UTC instant after which the session cannot be used.</param>
+/// <param name="MaxUploadBytes">Maximum actual bytes accepted for one upload.</param>
+/// <param name="SupportedExtensions">Exact normalized supported extension list.</param>
 public sealed record CreateInstantQuoteSessionResponse(
     [property: JsonPropertyName("sessionId")] Guid SessionId,
     [property: JsonPropertyName("sessionToken")] string SessionToken,
-    [property: JsonPropertyName("expiresAt")] DateTimeOffset ExpiresAt);
+    [property: JsonPropertyName("expiresAt")] DateTimeOffset ExpiresAt,
+    [property: JsonPropertyName("maxUploadBytes")] long MaxUploadBytes,
+    [property: JsonPropertyName("supportedExtensions")] IReadOnlyList<string> SupportedExtensions);
 
 /// <summary>Safe customer-supplied metadata for a streamed upload.</summary>
 /// <param name="FileName">Customer filename retained as metadata only.</param>
@@ -60,6 +64,17 @@ public sealed record InstantQuoteFileResponse(
     [property: JsonPropertyName("sha256")] string Sha256,
     [property: JsonPropertyName("status")] string Status);
 
+/// <summary>Authoritative private-object link returned after finalization.</summary>
+public sealed record FinalizedInstantQuoteFileResponse(
+    [property: JsonPropertyName("fileId")] Guid FileId,
+    [property: JsonPropertyName("bucket")] string Bucket,
+    [property: JsonPropertyName("objectName")] string ObjectName,
+    [property: JsonPropertyName("fileName")] string FileName,
+    [property: JsonPropertyName("contentType")] string ContentType,
+    [property: JsonPropertyName("sizeBytes")] long SizeBytes,
+    [property: JsonPropertyName("sha256")] string Sha256,
+    [property: JsonPropertyName("status")] string Status);
+
 /// <summary>Selects clean uploaded files for a quotation request.</summary>
 /// <param name="QuotationRequestId">Identifier owned by the Web quotation workflow.</param>
 /// <param name="FileIds">Files selected from this upload session.</param>
@@ -72,4 +87,4 @@ public sealed record FinalizeInstantQuoteFilesRequest(
 /// <param name="Files">Authoritative finalized file results.</param>
 public sealed record FinalizeInstantQuoteFilesResponse(
     [property: JsonPropertyName("quotationRequestId")] Guid QuotationRequestId,
-    [property: JsonPropertyName("files")] IReadOnlyList<InstantQuoteFileResponse> Files);
+    [property: JsonPropertyName("files")] IReadOnlyList<FinalizedInstantQuoteFileResponse> Files);

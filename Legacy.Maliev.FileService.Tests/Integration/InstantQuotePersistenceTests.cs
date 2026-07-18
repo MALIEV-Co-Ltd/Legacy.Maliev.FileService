@@ -222,6 +222,27 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
+    public async Task GetSessionFiles_ExactIds_ReturnsOnlyOwnedRowsWithObservedXmin()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        var otherSession = new InstantQuoteUploadSession(
+            Guid.NewGuid(), "https://issuer.example|other-user", true, Hash("other-token"), Now.AddHours(1), Now);
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        await repository.CreateSessionAsync(otherSession, CancellationToken.None);
+        var owned = await repository.ReserveUploadAsync(CreateUpload(session.Id, "owned"), CancellationToken.None);
+        var foreign = await repository.ReserveUploadAsync(CreateUpload(otherSession.Id, "foreign"), CancellationToken.None);
+
+        var result = await repository.GetSessionFilesAsync(
+            session.Id, [owned.Record.Id, foreign.Record.Id], CancellationToken.None);
+
+        var stored = Assert.Single(result);
+        Assert.Equal(owned.Record.Id, stored.Upload.Id);
+        Assert.NotEqual(0U, stored.Version);
+    }
+
+    [Fact]
     public async Task ReserveFinalization_ConcurrentThenCompleted_ClassifiesReplayAndConflict()
     {
         Guid sessionId;

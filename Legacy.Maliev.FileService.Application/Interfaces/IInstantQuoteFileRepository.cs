@@ -24,6 +24,9 @@ public enum InstantQuoteReservationStatus
 /// <param name="Version">Caller-observed PostgreSQL xmin value required for a state transition.</param>
 public sealed record InstantQuoteReservation<TRecord>(InstantQuoteReservationStatus Status, TRecord Record, uint Version);
 
+/// <summary>An exact session-owned upload and its observed PostgreSQL xmin.</summary>
+public sealed record InstantQuoteStoredUpload(InstantQuoteUploadFile Upload, uint Version);
+
 /// <summary>Persistence boundary dedicated to the instant-quotation file workflow.</summary>
 public interface IInstantQuoteFileRepository
 {
@@ -38,6 +41,11 @@ public interface IInstantQuoteFileRepository
     Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(InstantQuoteUploadFile upload, CancellationToken cancellationToken);
     /// <summary>Persists authoritative upload metadata and state.</summary>
     Task<uint> SaveUploadAsync(InstantQuoteUploadFile upload, uint expectedVersion, CancellationToken cancellationToken);
+    /// <summary>Loads exactly the requested file IDs when they all belong to the session.</summary>
+    Task<IReadOnlyList<InstantQuoteStoredUpload>> GetSessionFilesAsync(
+        Guid sessionId,
+        IReadOnlyCollection<Guid> fileIds,
+        CancellationToken cancellationToken);
     /// <summary>Atomically reserves or classifies a finalization idempotency key.</summary>
     Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(InstantQuoteFinalization finalization, CancellationToken cancellationToken);
     /// <summary>Persists authoritative finalization state.</summary>

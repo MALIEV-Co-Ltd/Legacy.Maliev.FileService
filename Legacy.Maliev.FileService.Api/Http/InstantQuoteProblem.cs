@@ -79,6 +79,16 @@ public static class InstantQuoteProblem
                 "idempotency_conflict",
                 "Idempotency replay conflict",
                 "The idempotency key is already associated with a different request."),
+            InstantQuoteUploadInProgressException => (
+                StatusCodes.Status409Conflict,
+                "upload_in_progress",
+                "Instant quotation operation is in progress",
+                "Retry the identical request with the same idempotency key."),
+            InstantQuoteUnsafeContentException => (
+                StatusCodes.Status422UnprocessableEntity,
+                "unsafe_content",
+                "Uploaded content is unsafe",
+                "The uploaded content could not be accepted."),
             InstantQuotePayloadTooLargeException => (
                 StatusCodes.Status413PayloadTooLarge,
                 "payload_too_large",

@@ -81,6 +81,25 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<InstantQuoteStoredUpload>> GetSessionFilesAsync(
+        Guid sessionId,
+        IReadOnlyCollection<Guid> fileIds,
+        CancellationToken cancellationToken)
+    {
+        var requested = fileIds.Distinct().ToArray();
+        var stored = await dbContext.InstantQuoteUploadFiles
+            .AsNoTracking()
+            .Where(value => value.SessionId == sessionId && requested.Contains(value.Id))
+            .Select(value => new
+            {
+                Upload = value,
+                Version = EF.Property<uint>(value, "xmin"),
+            })
+            .ToListAsync(cancellationToken);
+        return stored.Select(value => new InstantQuoteStoredUpload(value.Upload, value.Version)).ToArray();
+    }
+
+    /// <inheritdoc />
     public async Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
         InstantQuoteFinalization finalization,
         CancellationToken cancellationToken)

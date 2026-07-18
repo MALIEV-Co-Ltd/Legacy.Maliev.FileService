@@ -321,6 +321,7 @@ public sealed class StreamingMultipartTests
 
         public async Task<InstantQuoteFileResponse> UploadAsync(
             Guid sessionId,
+            InstantQuoteOwner owner,
             string token,
             string idempotencyKey,
             string expectedSha256,
@@ -375,6 +376,7 @@ public sealed class StreamingMultipartTests
 
         public Task<FinalizeInstantQuoteFilesResponse> FinalizeAsync(
             Guid sessionId,
+            InstantQuoteOwner owner,
             string token,
             string idempotencyKey,
             FinalizeInstantQuoteFilesRequest request,

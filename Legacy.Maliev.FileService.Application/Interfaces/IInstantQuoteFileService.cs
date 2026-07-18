@@ -13,6 +13,7 @@ public interface IInstantQuoteFileService
     /// <summary>Streams, validates, scans, and records one idempotent upload.</summary>
     Task<InstantQuoteFileResponse> UploadAsync(
         Guid sessionId,
+        InstantQuoteOwner owner,
         string token,
         string idempotencyKey,
         string expectedSha256,
@@ -23,6 +24,7 @@ public interface IInstantQuoteFileService
     /// <summary>Idempotently links selected clean files to a quotation request.</summary>
     Task<FinalizeInstantQuoteFilesResponse> FinalizeAsync(
         Guid sessionId,
+        InstantQuoteOwner owner,
         string token,
         string idempotencyKey,
         FinalizeInstantQuoteFilesRequest request,
@@ -41,6 +43,12 @@ public sealed class InstantQuoteOwnershipException(string message) : InstantQuot
 
 /// <summary>Raised when an idempotency key is replayed with a different request.</summary>
 public sealed class InstantQuoteReplayConflictException(string message) : InstantQuoteContractException(message);
+
+/// <summary>Raised when an identical idempotent operation is still pending.</summary>
+public sealed class InstantQuoteUploadInProgressException(string message) : InstantQuoteContractException(message);
+
+/// <summary>Raised when content is infected, malformed, or does not match its declared format.</summary>
+public sealed class InstantQuoteUnsafeContentException(string message) : InstantQuoteContractException(message);
 
 /// <summary>Raised when actual uploaded bytes exceed the contract limit.</summary>
 public sealed class InstantQuotePayloadTooLargeException(string message) : InstantQuoteContractException(message);
