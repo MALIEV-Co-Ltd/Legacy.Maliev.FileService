@@ -12,7 +12,7 @@ public sealed class InstantQuoteGoogleCloudObjectStorageTests
     private const string Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     [Fact]
-    public async Task UploadTemporaryAsync_NonSeekableStream_UsesPrivateCreateOnlyRequestWithoutReplay()
+    public async Task UploadTemporaryAsync_NonSeekableStream_UsesUblaCompatibleCreateOnlyRequestWithoutReplay()
     {
         var client = new RecordingClient();
         var source = new NonSeekableReadStream([1, 2, 3]);
@@ -23,7 +23,7 @@ public sealed class InstantQuoteGoogleCloudObjectStorageTests
             Assert.Equal("application/octet-stream", item.ContentType);
             Assert.Equal(Sha256, item.Metadata[InstantQuoteGoogleCloudObjectStorage.ExpectedSha256MetadataKey]);
             Assert.Equal(0, options.IfGenerationMatch);
-            Assert.Equal(PredefinedObjectAcl.Private, options.PredefinedAcl);
+            Assert.Null(options.PredefinedAcl);
             Assert.Same(source, stream);
             Assert.Equal(CurrentCancellationToken, token);
             return Task.FromResult(Object("temp-bucket", "sessions/file", 41, 3, Sha256));
@@ -169,7 +169,7 @@ public sealed class InstantQuoteGoogleCloudObjectStorageTests
     }
 
     [Fact]
-    public async Task PromoteGenerationAsync_UsesSourceAndCreateOnlyDestinationPreconditions()
+    public async Task PromoteGenerationAsync_UsesUblaCompatibleSourceAndCreateOnlyDestinationPreconditions()
     {
         var client = new RecordingClient
         {
@@ -185,7 +185,7 @@ public sealed class InstantQuoteGoogleCloudObjectStorageTests
         Assert.Equal(99, request.Options.SourceGeneration);
         Assert.Equal(99, request.Options.IfSourceGenerationMatch);
         Assert.Equal(0, request.Options.IfGenerationMatch);
-        Assert.Equal(PredefinedObjectAcl.Private, request.Options.DestinationPredefinedAcl);
+        Assert.Null(request.Options.DestinationPredefinedAcl);
         Assert.Equal(101, result.Generation);
     }
 

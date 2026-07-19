@@ -19,7 +19,7 @@ public static class InstantQuoteContentSignaturePolicy
             ".step" or ".stp" => ContainsAscii(prefix, "ISO-10303-21"),
             ".iges" or ".igs" => prefix.Length >= 73 && prefix[72] == (byte)'S',
             ".glb" => prefix.StartsWith("glTF"u8),
-            ".gltf" => IsJson(prefix),
+            ".gltf" => IsGltf(prefix, sizeBytes),
             _ => false,
         };
 
@@ -53,12 +53,62 @@ public static class InstantQuoteContentSignaturePolicy
     private static bool IsObj(ReadOnlySpan<byte> prefix) =>
         ContainsAscii(prefix, "v ") || ContainsAscii(prefix, "o ") || ContainsAscii(prefix, "f ");
 
-    private static bool IsJson(ReadOnlySpan<byte> prefix)
+    private static bool IsGltf(ReadOnlySpan<byte> prefix, long sizeBytes)
     {
         try
         {
-            using var document = JsonDocument.Parse(prefix.ToArray());
-            return document.RootElement.ValueKind == JsonValueKind.Object;
+            var isFinalBlock = sizeBytes <= prefix.Length;
+            var reader = new Utf8JsonReader(prefix, isFinalBlock, default);
+            var rootObject = false;
+            var rootComplete = false;
+            var assetPropertyPending = false;
+            var assetObject = false;
+
+            while (reader.Read())
+            {
+                if (!rootObject)
+                {
+                    if (reader.TokenType != JsonTokenType.StartObject || reader.CurrentDepth != 0)
+                    {
+                        return false;
+                    }
+
+                    rootObject = true;
+                    continue;
+                }
+
+                if (rootComplete)
+                {
+                    return false;
+                }
+
+                if (assetPropertyPending)
+                {
+                    if (reader.TokenType != JsonTokenType.StartObject || reader.CurrentDepth != 1)
+                    {
+                        return false;
+                    }
+
+                    assetObject = true;
+                    assetPropertyPending = false;
+                    continue;
+                }
+
+                if (reader.TokenType == JsonTokenType.PropertyName &&
+                    reader.CurrentDepth == 1 &&
+                    reader.ValueTextEquals("asset"u8))
+                {
+                    assetPropertyPending = true;
+                    continue;
+                }
+
+                if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+                {
+                    rootComplete = true;
+                }
+            }
+
+            return rootObject && assetObject && (!isFinalBlock || rootComplete);
         }
         catch (JsonException)
         {

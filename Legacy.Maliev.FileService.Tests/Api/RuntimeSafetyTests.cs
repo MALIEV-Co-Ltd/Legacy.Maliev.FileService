@@ -188,6 +188,85 @@ public sealed class RuntimeSafetyTests
     }
 
     [Theory]
+    [InlineData("Quote-temp-local")]
+    [InlineData("quote_temp_local")]
+    [InlineData("quote..temp")]
+    [InlineData("quote.-temp")]
+    [InlineData("quote.temp-")]
+    [InlineData("192.0.2.1")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void InstantQuoteOptionsValidator_EnabledWritesRejectNonDnsCompatibleBucketNames(string bucket)
+    {
+        using var provider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", bucket),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+    }
+
+    [Fact]
+    public void InstantQuoteOptionsValidator_EnabledWritesAcceptsDnsCompatibleDottedBucketName()
+    {
+        using var provider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp.local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final.local"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Equal(
+            "quote-temp.local",
+            provider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value.TemporaryBucket);
+    }
+
+    [Fact]
+    public void InstantQuoteOptionsValidator_EnabledWritesAcceptsNumericBucketThatIsNotDottedIpAddress()
+    {
+        using var provider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "123"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Equal(
+            "123",
+            provider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value.TemporaryBucket);
+    }
+
+    [Fact]
+    public void InstantQuoteOptionsValidator_EnabledWritesEnforcesDottedBucketTotalAndLabelLengths()
+    {
+        var valid = string.Join('.', new string('a', 63), new string('b', 63), new string('c', 63), new string('d', 30));
+        var tooLong = valid + "e";
+        using var validProvider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", valid),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+        using var invalidProvider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", tooLong),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Equal(valid, validProvider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value.TemporaryBucket);
+        Assert.Throws<OptionsValidationException>(() =>
+            invalidProvider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+    }
+
+    [Theory]
     [InlineData("00:00:15")]
     [InlineData("00:00:10")]
     public void InstantQuoteOptionsValidator_CleanupRetryMustSafelyExceedDeleteTimeout(string retryDelay)

@@ -51,7 +51,6 @@ public sealed class InstantQuoteGoogleCloudObjectStorage : IInstantQuoteObjectSt
         var options = new UploadObjectOptions
         {
             IfGenerationMatch = 0,
-            PredefinedAcl = PredefinedObjectAcl.Private,
         };
 
         var uploaded = await _client.UploadObjectAsync(request, content, options, cancellationToken);
@@ -140,7 +139,6 @@ public sealed class InstantQuoteGoogleCloudObjectStorage : IInstantQuoteObjectSt
                 SourceGeneration = sourceGeneration,
                 IfSourceGenerationMatch = sourceGeneration,
                 IfGenerationMatch = 0,
-                DestinationPredefinedAcl = PredefinedObjectAcl.Private,
             },
             cancellationToken);
         try

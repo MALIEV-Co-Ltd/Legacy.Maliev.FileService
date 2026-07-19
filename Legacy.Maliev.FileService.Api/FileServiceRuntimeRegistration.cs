@@ -1,3 +1,4 @@
+using System.Net;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -129,9 +130,22 @@ public static class FileServiceRuntimeRegistration
     private static bool IsLegacyWriteEnabled(FileStorageOptions options) =>
         options.Enabled && options.WritesEnabled;
 
-    private static bool IsBucketName(string value) =>
-        value.Length is >= 3 and <= 63 &&
-        value[0] is not ('.' or '-') &&
-        value[^1] is not ('.' or '-') &&
-        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-');
+    private static bool IsBucketName(string value)
+    {
+        if (value.Length is < 3 or > 222 ||
+            value.Count(character => character == '.') == 3 && IPAddress.TryParse(value, out _))
+        {
+            return false;
+        }
+
+        var labels = value.Split('.');
+        return labels.All(label =>
+            label.Length is >= 1 and <= 63 &&
+            IsLowerAsciiLetterOrDigit(label[0]) &&
+            IsLowerAsciiLetterOrDigit(label[^1]) &&
+            label.All(character => IsLowerAsciiLetterOrDigit(character) || character == '-'));
+    }
+
+    private static bool IsLowerAsciiLetterOrDigit(char value) =>
+        value is >= 'a' and <= 'z' or >= '0' and <= '9';
 }
