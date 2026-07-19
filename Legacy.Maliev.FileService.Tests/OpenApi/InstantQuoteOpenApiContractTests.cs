@@ -29,6 +29,20 @@ public sealed class InstantQuoteOpenApiContractTests
         Assert.Equal("JWT", bearer.GetProperty("bearerFormat").GetString());
 
         var paths = document.RootElement.GetProperty("paths");
+        var instantQuotePaths = paths.EnumerateObject()
+            .Where(path => path.Name.StartsWith("/file/v1/instant-quotation", StringComparison.Ordinal))
+            .Select(path => path.Name)
+            .Order()
+            .ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "/file/v1/instant-quotation/sessions",
+                "/file/v1/instant-quotation/sessions/{sessionId}/files",
+                "/file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}",
+                "/file/v1/instant-quotation/sessions/{sessionId}/finalizations",
+            },
+            instantQuotePaths);
         var session = paths.GetProperty("/file/v1/instant-quotation/sessions").GetProperty("post");
         AssertBearerSecurity(session);
         AssertResponse(
@@ -166,6 +180,12 @@ public sealed class InstantQuoteOpenApiContractTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
+        builder.Services.AddApiVersioning()
+            .AddApiExplorer(options =>
+            {
+                options.GroupNameFormat = "'v'V";
+                options.SubstituteApiVersionInUrl = true;
+            });
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
         builder.Services.AddSingleton<IInstantQuoteFileService, UnusedInstantQuoteFileService>();
         builder.Services.AddOpenApi("v1", options =>
