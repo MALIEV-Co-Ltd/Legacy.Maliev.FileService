@@ -359,7 +359,8 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
                 TemporaryBucket = "private-bucket",
                 FinalBucket = "private-bucket",
             }),
-            new FakeTimeProvider(Now));
+            new FakeTimeProvider(Now),
+            NullLogger<InstantQuoteFileService>.Instance);
         var token = Convert.ToBase64String(Encoding.UTF8.GetBytes("session-token")).TrimEnd('=');
 
         var response = await service.FinalizeAsync(
@@ -876,7 +877,8 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             TemporaryBucket = "private-bucket",
             FinalBucket = "private-bucket",
         }),
-        new FakeTimeProvider(Now));
+        new FakeTimeProvider(Now),
+        NullLogger<InstantQuoteFileService>.Instance);
 
     private sealed class SameAuthorityRaceStorage(string destination, Func<Task> beforePromotionReturns)
         : IInstantQuoteObjectStorage

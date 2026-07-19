@@ -111,10 +111,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception)
             {
-                logger.LogWarning(exception,
-                    "Temporary generation cleanup failed for upload {UploadId} in session {SessionId}",
+                logger.LogWarning(
+                    "Temporary generation cleanup failed for upload {FileId} in session {SessionId}",
                     upload.Id,
                     upload.SessionId);
                 continue;
@@ -128,10 +128,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 await repository.SaveCleanupStateAsync(upload, claimVersion, cancellationToken);
                 completed++;
             }
-            catch (InstantQuoteConcurrencyException exception)
+            catch (InstantQuoteConcurrencyException)
             {
-                logger.LogWarning(exception,
-                    "Temporary cleanup completion raced for upload {UploadId} in session {SessionId}",
+                logger.LogWarning(
+                    "Temporary cleanup completion raced for upload {FileId} in session {SessionId}",
                     upload.Id,
                     upload.SessionId);
             }
@@ -171,7 +171,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 return false;
             }
 
-            var outcome = await ScanGenerationAsync(metadata, linked.Token);
+            var outcome = await ScanGenerationAsync(metadata, upload.ValidatedExtension, linked.Token);
             var matches = outcome.SizeBytes == metadata.SizeBytes &&
                 string.Equals(outcome.Sha256, metadata.Sha256, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(outcome.Sha256, upload.ExpectedSha256, StringComparison.OrdinalIgnoreCase);
@@ -208,10 +208,23 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         {
             return false;
         }
-        catch (Exception exception)
+        catch (InstantQuoteUnsafeContentException)
         {
-            logger.LogWarning(exception,
-                "Temporary generation reconciliation failed for upload {UploadId} in session {SessionId}",
+            upload.State = InstantQuoteWorkflowState.Failed;
+            upload.ModifiedAt = timeProvider.GetUtcNow();
+            try
+            {
+                await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
+            }
+            catch (InstantQuoteConcurrencyException)
+            {
+            }
+            return false;
+        }
+        catch (Exception)
+        {
+            logger.LogWarning(
+                "Temporary generation reconciliation failed for upload {FileId} in session {SessionId}",
                 upload.Id,
                 upload.SessionId);
             return false;
@@ -220,6 +233,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
 
     private async Task<RecoveryScanOutcome> ScanGenerationAsync(
         InstantQuoteObjectMetadata metadata,
+        string validatedExtension,
         CancellationToken cancellationToken)
     {
         var pipe = new Pipe();
@@ -227,8 +241,9 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         await using var writer = pipe.Writer.AsStream(leaveOpen: true);
         await using var hashing = new BoundedHashingReadStream(reader);
         await using var prefix = new RecoveryPrefixStream(hashing, 4096);
+        await using var validated = InstantQuoteWholeStreamValidation.Wrap(validatedExtension, prefix);
         var download = DownloadAsync();
-        var scan = scanner.ScanAsync(prefix, cancellationToken);
+        var scan = scanner.ScanAsync(validated, cancellationToken);
         try
         {
             await Task.WhenAll(download, scan);
@@ -294,10 +309,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            logger.LogWarning(exception,
-                "Rejected temporary generation discovery failed for upload {UploadId} in session {SessionId}",
+            logger.LogWarning(
+                "Rejected temporary generation discovery failed for upload {FileId} in session {SessionId}",
                 upload.Id,
                 upload.SessionId);
             return false;

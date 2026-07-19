@@ -5,6 +5,7 @@ using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Domain;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -33,6 +34,79 @@ public sealed class InstantQuoteFileServiceTests
         Assert.Equal(Now.AddHours(24), response.ExpiresAt);
         Assert.Equal(response.SessionId, session.Id);
         Assert.Equal(InstantQuoteFileContract.MaximumFilesPerSession, response.MaxFilesPerSession);
+    }
+
+    [Fact]
+    public async Task LifecycleLogs_ContainOnlyOpaqueWorkflowDiagnosticsAndNoSensitiveUploadValues()
+    {
+        const string token = "sensitive-session-token-value-123456789012";
+        const string idempotencyKey = "sensitive-idempotency-key";
+        const string customerFileName = "sensitive-customer-part.stl";
+        var bytes = BinaryStl();
+        var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var logger = new CapturingLogger<InstantQuoteFileService>();
+        await CreateService(new FakeRepository(), logger: logger).CreateInstantQuoteSessionAsync(
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            CancellationToken.None);
+        var uploadRepository = new FakeRepository { VerifySessionResult = CreateSessionRecord(token) };
+        var uploadStorage = new FakeStorage();
+
+        var uploaded = await CreateService(uploadRepository, uploadStorage, logger: logger).UploadAsync(
+            uploadRepository.VerifySessionResult.Id,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            token,
+            idempotencyKey,
+            digest,
+            new MemoryStream(bytes),
+            new InstantQuoteUploadMetadata(customerFileName, "model/stl"),
+            CancellationToken.None);
+
+        var upload = uploadRepository.SavedUploads[^1].Upload;
+        var finalizationRepository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(token),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        await CreateService(finalizationRepository, uploadStorage, logger: logger).FinalizeAsync(
+            upload.SessionId,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            token,
+            idempotencyKey,
+            new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]),
+            CancellationToken.None);
+
+        var removal = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var removalRepository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(token),
+            SessionFiles = [new InstantQuoteStoredUpload(removal, 27)],
+        };
+        await CreateService(removalRepository, logger: logger).RemoveAsync(
+            removal.SessionId,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            token,
+            removal.Id,
+            CancellationToken.None);
+
+        Assert.Contains(logger.Entries, entry => entry.Template.Contains("session", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Template.Contains("upload reserved", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Template.Contains("upload clean", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Template.Contains("finalization reserved", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Template.Contains("finalization completed", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Template.Contains("upload removed", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry => entry.Properties.Values.Contains(uploaded.FileId));
+        Assert.Contains(logger.Entries, entry => entry.Properties.Values.Contains(1001));
+
+        var diagnosticText = string.Join('\n', logger.Entries.Select(entry =>
+            entry.Rendered + " " + string.Join(' ', entry.Properties.Values)));
+        Assert.DoesNotContain(token, diagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain(idempotencyKey, diagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain(customerFileName, diagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain(digest, diagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain(upload.TemporaryObjectName, diagnosticText, StringComparison.Ordinal);
+        Assert.All(logger.Entries, entry => Assert.Null(entry.Exception));
+        Assert.All(logger.Entries.SelectMany(entry => entry.Properties.Keys), key => Assert.Contains(key,
+            new[] { "SessionId", "FileId", "FinalizationId", "QuotationRequestId", "FileCount", "State" }));
     }
 
     [Fact]
@@ -796,6 +870,32 @@ public sealed class InstantQuoteFileServiceTests
     }
 
     [Fact]
+    public async Task Upload_GltfWithMalformedTailAfterFourKiB_RejectsDuringAuthoritativeStoredGenerationScan()
+    {
+        var bytes = Encoding.UTF8.GetBytes(
+            "{\"asset\":{\"version\":\"2.0\"},\"extras\":\"" + new string('a', 5000) + "\"");
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
+        var storage = new FakeStorage();
+        var scanner = new FakeScanner();
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
+            CreateService(repository, storage, scanner).UploadAsync(
+                repository.VerifySessionResult.Id,
+                new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43),
+                new string('i', 16),
+                sha,
+                new NonSeekableStream(bytes),
+                new InstantQuoteUploadMetadata("part.gltf", "model/gltf+json"),
+                CancellationToken.None));
+
+        Assert.Equal(1, storage.DownloadCount);
+        Assert.Equal(1, storage.DeleteCount);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, repository.SavedUploads[^1].Upload.State);
+    }
+
+    [Fact]
     public async Task Upload_CancelledDuringScan_PersistsUnknownWithLatestXmin()
     {
         var bytes = BinaryStl();
@@ -1302,7 +1402,8 @@ public sealed class InstantQuoteFileServiceTests
         IInstantQuoteObjectStorage? storage = null,
         IInstantQuoteFileSafetyScanner? scanner = null,
         InstantQuoteFileOptions? options = null,
-        FakeTimeProvider? timeProvider = null) => new(
+        FakeTimeProvider? timeProvider = null,
+        ILogger<InstantQuoteFileService>? logger = null) => new(
         repository,
         storage ?? new FakeStorage(),
         scanner ?? new FakeScanner(),
@@ -1313,7 +1414,8 @@ public sealed class InstantQuoteFileServiceTests
             TemporaryBucket = "private-bucket",
             FinalBucket = "private-bucket",
         }),
-        timeProvider ?? new FakeTimeProvider(Now));
+        timeProvider ?? new FakeTimeProvider(Now),
+        logger ?? new CapturingLogger<InstantQuoteFileService>());
 
     private static (InstantQuoteFileService Service, FakeRepository Repository, FakeStorage Storage, FakeScanner Scanner)
         CreateUploadContext()
@@ -1338,11 +1440,11 @@ public sealed class InstantQuoteFileServiceTests
         return bytes;
     }
 
-    private static InstantQuoteUploadSession CreateSessionRecord() => new(
+    private static InstantQuoteUploadSession CreateSessionRecord(string? token = null) => new(
         Guid.Parse("11111111-1111-1111-1111-111111111111"),
         "https://issuer.example|user-42",
         true,
-        SHA256.HashData(Encoding.UTF8.GetBytes(new string('t', 43))),
+        SHA256.HashData(Encoding.UTF8.GetBytes(token ?? new string('t', 43))),
         Now.AddHours(1),
         Now);
 
@@ -1691,4 +1793,30 @@ public sealed class InstantQuoteFileServiceTests
 
     private sealed class OversizeStreamingStorage : FailureDiscoveringStorage;
     private sealed class TerminalValidationStorage : FailureDiscoveringStorage;
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> structured
+                ? structured.Where(value => value.Key != "{OriginalFormat}")
+                    .ToDictionary(value => value.Key, value => value.Value)
+                : [];
+            var template = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values.FirstOrDefault(value => value.Key == "{OriginalFormat}").Value?.ToString() ?? string.Empty
+                : string.Empty;
+            Entries.Add(new LogEntry(logLevel, template, formatter(state, exception), properties, exception));
+        }
+    }
+
+    private sealed record LogEntry(
+        LogLevel Level,
+        string Template,
+        string Rendered,
+        IReadOnlyDictionary<string, object?> Properties,
+        Exception? Exception);
 }

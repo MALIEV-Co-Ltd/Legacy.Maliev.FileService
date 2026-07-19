@@ -2,6 +2,7 @@ using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Domain;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -58,6 +59,25 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         var claimed = Assert.Single(repository.Saves);
         Assert.Equal(InstantQuoteWorkflowState.Removed, claimed.State);
         Assert.Equal(42, claimed.Generation);
+    }
+
+    [Fact]
+    public async Task RunOnce_FailureWarning_DoesNotAttachSensitiveDependencyException()
+    {
+        const string sensitiveFailure = "sensitive-storage-object-name";
+        var upload = CreateUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage { DeleteException = new IOException(sensitiveFailure) };
+        var logger = new CapturingCleanupLogger();
+
+        await CreateService(repository, storage, logger: logger).RunOnceAsync(CancellationToken.None);
+
+        var warning = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.Null(warning.Exception);
+        Assert.DoesNotContain(sensitiveFailure, warning.Rendered, StringComparison.Ordinal);
+        Assert.Contains(upload.Id.ToString(), warning.Rendered, StringComparison.Ordinal);
+        Assert.Contains(upload.SessionId.ToString(), warning.Rendered, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -137,6 +157,28 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
     }
 
     [Fact]
+    public async Task RunOnce_StaleGltfWithMalformedTail_RejectsDuringSingleRecoveryScan()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(
+            "{\"asset\":{\"version\":\"2.0\"},\"extras\":\"" + new string('a', 5000) + "\"");
+        var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var upload = new InstantQuoteUploadFile(
+            Guid.NewGuid(), Guid.NewGuid(), new byte[32], new string('a', 64), "part.gltf", ".gltf",
+            "model/gltf+json", sha, null, null, null, "temporary-bucket",
+            $"instant-quotation/temp/{Guid.NewGuid():N}.gltf", null, null,
+            InstantQuoteWorkflowState.Unknown, Now.AddHours(-2), Now.AddHours(-1));
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage(bytes, new InstantQuoteObjectMetadata(
+            upload.TemporaryBucket, upload.TemporaryObjectName, 73, bytes.Length, sha));
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, cleaned);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, repository.Saves[^1].State);
+        Assert.Equal(1, storage.DownloadCount);
+    }
+
+    [Fact]
     public async Task RunOnce_FinalizedUpload_DeletesOnlyTemporaryGenerationAndPreservesAuthority()
     {
         var upload = CreateUpload(InstantQuoteWorkflowState.Finalized);
@@ -183,7 +225,8 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         FakeCleanupRepository repository,
         FakeStorage storage,
         bool cleanupEnabled = true,
-        FakeTimeProvider? timeProvider = null) => new(
+        FakeTimeProvider? timeProvider = null,
+        ILogger<InstantQuoteTemporaryObjectCleanupService>? logger = null) => new(
             repository,
             storage,
             new CleanScanner(),
@@ -198,7 +241,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
                 CleanupTimeout = TimeSpan.FromSeconds(5),
             }),
             timeProvider ?? new FakeTimeProvider(Now),
-            NullLogger<InstantQuoteTemporaryObjectCleanupService>.Instance);
+            logger ?? NullLogger<InstantQuoteTemporaryObjectCleanupService>.Instance);
 
     private static InstantQuoteUploadFile CreateUpload(InstantQuoteWorkflowState state, string? expectedSha256 = null) => new(
         Guid.NewGuid(), Guid.NewGuid(), new byte[32], new string('a', 64), "part.stl", ".stl", "model/stl",
@@ -241,6 +284,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         public Exception? DeleteException { get; init; }
         public Exception? MetadataException { get; init; }
         public Action? AfterDelete { get; init; }
+        public int DownloadCount { get; private set; }
         public List<(string Bucket, string ObjectName, long Generation)> Deletes { get; } = [];
 
         public Task DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken)
@@ -263,6 +307,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         public async Task DownloadGenerationAsync(string bucket, string objectName, long generation, Stream destination,
             CancellationToken cancellationToken)
         {
+            DownloadCount++;
             if (bytes is not null)
             {
                 await destination.WriteAsync(bytes, cancellationToken);
@@ -280,5 +325,15 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
             await content.CopyToAsync(Stream.Null, cancellationToken);
             return InstantQuoteScanResult.Clean;
         }
+    }
+
+    private sealed class CapturingCleanupLogger : ILogger<InstantQuoteTemporaryObjectCleanupService>
+    {
+        public List<(LogLevel Level, string Rendered, Exception? Exception)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception), exception));
     }
 }

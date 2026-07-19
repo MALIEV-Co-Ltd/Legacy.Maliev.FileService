@@ -5,6 +5,7 @@ using System.Text;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Domain;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Legacy.Maliev.FileService.Application.Services;
@@ -17,6 +18,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
     private readonly IInstantQuoteFileSafetyScanner _scanner;
     private readonly InstantQuoteFileOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<InstantQuoteFileService> _logger;
 
     /// <summary>Creates the application workflow orchestrator.</summary>
     public InstantQuoteFileService(
@@ -24,13 +26,15 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         IInstantQuoteObjectStorage storage,
         IInstantQuoteFileSafetyScanner scanner,
         IOptions<InstantQuoteFileOptions> options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<InstantQuoteFileService> logger)
     {
         _repository = repository;
         _storage = storage;
         _scanner = scanner;
         _options = options.Value;
         _timeProvider = timeProvider;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -53,6 +57,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             await _repository.CreateSessionAsync(session, cancellationToken);
             return true;
         });
+        _logger.LogInformation("Instant quote session {SessionId} created", session.Id);
         return new CreateInstantQuoteSessionResponse(
             session.Id,
             Convert.ToBase64String(token).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
@@ -118,6 +123,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             normalized.Metadata.ContentType, headers.ExpectedSha256, null, null, null, _options.TemporaryBucket,
             temporaryName, null, null,
             InstantQuoteWorkflowState.Pending, now, now), now, _options.OperationLeaseTimeout, cancellationToken));
+        _logger.LogInformation(
+            "Instant quote upload reserved for session {SessionId} file {FileId} state {State}",
+            sessionId,
+            reservation.Record.Id,
+            reservation.Status);
 
         if (reservation.Status == InstantQuoteReservationStatus.Conflict)
         {
@@ -167,7 +177,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             throw new InstantQuoteAmbiguousOutcomeException("Temporary object could not be reconciled.");
         }
 
-        var scan = await ExecuteDependencyReadAsync(() => ScanStoredGenerationAsync(metadata, cancellationToken));
+        var scan = await ExecuteDependencyReadAsync(() =>
+            ScanStoredGenerationAsync(metadata, upload.ValidatedExtension, cancellationToken));
         if (scan.SizeBytes != metadata.SizeBytes ||
             !FixedTimeHexEquals(scan.Sha256, upload.ExpectedSha256))
         {
@@ -216,6 +227,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         try
         {
             await _repository.SaveUploadAsync(upload, expectedVersion, cancellationToken);
+            LogUploadRecovered(upload);
             return ToUploadResponse(upload);
         }
         catch (OperationCanceledException)
@@ -231,6 +243,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                 throw new InstantQuoteAmbiguousOutcomeException(
                     "The reconciled upload authority could not be reloaded.");
             }
+            LogUploadRecovered(authoritative[0].Upload);
             return ToUploadResponse(authoritative[0].Upload);
         }
         catch (InstantQuoteContractException)
@@ -310,6 +323,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         upload.ModifiedAt = _timeProvider.GetUtcNow();
         var removalVersion = await ExecuteDurableStateAsync(() =>
             _repository.SaveUploadAsync(upload, stored.Version, cancellationToken));
+        _logger.LogInformation(
+            "Instant quote upload removed for session {SessionId} file {FileId} state {State}",
+            sessionId,
+            fileId,
+            upload.State);
 
         try
         {
@@ -382,6 +400,14 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             Guid.NewGuid(), sessionId, SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)), fingerprint,
             request.QuotationRequestId, selected, InstantQuoteWorkflowState.Pending, now, now),
             now, _options.OperationLeaseTimeout, cancellationToken));
+        _logger.LogInformation(
+            "Instant quote finalization reserved {FinalizationId} for session {SessionId} quotation {QuotationRequestId} " +
+            "with {FileCount} files state {State}",
+            reservation.Record.Id,
+            sessionId,
+            request.QuotationRequestId,
+            selected.Length,
+            reservation.Status);
         if (reservation.Status == InstantQuoteReservationStatus.Conflict)
         {
             throw new InstantQuoteReplayConflictException("Idempotency key belongs to another finalization.");
@@ -389,6 +415,18 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         if (reservation.Status == InstantQuoteReservationStatus.InProgress)
         {
             throw new InstantQuoteUploadInProgressException("Finalization is still in progress.");
+        }
+        if (reservation.Status is InstantQuoteReservationStatus.Unknown or InstantQuoteReservationStatus.Recovered or
+            InstantQuoteReservationStatus.Replay)
+        {
+            _logger.LogInformation(
+                "Instant quote finalization recovery {FinalizationId} for session {SessionId} quotation " +
+                "{QuotationRequestId} with {FileCount} files state {State}",
+                reservation.Record.Id,
+                sessionId,
+                request.QuotationRequestId,
+                selected.Length,
+                reservation.Status);
         }
         var results = new List<FinalizedInstantQuoteFileResponse>(files.Count);
         try
@@ -475,6 +513,14 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             reservation.Record.State = InstantQuoteWorkflowState.Finalized;
             reservation.Record.ModifiedAt = _timeProvider.GetUtcNow();
             await _repository.SaveFinalizationAsync(reservation.Record, reservation.Version, cancellationToken);
+            _logger.LogInformation(
+                "Instant quote finalization completed {FinalizationId} for session {SessionId} quotation " +
+                "{QuotationRequestId} with {FileCount} files state {State}",
+                reservation.Record.Id,
+                sessionId,
+                reservation.Record.QuotationRequestId,
+                results.Count,
+                reservation.Record.State);
             return new FinalizeInstantQuoteFilesResponse(reservation.Record.QuotationRequestId, results);
         }
         catch (OperationCanceledException)
@@ -507,6 +553,14 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             using var save = new CancellationTokenSource(_options.CleanupTimeout, _timeProvider);
             await _repository.SaveFinalizationAsync(reservation.Record, reservation.Version, save.Token);
+            _logger.LogInformation(
+                "Instant quote finalization recovery {FinalizationId} for session {SessionId} quotation " +
+                "{QuotationRequestId} with {FileCount} files state {State}",
+                reservation.Record.Id,
+                reservation.Record.SessionId,
+                reservation.Record.QuotationRequestId,
+                reservation.Record.SelectedFileIds.Length,
+                reservation.Record.State);
         }
         catch (Exception)
         {
@@ -541,7 +595,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.Uploaded;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             version = await _repository.SaveUploadAsync(upload, version, cancellationToken);
-            var scan = await ScanStoredGenerationAsync(stored, cancellationToken);
+            var scan = await ScanStoredGenerationAsync(stored, upload.ValidatedExtension, cancellationToken);
             if (scan.Result == InstantQuoteScanResult.Unsafe)
             {
                 throw new InstantQuoteUnsafeContentException("Uploaded content is unsafe.");
@@ -554,6 +608,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.Clean;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await _repository.SaveUploadAsync(upload, version, cancellationToken);
+            _logger.LogInformation(
+                "Instant quote upload clean for session {SessionId} file {FileId} state {State}",
+                upload.SessionId,
+                upload.Id,
+                upload.State);
             return ToUploadResponse(upload);
         }
         catch (OperationCanceledException)
@@ -561,6 +620,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.Unknown;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await SaveUnknownIgnoringCancellationAsync(upload, version);
+            LogUploadTerminal(upload);
             throw;
         }
         catch (InstantQuotePayloadTooLargeException)
@@ -569,6 +629,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.PayloadTooLarge;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await SaveTerminalIgnoringCancellationAsync(upload, version);
+            LogUploadTerminal(upload);
             throw;
         }
         catch (InstantQuoteValidationException)
@@ -577,6 +638,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.InvalidRequest;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await SaveTerminalIgnoringCancellationAsync(upload, version);
+            LogUploadTerminal(upload);
             throw;
         }
         catch (InstantQuoteUnsafeContentException)
@@ -588,6 +650,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await SaveTerminalIgnoringCancellationAsync(upload, version);
+            LogUploadTerminal(upload);
             throw;
         }
         catch (InstantQuoteDependencyUnavailableException)
@@ -595,6 +658,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.Unknown;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await SaveTerminalIgnoringCancellationAsync(upload, version);
+            LogUploadTerminal(upload);
             throw;
         }
         catch (Exception exception)
@@ -602,12 +666,28 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             upload.State = InstantQuoteWorkflowState.Unknown;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             await SaveUnknownIgnoringCancellationAsync(upload, version);
+            LogUploadTerminal(upload);
             throw new InstantQuoteAmbiguousOutcomeException("Upload outcome requires reconciliation.", exception);
         }
     }
 
+    private void LogUploadRecovered(InstantQuoteUploadFile upload) =>
+        _logger.LogInformation(
+            "Instant quote upload recovered for session {SessionId} file {FileId} state {State}",
+            upload.SessionId,
+            upload.Id,
+            upload.State);
+
+    private void LogUploadTerminal(InstantQuoteUploadFile upload) =>
+        _logger.LogInformation(
+            "Instant quote upload terminal for session {SessionId} file {FileId} state {State}",
+            upload.SessionId,
+            upload.Id,
+            upload.State);
+
     private async Task<InstantQuoteScanOutcome> ScanStoredGenerationAsync(
         InstantQuoteObjectMetadata stored,
+        string validatedExtension,
         CancellationToken cancellationToken)
     {
         var pipe = new Pipe();
@@ -616,9 +696,10 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         await using var writer = pipe.Writer.AsStream(leaveOpen: true);
         await using var hashing = new BoundedHashingReadStream(reader);
         await using var captured = new PrefixCapturingReadStream(hashing, 4096);
+        await using var validated = InstantQuoteWholeStreamValidation.Wrap(validatedExtension, captured);
         var producerCompleted = false;
         var download = DownloadAsync();
-        var scan = _scanner.ScanAsync(captured, linkedCancellation.Token);
+        var scan = _scanner.ScanAsync(validated, linkedCancellation.Token);
 
         try
         {
@@ -693,6 +774,10 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                 return await scannerTask;
             }
             catch (OperationCanceledException) when (callerCancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (InstantQuoteContractException)
             {
                 throw;
             }
