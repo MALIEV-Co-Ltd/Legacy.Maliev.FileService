@@ -2,7 +2,7 @@ using Legacy.Maliev.FileService.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
-using Npgsql;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Testcontainers.PostgreSql;
 
 namespace Legacy.Maliev.FileService.Tests.Integration;
@@ -31,6 +31,9 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
 [Collection(PostgreSqlCollection.Name)]
 public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
 {
+    private const string InitialMigration = "20260715033302_InitialPostgresCompatibility";
+    private const string InstantQuoteMigration = "20260719033405_AddInstantQuoteUploadWorkflow";
+
     [Fact]
     public async Task InitialMigration_FreshPostgreSql_CreatesLegacyUploadTableWithoutCustomXmin()
     {
@@ -68,45 +71,52 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
-    public async Task ObjectAuthorityMigration_PreExistingWorkflowRow_FailsClosedBeforeAddingColumns()
+    public void InstantQuoteMigration_UnshippedSquash_HasOneAdditiveFinalSchemaMigration()
+    {
+        using var context = fixture.CreateContext();
+        var migrations = context.GetService<IMigrationsAssembly>().Migrations.Keys.ToArray();
+
+        Assert.Equal([InitialMigration, InstantQuoteMigration], migrations);
+    }
+
+    [Fact]
+    public void InstantQuoteMigration_UpOperations_AreAdditiveWithoutDataTransformsOrCustomXmin()
+    {
+        using var context = fixture.CreateContext();
+        var assembly = context.GetService<IMigrationsAssembly>();
+        var migrationType = assembly.Migrations[InstantQuoteMigration];
+        var migration = assembly.CreateMigration(migrationType, context.Database.ProviderName!);
+
+        Assert.DoesNotContain(migration.UpOperations, operation => operation is DropColumnOperation
+            or DropTableOperation
+            or AlterColumnOperation
+            or SqlOperation);
+
+        var createdColumns = migration.UpOperations
+            .OfType<CreateTableOperation>()
+            .SelectMany(operation => operation.Columns)
+            .ToArray();
+        Assert.DoesNotContain(createdColumns, column => string.Equals(column.Name, "xmin", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task InstantQuoteMigration_RollbackThenUp_RecreatesFinalSchemaWithoutPendingChanges()
     {
         await using var context = fixture.CreateContext();
         await ResetSchemaAsync(context);
         try
         {
-            await context.GetService<IMigrator>().MigrateAsync("20260718135201_AddInstantQuoteUploadWorkflow");
-            await context.Database.ExecuteSqlRawAsync(
-                """
-                INSERT INTO "InstantQuoteUploadSession"
-                    ("Id", "OwnerSubject", "IsAuthenticated", "TokenHash", "ExpiresAt", "CreatedAt")
-                VALUES
-                    ('11111111-1111-1111-1111-111111111111', 'owner', TRUE,
-                     decode(repeat('01', 32), 'hex'), '2026-07-20T00:00:00Z', '2026-07-18T00:00:00Z');
+            var migrator = context.GetService<IMigrator>();
+            await migrator.MigrateAsync();
+            await migrator.MigrateAsync(InitialMigration);
+            Assert.False(await TableExistsAsync(context, "InstantQuoteUploadSession"));
 
-                INSERT INTO "InstantQuoteUploadFile"
-                    ("Id", "SessionId", "IdempotencyKeyHash", "RequestFingerprint", "OriginalFileName",
-                     "ValidatedExtension", "ValidatedContentType", "ExpectedSha256", "TemporaryObjectName",
-                     "State", "CreatedAt", "ModifiedAt")
-                VALUES
-                    ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111',
-                     decode(repeat('02', 32), 'hex'), repeat('a', 64), 'part.stl', '.stl', 'model/stl',
-                     repeat('b', 64), 'instant-quotation/temp/part.stl', 'Pending',
-                     '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z');
-                """);
+            await migrator.MigrateAsync();
 
-            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
-                context.GetService<IMigrator>().MigrateAsync());
-
-            Assert.Contains("must be empty", exception.MessageText, StringComparison.Ordinal);
-            await context.Database.OpenConnectionAsync();
-            await using var command = context.Database.GetDbConnection().CreateCommand();
-            command.CommandText = """
-                SELECT COUNT(*) FROM information_schema.columns
-                WHERE table_name = 'InstantQuoteUploadFile'
-                  AND column_name IN ('TemporaryBucket', 'FinalBucket', 'FinalizedQuotationRequestId');
-                """;
-            Assert.Equal(0, Convert.ToInt32(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture));
-            await context.Database.CloseConnectionAsync();
+            Assert.True(await TableExistsAsync(context, "InstantQuoteUploadSession"));
+            Assert.True(await TableExistsAsync(context, "InstantQuoteUploadFile"));
+            Assert.True(await TableExistsAsync(context, "InstantQuoteFinalization"));
+            Assert.False(context.Database.HasPendingModelChanges());
         }
         finally
         {
@@ -115,93 +125,16 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
         }
     }
 
-    [Fact]
-    public async Task ObjectAuthorityMigration_ConcurrentLegacyWriter_BlocksThenFailsClosed()
+    private static async Task<bool> TableExistsAsync(FileDbContext context, string tableName)
     {
-        await using var migrationContext = fixture.CreateContext();
-        await ResetSchemaAsync(migrationContext);
-        try
-        {
-            await migrationContext.GetService<IMigrator>().MigrateAsync("20260718135201_AddInstantQuoteUploadWorkflow");
-            await using var writerContext = fixture.CreateContext();
-            await using var writerTransaction = await writerContext.Database.BeginTransactionAsync();
-            await writerContext.Database.ExecuteSqlRawAsync(
-                """
-                INSERT INTO "InstantQuoteUploadSession"
-                    ("Id", "OwnerSubject", "IsAuthenticated", "TokenHash", "ExpiresAt", "CreatedAt")
-                VALUES
-                    ('11111111-1111-1111-1111-111111111111', 'owner', TRUE,
-                     decode(repeat('01', 32), 'hex'), '2026-07-20T00:00:00Z', '2026-07-18T00:00:00Z');
-
-                INSERT INTO "InstantQuoteUploadFile"
-                    ("Id", "SessionId", "IdempotencyKeyHash", "RequestFingerprint", "OriginalFileName",
-                     "ValidatedExtension", "ValidatedContentType", "ExpectedSha256", "TemporaryObjectName",
-                     "State", "CreatedAt", "ModifiedAt")
-                VALUES
-                    ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111',
-                     decode(repeat('02', 32), 'hex'), repeat('a', 64), 'part.stl', '.stl', 'model/stl',
-                     repeat('b', 64), 'instant-quotation/temp/part.stl', 'Pending',
-                     '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z');
-                """);
-
-            var migration = migrationContext.GetService<IMigrator>().MigrateAsync();
-            await Assert.ThrowsAsync<TimeoutException>(() => migration.WaitAsync(TimeSpan.FromMilliseconds(250)));
-            await writerTransaction.CommitAsync();
-
-            var exception = await Assert.ThrowsAsync<PostgresException>(() => migration);
-            Assert.Contains("must be empty", exception.MessageText, StringComparison.Ordinal);
-        }
-        finally
-        {
-            await migrationContext.Database.CloseConnectionAsync();
-            await ResetSchemaAsync(migrationContext);
-        }
-    }
-
-    [Fact]
-    public async Task IntegerQuotationAuthorityMigration_PreExistingFinalization_FailsClosedWithoutTypeConversion()
-    {
-        await using var context = fixture.CreateContext();
-        await ResetSchemaAsync(context);
-        try
-        {
-            await context.GetService<IMigrator>().MigrateAsync("20260718162404_AddInstantQuoteObjectBuckets");
-            await context.Database.ExecuteSqlRawAsync(
-                """
-                INSERT INTO "InstantQuoteUploadSession"
-                    ("Id", "OwnerSubject", "IsAuthenticated", "TokenHash", "ExpiresAt", "CreatedAt")
-                VALUES
-                    ('11111111-1111-1111-1111-111111111111', 'owner', TRUE,
-                     decode(repeat('01', 32), 'hex'), '2026-07-20T00:00:00Z', '2026-07-18T00:00:00Z');
-
-                INSERT INTO "InstantQuoteFinalization"
-                    ("Id", "SessionId", "IdempotencyKeyHash", "RequestFingerprint", "QuotationRequestId",
-                     "SelectedFileIds", "State", "CreatedAt", "ModifiedAt")
-                VALUES
-                    ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111',
-                     decode(repeat('02', 32), 'hex'), repeat('a', 64),
-                     '33333333-3333-3333-3333-333333333333', '{{}}'::uuid[], 'Pending',
-                     '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z');
-                """);
-
-            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
-                context.GetService<IMigrator>().MigrateAsync());
-
-            Assert.Contains("must be empty", exception.MessageText, StringComparison.Ordinal);
-            await context.Database.OpenConnectionAsync();
-            await using var command = context.Database.GetDbConnection().CreateCommand();
-            command.CommandText = """
-                SELECT data_type
-                FROM information_schema.columns
-                WHERE table_name = 'InstantQuoteFinalization' AND column_name = 'QuotationRequestId';
-                """;
-            Assert.Equal("uuid", await command.ExecuteScalarAsync());
-        }
-        finally
-        {
-            await context.Database.CloseConnectionAsync();
-            await ResetSchemaAsync(context);
-        }
+        await context.Database.OpenConnectionAsync();
+        await using var command = context.Database.GetDbConnection().CreateCommand();
+        command.CommandText = "SELECT to_regclass(@table_name) IS NOT NULL;";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "table_name";
+        parameter.Value = $"public.\"{tableName}\"";
+        command.Parameters.Add(parameter);
+        return (bool)(await command.ExecuteScalarAsync())!;
     }
 
     private static Task ResetSchemaAsync(FileDbContext context) =>
