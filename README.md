@@ -77,6 +77,70 @@ signer, and are issued only when clean `Upload` metadata exists.
 - Planned database: `legacy-postgres-file`
 - GCS authentication: Application Default Credentials / GKE Workload Identity only
 
+### Instant quotation runtime gates
+
+Instant-quotation writes require both independent gates to be true. `Enabled`
+publishes the workflow for the runtime; `WritesEnabled` grants that runtime
+permission to mutate PostgreSQL or GCS. A deployment with only one gate enabled
+remains write-disabled.
+
+| Environment variable | Default | Purpose and enforced boundary |
+| --- | --- | --- |
+| `InstantQuoteFiles__Enabled` | `false` | Makes the instant-quotation workflow available in this runtime. |
+| `InstantQuoteFiles__WritesEnabled` | `false` | Allows PostgreSQL and GCS mutations only when `Enabled` is also true. |
+| `InstantQuoteFiles__TemporaryBucket` | empty | Private quarantine bucket for immutable temporary generations. Required only for enabled writes. |
+| `InstantQuoteFiles__FinalBucket` | empty | Distinct private bucket for finalized objects. Required only for enabled writes. |
+| `InstantQuoteFiles__SessionLifetime` | `1.00:00:00` | Upload-session lifetime; accepted range is 5 minutes through 7 days. |
+| `InstantQuoteFiles__OperationTimeout` | `00:05:00` | Hard bound for one upload or finalization worker. |
+| `InstantQuoteFiles__OperationLeaseTimeout` | `00:10:00` | Inactivity lease before another worker may recover an operation; must cover the operation and cleanup bounds plus the safety margin. |
+| `InstantQuoteFiles__CleanupEnabled` | `false` | Runs durable temporary-generation cleanup. This is mandatory when writes are enabled. |
+| `InstantQuoteFiles__CleanupTimeout` | `00:00:15` | Independent bound for one cleanup deletion attempt. |
+| `InstantQuoteFiles__CleanupInterval` | `00:05:00` | Delay between cleanup sweeps, from 10 seconds through 1 day. |
+| `InstantQuoteFiles__CleanupRetryDelay` | `00:05:00` | Delay before retrying claimed or failed cleanup; must exceed the deletion timeout by at least 5 seconds. |
+| `InstantQuoteFiles__CleanupSessionExpiryGrace` | `00:15:00` | Grace period after session expiry before clean temporary uploads are eligible for removal. |
+| `InstantQuoteFiles__CleanupBatchSize` | `50` | Maximum temporary generations claimed per sweep, from 1 through 500. |
+
+`MalwareScanner__Host`, `MalwareScanner__Port`, and
+`MalwareScanner__TimeoutSeconds` configure ClamAV. Enabled writes require an
+available scanner whose `StreamMaxLength` and request timeout safely cover the
+200 MiB upload policy. Scanner timeout, error, malformed response, or unknown
+verdict fails closed; no object becomes final or readable.
+
+The temporary and final buckets must have Uniform Bucket-Level Access enabled and
+must not grant public access. The Workload Identity principal needs only bucket
+metadata access for readiness plus object create/get/delete permissions required
+for quarantine, generation-bound promotion, reconciliation, rollback, and cleanup.
+It does not need bucket create, object list, ACL, or public-link permissions. The
+temporary bucket must also have a lifecycle rule that eventually deletes abandoned
+objects as a defense-in-depth backstop; the durable cleanup worker remains the
+authoritative application cleanup path.
+
+`GET /file/readiness` includes the `instant_quote_files` check. When either write
+gate is false, that check is healthy with description `disabled` and neither
+`StorageClient`/ADC nor GCS or ClamAV is resolved or contacted. When both gates are
+true, readiness performs only bounded reads: bucket metadata/access for the exact
+temporary and final buckets and ClamAV `PING`. It never creates or lists buckets,
+writes objects, changes ACLs, or sends file content. Any dependency failure or
+timeout marks the check unhealthy.
+
+For local or Aspire contract/UI validation, keep the runtime explicitly bucketless
+and write-disabled:
+
+```text
+InstantQuoteFiles__Enabled=false
+InstantQuoteFiles__WritesEnabled=false
+InstantQuoteFiles__CleanupEnabled=false
+InstantQuoteFiles__TemporaryBucket=
+InstantQuoteFiles__FinalBucket=
+FileStorage__Enabled=false
+FileStorage__WritesEnabled=false
+MalwareScanner__Host=
+```
+
+This recipe starts without resolving ADC, opening a GCS or ClamAV connection, or
+writing production data. Use recording fakes or isolated disposable resources for
+enabled-runtime tests; never point local/Aspire validation at production buckets.
+
 GCS object privacy is enforced by private bucket IAM with Uniform Bucket-Level
 Access (UBLA). The service does not set per-object ACLs; enabled instant-quotation
 buckets must be distinct, lowercase DNS-compatible GCS names.
