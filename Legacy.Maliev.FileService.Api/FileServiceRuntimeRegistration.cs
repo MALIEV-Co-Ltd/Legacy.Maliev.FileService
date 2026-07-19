@@ -68,7 +68,6 @@ public static class FileServiceRuntimeRegistration
         {
             services.TryAddScoped<IInstantQuoteObjectStorage, InstantQuoteGoogleCloudObjectStorage>();
             services.TryAddScoped<IInstantQuoteFileSafetyScanner, ClamAvFileSafetyScanner>();
-            services.TryAddSingleton<IInstantQuoteObjectStorageReadinessProbe, InstantQuoteGoogleCloudReadinessProbe>();
             services.TryAddSingleton<IInstantQuoteScannerReadinessProbe, InstantQuoteClamAvReadinessProbe>();
             services.AddHealthChecks()
                 .AddCheck<InstantQuoteFilesReadinessHealthCheck>(

@@ -107,21 +107,26 @@ available scanner whose `StreamMaxLength` and request timeout safely cover the
 verdict fails closed; no object becomes final or readable.
 
 The temporary and final buckets must have Uniform Bucket-Level Access enabled and
-must not grant public access. The Workload Identity principal needs only bucket
-metadata access for readiness plus object create/get/delete permissions required
-for quarantine, generation-bound promotion, reconciliation, rollback, and cleanup.
-It does not need bucket create, object list, ACL, or public-link permissions. The
-temporary bucket must also have a lifecycle rule that eventually deletes abandoned
-objects as a defense-in-depth backstop; the durable cleanup worker remains the
-authoritative application cleanup path.
+must not grant public access. The Workload Identity principal needs only the object
+create/get/delete permissions required for quarantine, generation-bound promotion,
+reconciliation, rollback, and cleanup. Readiness does not require
+`storage.buckets.get` or any other additional permission. It does not need bucket
+create, object list, ACL, or public-link permissions. The temporary bucket must also
+have a lifecycle rule that eventually deletes abandoned objects as a
+defense-in-depth backstop; the durable cleanup worker remains the authoritative
+application cleanup path.
 
 `GET /file/readiness` includes the `instant_quote_files` check. When either write
 gate is false, that check is healthy with description `disabled` and neither
 `StorageClient`/ADC nor GCS or ClamAV is resolved or contacted. When both gates are
-true, readiness performs only bounded reads: bucket metadata/access for the exact
-temporary and final buckets and ClamAV `PING`. It never creates or lists buckets,
-writes objects, changes ACLs, or sends file content. Any dependency failure or
-timeout marks the check unhealthy.
+true, readiness validates the already-bound temporary/final bucket configuration,
+confirms the ADC-backed object-storage adapter is registered without resolving it,
+and performs a bounded ClamAV `PING`. The readiness path is non-billable and
+non-mutating: it does not resolve ADC, acquire a token, call GCS, create or list
+buckets, write objects, change ACLs, or send file content. GCS IAM and exact bucket
+access are exercised by real generation-bound workflow operations and external
+operational monitoring, not by readiness polling. Missing adapter registration,
+scanner failure, or timeout marks the check unhealthy.
 
 For local or Aspire contract/UI validation, keep the runtime explicitly bucketless
 and write-disabled:
