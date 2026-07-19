@@ -6,6 +6,7 @@ using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Npgsql;
@@ -686,6 +687,92 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
+    public async Task CleanupCompleted_PersistsAndIsNeverSelectedAgain()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = new InstantQuoteUploadSession(
+            Guid.NewGuid(), "owner", true, Hash("completed-token"), Now.AddHours(-2), Now.AddDays(-1));
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var upload = await AddCleanupUploadAsync(repository, session.Id, "completed-cleanup",
+            InstantQuoteWorkflowState.PayloadTooLarge, Now.AddHours(-2));
+        upload.GcsGeneration = null;
+        upload.TemporaryCleanupCompleted = true;
+        var stored = Assert.Single(await repository.GetSessionFilesAsync(session.Id, [upload.Id], CancellationToken.None));
+        await repository.SaveCleanupStateAsync(upload, stored.Version, CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        var candidates = await repository.GetTemporaryCleanupCandidatesAsync(
+            Now, Now.AddMinutes(-5), 10, CancellationToken.None);
+        var persisted = await context.InstantQuoteUploadFiles.AsNoTracking()
+            .SingleAsync(value => value.Id == upload.Id, CancellationToken.None);
+
+        Assert.True(persisted.TemporaryCleanupCompleted);
+        Assert.DoesNotContain(candidates, value => value.Upload.Id == upload.Id);
+    }
+
+    [Fact]
+    public async Task CleanupSweep_PostgreSqlNullMetadataCompletesOnceAndMetadataFailureRetriesExactDelete()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = new InstantQuoteUploadSession(
+            Guid.NewGuid(), "owner", true, Hash("sweep-token"), Now.AddHours(-2), Now.AddDays(-1));
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var absent = await AddCleanupUploadAsync(repository, session.Id, "absent-rejected",
+            InstantQuoteWorkflowState.PayloadTooLarge, Now.AddHours(-2));
+        var retry = await AddCleanupUploadAsync(repository, session.Id, "retry-rejected",
+            InstantQuoteWorkflowState.InvalidRequest, Now.AddHours(-2));
+        foreach (var upload in new[] { absent, retry })
+        {
+            var stored = Assert.Single(await repository.GetSessionFilesAsync(session.Id, [upload.Id], CancellationToken.None));
+            upload.GcsGeneration = null;
+            await repository.SaveCleanupStateAsync(upload, stored.Version, CancellationToken.None);
+        }
+        context.ChangeTracker.Clear();
+        var time = new FakeTimeProvider(Now);
+        var retryMetadata = new InstantQuoteObjectMetadata(
+            retry.TemporaryBucket, retry.TemporaryObjectName, 73, 42, new string('a', 64));
+        var storage = new SequencedCleanupStorage(
+            (absent.TemporaryObjectName, new object?[] { null }),
+            (retry.TemporaryObjectName, new object?[] { new IOException("metadata unavailable"), retryMetadata }));
+        var service = new InstantQuoteTemporaryObjectCleanupService(
+            repository,
+            storage,
+            new CleanScanner(),
+            Options.Create(new InstantQuoteFileOptions
+            {
+                Enabled = true,
+                WritesEnabled = true,
+                CleanupEnabled = true,
+                CleanupBatchSize = 10,
+                CleanupTimeout = TimeSpan.FromSeconds(5),
+                CleanupSessionExpiryGrace = TimeSpan.FromMinutes(15),
+                OperationLeaseTimeout = TimeSpan.FromMinutes(10),
+            }),
+            time,
+            NullLogger<InstantQuoteTemporaryObjectCleanupService>.Instance);
+
+        Assert.Equal(1, await service.RunOnceAsync(CancellationToken.None));
+        time.Advance(TimeSpan.FromMinutes(11));
+        var retryCandidates = await repository.GetTemporaryCleanupCandidatesAsync(
+            time.GetUtcNow(), time.GetUtcNow().Subtract(TimeSpan.FromMinutes(10)), 10, CancellationToken.None);
+        Assert.Equal(retry.Id, Assert.Single(retryCandidates).Upload.Id);
+
+        Assert.Equal(1, await service.RunOnceAsync(CancellationToken.None));
+        time.Advance(TimeSpan.FromMinutes(11));
+        Assert.Empty(await repository.GetTemporaryCleanupCandidatesAsync(
+            time.GetUtcNow(), time.GetUtcNow().Subtract(TimeSpan.FromMinutes(10)), 10, CancellationToken.None));
+        Assert.Equal((retry.TemporaryBucket, retry.TemporaryObjectName, 73L), Assert.Single(storage.Deletes));
+        var persisted = await context.InstantQuoteUploadFiles.AsNoTracking()
+            .ToDictionaryAsync(value => value.Id, CancellationToken.None);
+        Assert.True(persisted[absent.Id].TemporaryCleanupCompleted);
+        Assert.Equal(InstantQuoteWorkflowState.PayloadTooLarge, persisted[absent.Id].State);
+        Assert.True(persisted[retry.Id].TemporaryCleanupCompleted);
+        Assert.Equal(InstantQuoteWorkflowState.InvalidRequest, persisted[retry.Id].State);
+    }
+
+    [Fact]
     public async Task SaveCleanupState_ConcurrentClaim_XminAllowsOneWinnerWithoutChangingLegacyUpload()
     {
         Guid fileId;
@@ -831,6 +918,48 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             await content.CopyToAsync(Stream.Null, cancellationToken);
             return InstantQuoteScanResult.Clean;
         }
+    }
+
+    private sealed class SequencedCleanupStorage(
+        params (string ObjectName, object?[] Results)[] sequences) : IInstantQuoteObjectStorage
+    {
+        private readonly Dictionary<string, Queue<object?>> results = sequences.ToDictionary(
+            value => value.ObjectName,
+            value => new Queue<object?>(value.Results),
+            StringComparer.Ordinal);
+
+        public List<(string Bucket, string ObjectName, long Generation)> Deletes { get; } = [];
+
+        public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(
+            string bucket, string objectName, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = results[objectName].Dequeue();
+            return result is Exception exception
+                ? Task.FromException<InstantQuoteObjectMetadata?>(exception)
+                : Task.FromResult((InstantQuoteObjectMetadata?)result);
+        }
+
+        public Task DeleteGenerationAsync(
+            string bucket, string objectName, long generation, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Deletes.Add((bucket, objectName, generation));
+            return Task.CompletedTask;
+        }
+
+        public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(
+            string bucket, string objectName, Stream content, string expectedSha256,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task DownloadGenerationAsync(
+            string bucket, string objectName, long generation, Stream destination,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(
+            string sourceBucket, string sourceObjectName, long sourceGeneration,
+            string destinationBucket, string destinationObjectName,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class ConcurrentReconciliationStorage(

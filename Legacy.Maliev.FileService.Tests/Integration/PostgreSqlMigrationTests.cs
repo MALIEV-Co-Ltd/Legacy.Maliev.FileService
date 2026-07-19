@@ -68,6 +68,20 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
             await command.ExecuteScalarAsync(),
             System.Globalization.CultureInfo.InvariantCulture);
         Assert.Equal(2, integerAuthorityColumns);
+
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'InstantQuoteUploadFile'
+              AND column_name = 'TemporaryCleanupCompleted'
+              AND data_type = 'boolean'
+              AND column_default = 'false';
+            """;
+        var cleanupColumnCount = Convert.ToInt32(
+            await command.ExecuteScalarAsync(),
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(1, cleanupColumnCount);
     }
 
     [Fact]

@@ -93,6 +93,17 @@ public sealed class InstantQuoteOwnershipTests
         Assert.Equal("final-bucket", upload.FinalBucket);
     }
 
+    [Fact]
+    public void GcsGeneration_WhenTemporaryGenerationMayExist_ResetsCleanupCompletion()
+    {
+        var upload = CreateUpload(new string('a', 64));
+        upload.TemporaryCleanupCompleted = true;
+
+        upload.GcsGeneration = 42;
+
+        Assert.False(upload.TemporaryCleanupCompleted);
+    }
+
     private static InstantQuoteUploadSession CreateSession(
         byte[] tokenHash,
         string? ownerSubject,

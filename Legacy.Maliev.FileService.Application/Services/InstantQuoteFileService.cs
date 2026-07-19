@@ -171,14 +171,14 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         if (scan.SizeBytes != metadata.SizeBytes ||
             !FixedTimeHexEquals(scan.Sha256, upload.ExpectedSha256))
         {
-            await CleanupAsync(metadata);
+            await CleanupReconciledGenerationAsync(upload, metadata);
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
         }
         if (scan.Result == InstantQuoteScanResult.Unsafe)
         {
-            await CleanupAsync(metadata);
+            await CleanupReconciledGenerationAsync(upload, metadata);
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
@@ -194,7 +194,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
         catch (InstantQuoteUnsafeContentException)
         {
-            await CleanupAsync(metadata);
+            await CleanupReconciledGenerationAsync(upload, metadata);
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
             return await PersistReconciledUploadAsync(upload, reservation.Version, cancellationToken);
@@ -318,6 +318,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                 await _storage.DeleteGenerationAsync(
                     upload.TemporaryBucket, upload.TemporaryObjectName, upload.GcsGeneration.Value, cancellationToken);
                 upload.GcsGeneration = null;
+                upload.TemporaryCleanupCompleted = true;
                 upload.ModifiedAt = _timeProvider.GetUtcNow();
                 await _repository.SaveUploadAsync(upload, removalVersion, cancellationToken);
             }
@@ -476,6 +477,11 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             await _repository.SaveFinalizationAsync(reservation.Record, reservation.Version, cancellationToken);
             return new FinalizeInstantQuoteFilesResponse(reservation.Record.QuotationRequestId, results);
         }
+        catch (OperationCanceledException)
+        {
+            await PersistUnknownFinalizationAsync(reservation);
+            throw;
+        }
         catch (InstantQuoteAmbiguousOutcomeException)
         {
             await PersistUnknownFinalizationAsync(reservation);
@@ -499,7 +505,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         reservation.Record.ModifiedAt = _timeProvider.GetUtcNow();
         try
         {
-            await _repository.SaveFinalizationAsync(reservation.Record, reservation.Version, CancellationToken.None);
+            using var save = new CancellationTokenSource(_options.CleanupTimeout, _timeProvider);
+            await _repository.SaveFinalizationAsync(reservation.Record, reservation.Version, save.Token);
         }
         catch (Exception)
         {
@@ -576,7 +583,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             if (stored is not null)
             {
-                await CleanupAsync(stored);
+                await CleanupReconciledGenerationAsync(upload, stored);
             }
             upload.State = InstantQuoteWorkflowState.Failed;
             upload.ModifiedAt = _timeProvider.GetUtcNow();
@@ -696,16 +703,30 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
     }
 
-    private async Task CleanupAsync(InstantQuoteObjectMetadata stored)
+    private async Task<bool> CleanupAsync(InstantQuoteObjectMetadata stored)
     {
         using var cleanup = new CancellationTokenSource(_options.CleanupTimeout, _timeProvider);
         try
         {
             await _storage.DeleteGenerationAsync(stored.Bucket, stored.ObjectName, stored.Generation, cleanup.Token);
+            return true;
         }
         catch (Exception)
         {
             // Cleanup is bounded and best effort; the failed state remains non-authoritative.
+            return false;
+        }
+    }
+
+    private async Task CleanupReconciledGenerationAsync(
+        InstantQuoteUploadFile upload,
+        InstantQuoteObjectMetadata metadata)
+    {
+        upload.GcsGeneration = metadata.Generation;
+        upload.TemporaryCleanupCompleted = await CleanupAsync(metadata);
+        if (upload.TemporaryCleanupCompleted)
+        {
+            upload.GcsGeneration = null;
         }
     }
 
@@ -721,7 +742,15 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             if (metadata is not null)
             {
                 upload.GcsGeneration = metadata.Generation;
-                await CleanupAsync(metadata);
+                upload.TemporaryCleanupCompleted = await CleanupAsync(metadata);
+                if (upload.TemporaryCleanupCompleted)
+                {
+                    upload.GcsGeneration = null;
+                }
+            }
+            else
+            {
+                upload.TemporaryCleanupCompleted = true;
             }
         }
         catch (Exception)
