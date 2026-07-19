@@ -50,7 +50,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 {
                     continue;
                 }
-                await ReconcileRecoverableAsync(upload, recoveryClaimVersion, cancellationToken);
+                if (await ReconcileRecoverableAsync(upload, recoveryClaimVersion, cancellationToken))
+                {
+                    completed++;
+                }
                 continue;
             }
             if (upload.State is InstantQuoteWorkflowState.PayloadTooLarge or InstantQuoteWorkflowState.InvalidRequest &&
@@ -66,7 +69,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 {
                     continue;
                 }
-                await DiscoverAndDeleteRejectedAsync(upload, discoveryClaimVersion, cancellationToken);
+                if (await DiscoverAndDeleteRejectedAsync(upload, discoveryClaimVersion, cancellationToken))
+                {
+                    completed++;
+                }
                 continue;
             }
             if (upload.GcsGeneration is null)
@@ -115,6 +121,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             }
 
             upload.GcsGeneration = null;
+            upload.TemporaryCleanupCompleted = true;
             upload.ModifiedAt = timeProvider.GetUtcNow();
             try
             {
@@ -133,7 +140,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         return completed;
     }
 
-    private async Task ReconcileRecoverableAsync(
+    private async Task<bool> ReconcileRecoverableAsync(
         InstantQuoteUploadFile upload,
         uint claimedVersion,
         CancellationToken cancellationToken)
@@ -149,9 +156,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             if (metadata is null)
             {
                 upload.State = InstantQuoteWorkflowState.Failed;
+                upload.TemporaryCleanupCompleted = true;
                 upload.ModifiedAt = timeProvider.GetUtcNow();
                 await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
-                return;
+                return true;
             }
 
             upload.GcsGeneration = metadata.Generation;
@@ -160,7 +168,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 upload.State = InstantQuoteWorkflowState.Failed;
                 upload.ModifiedAt = timeProvider.GetUtcNow();
                 await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
-                return;
+                return false;
             }
 
             var outcome = await ScanGenerationAsync(metadata, linked.Token);
@@ -190,6 +198,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             }
             upload.ModifiedAt = timeProvider.GetUtcNow();
             await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
+            return false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -197,6 +206,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         }
         catch (InstantQuoteConcurrencyException)
         {
+            return false;
         }
         catch (Exception exception)
         {
@@ -204,6 +214,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 "Temporary generation reconciliation failed for upload {UploadId} in session {SessionId}",
                 upload.Id,
                 upload.SessionId);
+            return false;
         }
     }
 
@@ -253,7 +264,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         }
     }
 
-    private async Task DiscoverAndDeleteRejectedAsync(
+    private async Task<bool> DiscoverAndDeleteRejectedAsync(
         InstantQuoteUploadFile upload,
         uint claimedVersion,
         CancellationToken cancellationToken)
@@ -266,13 +277,18 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 upload.TemporaryBucket, upload.TemporaryObjectName, linked.Token);
             if (metadata is null)
             {
-                return;
+                upload.TemporaryCleanupCompleted = true;
+                upload.ModifiedAt = timeProvider.GetUtcNow();
+                await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
+                return true;
             }
             upload.GcsGeneration = metadata.Generation;
             await storage.DeleteGenerationAsync(metadata.Bucket, metadata.ObjectName, metadata.Generation, linked.Token);
             upload.GcsGeneration = null;
+            upload.TemporaryCleanupCompleted = true;
             upload.ModifiedAt = timeProvider.GetUtcNow();
             await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
+            return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -284,6 +300,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 "Rejected temporary generation discovery failed for upload {UploadId} in session {SessionId}",
                 upload.Id,
                 upload.SessionId);
+            return false;
         }
     }
 

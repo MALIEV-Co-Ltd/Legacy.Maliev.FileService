@@ -222,12 +222,30 @@ public sealed class RuntimeSafetyTests
             new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
             new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
             new("InstantQuoteFiles:CleanupEnabled", "true"),
-            new("InstantQuoteFiles:OperationTimeout", "00:09:56"),
+            new("InstantQuoteFiles:OperationTimeout", "00:09:41"),
+            new("InstantQuoteFiles:CleanupTimeout", "00:00:15"),
             new("InstantQuoteFiles:OperationLeaseTimeout", "00:10:00"),
         ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
 
         Assert.Throws<OptionsValidationException>(() => cleanupDisabled.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
         Assert.Throws<OptionsValidationException>(() => noMargin.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+    }
+
+    [Fact]
+    public void InstantQuoteOptionsValidator_LeaseCoversOperationCleanupAndFiveSecondSafetyMargin()
+    {
+        using var exactBoundary = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"), new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+            new("InstantQuoteFiles:CleanupEnabled", "true"),
+            new("InstantQuoteFiles:OperationTimeout", "00:00:40"),
+            new("InstantQuoteFiles:CleanupTimeout", "00:00:15"),
+            new("InstantQuoteFiles:OperationLeaseTimeout", "00:01:00"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.NotNull(exactBoundary.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
     }
 
     [Theory]

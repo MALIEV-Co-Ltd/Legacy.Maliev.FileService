@@ -41,6 +41,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         Assert.Equal(17U, repository.Saves[0].ExpectedVersion);
         Assert.Equal(("temporary-bucket", upload.TemporaryObjectName, 42L), Assert.Single(storage.Deletes));
         Assert.Null(repository.Saves[1].Generation);
+        Assert.True(repository.Saves[1].TemporaryCleanupCompleted);
         Assert.Equal(18U, repository.Saves[1].ExpectedVersion);
     }
 
@@ -69,10 +70,42 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
 
         var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(0, cleaned);
+        Assert.Equal(1, cleaned);
         Assert.Equal(2, repository.Saves.Count);
         Assert.Equal(InstantQuoteWorkflowState.Failed, repository.Saves[^1].State);
+        Assert.True(repository.Saves[^1].TemporaryCleanupCompleted);
         Assert.Empty(storage.Deletes);
+    }
+
+    [Fact]
+    public async Task RunOnce_RejectedUploadWithoutObject_MarksCleanupCompleteAndPreservesReplayState()
+    {
+        var upload = CreateUpload(InstantQuoteWorkflowState.PayloadTooLarge);
+        upload.GcsGeneration = null;
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage();
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(1, cleaned);
+        Assert.Equal(InstantQuoteWorkflowState.PayloadTooLarge, upload.State);
+        Assert.True(upload.TemporaryCleanupCompleted);
+        Assert.Empty(storage.Deletes);
+    }
+
+    [Fact]
+    public async Task RunOnce_RejectedUploadMetadataFailure_RetainsIncompleteCleanupForRetry()
+    {
+        var upload = CreateUpload(InstantQuoteWorkflowState.InvalidRequest);
+        upload.GcsGeneration = null;
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage { MetadataException = new IOException("metadata unavailable") };
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, cleaned);
+        Assert.False(upload.TemporaryCleanupCompleted);
+        Assert.Single(repository.Saves);
     }
 
     [Theory]
@@ -118,6 +151,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         Assert.Equal((upload.TemporaryBucket, upload.TemporaryObjectName, 42L), Assert.Single(storage.Deletes));
         var completed = repository.Saves[^1];
         Assert.Equal(InstantQuoteWorkflowState.Finalized, completed.State);
+        Assert.True(upload.TemporaryCleanupCompleted);
         Assert.Equal("final-bucket", upload.FinalBucket);
         Assert.Equal("instant-quotation/1001/final.stl", upload.FinalObjectName);
         Assert.Equal(1001, upload.FinalizedQuotationRequestId);
@@ -175,7 +209,9 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         : IInstantQuoteCleanupRepository
     {
         public int QueryCount { get; private set; }
-        public List<(InstantQuoteWorkflowState State, long? Generation, DateTimeOffset ModifiedAt, uint ExpectedVersion)> Saves { get; } = [];
+        public List<(InstantQuoteWorkflowState State, long? Generation, bool TemporaryCleanupCompleted,
+            DateTimeOffset ModifiedAt, uint ExpectedVersion)> Saves
+        { get; } = [];
 
         public Task<IReadOnlyList<InstantQuoteStoredUpload>> GetTemporaryCleanupCandidatesAsync(
             DateTimeOffset expiredBefore,
@@ -192,7 +228,8 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
             uint expectedVersion,
             CancellationToken cancellationToken)
         {
-            Saves.Add((upload.State, upload.GcsGeneration, upload.ModifiedAt, expectedVersion));
+            Saves.Add((upload.State, upload.GcsGeneration, upload.TemporaryCleanupCompleted,
+                upload.ModifiedAt, expectedVersion));
             return Task.FromResult(expectedVersion + 1);
         }
     }
@@ -202,6 +239,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         InstantQuoteObjectMetadata? metadata = null) : IInstantQuoteObjectStorage
     {
         public Exception? DeleteException { get; init; }
+        public Exception? MetadataException { get; init; }
         public Action? AfterDelete { get; init; }
         public List<(string Bucket, string ObjectName, long Generation)> Deletes { get; } = [];
 
@@ -219,7 +257,9 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(string bucket, string objectName, Stream content,
             string expectedSha256, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(string bucket, string objectName,
-            CancellationToken cancellationToken) => Task.FromResult(metadata);
+            CancellationToken cancellationToken) => MetadataException is null
+                ? Task.FromResult(metadata)
+                : Task.FromException<InstantQuoteObjectMetadata?>(MetadataException);
         public async Task DownloadGenerationAsync(string bucket, string objectName, long generation, Stream destination,
             CancellationToken cancellationToken)
         {

@@ -121,6 +121,11 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                     b.Property<long?>("GcsGeneration")
                         .HasColumnType("bigint");
 
+                    b.Property<bool>("TemporaryCleanupCompleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<byte[]>("IdempotencyKeyHash")
                         .IsRequired()
                         .HasColumnType("bytea");

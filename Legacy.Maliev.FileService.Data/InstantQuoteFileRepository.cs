@@ -170,7 +170,7 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
                 from upload in dbContext.InstantQuoteUploadFiles.AsNoTracking()
                 join session in dbContext.InstantQuoteUploadSessions.AsNoTracking()
                     on upload.SessionId equals session.Id
-                where upload.ModifiedAt <= retryBefore &&
+                where !upload.TemporaryCleanupCompleted && upload.ModifiedAt <= retryBefore &&
                     (upload.State == InstantQuoteWorkflowState.Pending ||
                      upload.State == InstantQuoteWorkflowState.Uploaded ||
                      upload.State == InstantQuoteWorkflowState.Unknown ||

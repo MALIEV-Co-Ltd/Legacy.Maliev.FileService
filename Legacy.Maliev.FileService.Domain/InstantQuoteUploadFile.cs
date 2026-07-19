@@ -5,6 +5,7 @@ public sealed class InstantQuoteUploadFile
 {
     private string? actualSha256;
     private int? finalizedQuotationRequestId;
+    private long? gcsGeneration;
 
     private InstantQuoteUploadFile()
     {
@@ -77,7 +78,20 @@ public sealed class InstantQuoteUploadFile
     /// <summary>Gets or sets the authoritative object size.</summary>
     public long? ActualSizeBytes { get; set; }
     /// <summary>Gets or sets the authoritative GCS generation.</summary>
-    public long? GcsGeneration { get; set; }
+    public long? GcsGeneration
+    {
+        get => gcsGeneration;
+        set
+        {
+            gcsGeneration = value;
+            if (value is not null)
+            {
+                TemporaryCleanupCompleted = false;
+            }
+        }
+    }
+    /// <summary>Gets or sets whether temporary-object absence has been authoritatively confirmed.</summary>
+    public bool TemporaryCleanupCompleted { get; set; }
     /// <summary>Gets the durable private bucket containing the temporary generation.</summary>
     public string TemporaryBucket { get; private set; } = string.Empty;
     /// <summary>Gets the opaque temporary object name.</summary>

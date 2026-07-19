@@ -71,6 +71,7 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                     ActualSha256 = table.Column<string>(type: "character(64)", fixedLength: true, maxLength: 64, nullable: true),
                     ActualSizeBytes = table.Column<long>(type: "bigint", nullable: true),
                     GcsGeneration = table.Column<long>(type: "bigint", nullable: true),
+                    TemporaryCleanupCompleted = table.Column<bool>(type: "boolean", nullable: false, defaultValue: false),
                     TemporaryBucket = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: false),
                     TemporaryObjectName = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: false),
                     FinalBucket = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: true),
