@@ -72,6 +72,7 @@ public sealed class InstantQuoteAuthorizationContractTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
+        builder.Services.AddApiVersioning();
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
         builder.Services.AddAuthorization();

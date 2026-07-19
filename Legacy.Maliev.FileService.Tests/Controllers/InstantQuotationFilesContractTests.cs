@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Asp.Versioning;
 using Legacy.Maliev.FileService.Api.Controllers;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -28,13 +29,15 @@ public sealed class InstantQuotationFilesContractTests
     [Fact]
     public void Controller_PublishesExactAuthenticatedRoutesAndPermission()
     {
-        Assert.Equal("file/v1/instant-quotation", typeof(InstantQuotationFilesController).GetCustomAttribute<RouteAttribute>()?.Template);
+        Assert.Equal("file/v{version:apiVersion}/instant-quotation", typeof(InstantQuotationFilesController).GetCustomAttribute<RouteAttribute>()?.Template);
+        var apiVersion = Assert.Single(typeof(InstantQuotationFilesController).GetCustomAttributes<ApiVersionAttribute>());
+        Assert.Equal(new ApiVersion(1, 0), Assert.Single(apiVersion.Versions));
         Assert.NotNull(typeof(InstantQuotationFilesController).GetCustomAttribute<AuthorizeAttribute>());
 
-        AssertMethod(nameof(InstantQuotationFilesController.CreateSessionAsync), "sessions");
-        AssertMethod(nameof(InstantQuotationFilesController.UploadAsync), "sessions/{sessionId}/files");
-        AssertMethod(nameof(InstantQuotationFilesController.FinalizeAsync), "sessions/{sessionId}/finalizations");
-        AssertMethod(nameof(InstantQuotationFilesController.RemoveAsync), "sessions/{sessionId}/files/{fileId}");
+        AssertMethod(nameof(InstantQuotationFilesController.CreateSessionAsync), "sessions", "legacy-file.uploads.create");
+        AssertMethod(nameof(InstantQuotationFilesController.UploadAsync), "sessions/{sessionId}/files", "legacy-file.uploads.create");
+        AssertMethod(nameof(InstantQuotationFilesController.FinalizeAsync), "sessions/{sessionId}/finalizations", "legacy-file.uploads.create");
+        AssertMethod(nameof(InstantQuotationFilesController.RemoveAsync), "sessions/{sessionId}/files/{fileId}", "legacy-file.uploads.delete");
     }
 
     [Fact]
@@ -142,6 +145,7 @@ public sealed class InstantQuotationFilesContractTests
 
         var created = Assert.IsType<CreatedResult>(result.Result);
         Assert.Equal(StatusCodes.Status201Created, created.StatusCode);
+        Assert.Equal($"/file/v1/instant-quotation/sessions/{SessionId}", created.Location);
         Assert.Equal("https://issuer.example|customer-42", service.Owner?.PrincipalId);
         Assert.True(service.Owner?.IsAuthenticated);
     }
@@ -237,6 +241,7 @@ public sealed class InstantQuotationFilesContractTests
 
         var created = Assert.IsType<CreatedResult>(result.Result);
         Assert.Equal(StatusCodes.Status201Created, created.StatusCode);
+        Assert.Equal($"/file/v1/instant-quotation/sessions/{SessionId}/files/{FileId}", created.Location);
         Assert.Equal("files", reader.RequiredPartName);
         Assert.Equal("part.stl", service.UploadMetadata?.FileName);
     }
@@ -309,10 +314,16 @@ public sealed class InstantQuotationFilesContractTests
         IInstantQuoteFileService service,
         IInstantQuoteMultipartReader? reader = null)
     {
-        return new(service, reader ?? new StubMultipartReader())
+        var controller = new InstantQuotationFilesController(service, reader ?? new StubMultipartReader())
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext(),
+                RouteData = new Microsoft.AspNetCore.Routing.RouteData(),
+            },
         };
+        controller.RouteData.Values["version"] = "1.0";
+        return controller;
     }
 
     private static ClaimsPrincipal Principal(params Claim[] claims) =>
@@ -345,6 +356,7 @@ public sealed class InstantQuotationFilesContractTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
+        builder.Services.AddApiVersioning();
         builder.Services.AddControllers()
             .AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
         builder.Services.AddAuthorization();
@@ -361,13 +373,13 @@ public sealed class InstantQuotationFilesContractTests
         return app;
     }
 
-    private static void AssertMethod(string name, string template)
+    private static void AssertMethod(string name, string template, string expectedPermission)
     {
         var method = typeof(InstantQuotationFilesController).GetMethod(name)!;
         var route = Assert.Single(method.GetCustomAttributes().OfType<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>());
         Assert.Equal(template, route.Template);
         var permission = Assert.Single(method.GetCustomAttributes<RequirePermissionAttribute>());
-        Assert.Equal("legacy-file.uploads.create", permission.Permission);
+        Assert.Equal(expectedPermission, permission.Permission);
     }
 
     private sealed class StubMultipartReader : IInstantQuoteMultipartReader

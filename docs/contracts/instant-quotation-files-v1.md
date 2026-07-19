@@ -8,7 +8,7 @@ All JSON property names are camelCase. Customer filenames are metadata only and 
 
 Browsers do not call FileService and never receive a FileService JWT, service credential, Google credential, bucket, or object name. The browser calls the same-origin Web BFF using the Web application's anonymous or member session and normal request-forgery protections.
 
-- For both anonymous and member workflows, the BFF calls FileService with the Web service's short-lived platform JWT and `legacy-file.uploads.create` permission. The current Web integration does not delegate the member subject to FileService.
+- For both anonymous and member workflows, the BFF calls FileService with the Web service's short-lived platform JWT. Session creation, upload, and finalization require `legacy-file.uploads.create`; removal requires `legacy-file.uploads.delete`. The current Web integration does not delegate the member subject to FileService.
 - FileService binds the upload session to that Web service identity and the opaque quote-session capability. The BFF separately retains and binds the capability in server-side session state for the correct anonymous or member Web session.
 - The BFF proxies upload, removal, and finalization. It binds the FileService session to the same Web quote session and does not place `X-Quote-Session-Token` in browser storage or URLs.
 - Google Cloud Storage uses ADC/Workload Identity only inside FileService. Neither Web nor a browser supplies Google credentials.
@@ -137,6 +137,8 @@ The value is not a UUID, quote-session ID, hash, string encoding, submission ide
 
 Required header: `X-Quote-Session-Token`.
 
+Required platform permission: `legacy-file.uploads.delete`. The three POST operations use `legacy-file.uploads.create`.
+
 Success: `204 No Content`. Removal is idempotent: retrying an already removed file returns 204 without another storage operation.
 
 | Recorded file state | Removal result |
@@ -158,7 +160,7 @@ Errors use `application/problem+json` and RFC ProblemDetails with a stable `code
 |---:|---|---|
 | 400 | `validation_error` | Headers, filename metadata, multipart shape, digest syntax, or selection is invalid. |
 | 401 | `platform_authentication_required` | The caller has no accepted authenticated platform identity. |
-| 403 | `permission_forbidden` | The authenticated platform identity lacks `legacy-file.uploads.create`. |
+| 403 | `permission_forbidden` | The authenticated platform identity lacks the operation's required create or delete permission. |
 | 403 | `session_forbidden` | The session token cannot authorize the requested session. |
 | 409 | `idempotency_conflict` | The same idempotency key was already bound to a different request fingerprint. |
 | 409 | `upload_in_progress` | An identical upload or finalization reservation is still pending. |

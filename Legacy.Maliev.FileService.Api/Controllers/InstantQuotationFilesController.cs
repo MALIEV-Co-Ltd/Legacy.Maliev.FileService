@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using Asp.Versioning;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -13,7 +14,8 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 
 /// <summary>Publishes the Web-facing instant-quotation upload contract.</summary>
 [ApiController]
-[Route("file/v1/instant-quotation")]
+[ApiVersion("1.0")]
+[Route("file/v{version:apiVersion}/instant-quotation")]
 [Authorize]
 [InstantQuoteValidationProblem]
 [InstantQuoteProblemContract]
@@ -29,7 +31,7 @@ public sealed class InstantQuotationFilesController(
     {
         return ExecuteAsync(
             () => service.CreateInstantQuoteSessionAsync(ResolveOwner(), cancellationToken),
-            response => Created($"/file/v1/instant-quotation/sessions/{response.SessionId}", response));
+            response => Created(InstantQuoteLocation($"sessions/{response.SessionId}"), response));
     }
 
     /// <summary>Uploads exactly one streamed multipart section named files.</summary>
@@ -61,7 +63,7 @@ public sealed class InstantQuotationFilesController(
                 await file.CompleteAsync(cancellationToken);
                 return response;
             },
-            response => Created($"/file/v1/instant-quotation/sessions/{sessionId}/files/{response.FileId}", response));
+            response => Created(InstantQuoteLocation($"sessions/{sessionId}/files/{response.FileId}"), response));
     }
 
     /// <summary>Finalizes selected clean files for a quotation request.</summary>
@@ -82,7 +84,7 @@ public sealed class InstantQuotationFilesController(
 
     /// <summary>Idempotently removes one pre-finalization upload.</summary>
     [HttpDelete("sessions/{sessionId}/files/{fileId}")]
-    [RequirePermission(FilePermissions.Create)]
+    [RequirePermission(FilePermissions.Delete)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> RemoveAsync(
         [FromRoute] Guid sessionId,
@@ -110,6 +112,19 @@ public sealed class InstantQuotationFilesController(
                 ?? User.FindFirst("azp")?.Value
             : $"{User.FindFirst("iss")?.Value ?? subject.Issuer}|{subject.Value}";
         return new InstantQuoteOwner(principalId, User.Identity?.IsAuthenticated == true);
+    }
+
+    private string InstantQuoteLocation(string relativePath)
+    {
+        if (RouteData.Values.TryGetValue("version", out var routeVersion) &&
+            routeVersion is not null &&
+            int.TryParse(routeVersion.ToString()?.Split('.', 2)[0], out var requestedMajorVersion) &&
+            requestedMajorVersion > 0)
+        {
+            return $"/file/v{requestedMajorVersion}/instant-quotation/{relativePath}";
+        }
+
+        throw new InvalidOperationException("The requested API major version is unavailable.");
     }
 
     private static async Task<ActionResult<T>> ExecuteAsync<T>(
