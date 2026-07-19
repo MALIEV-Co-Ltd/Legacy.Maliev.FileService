@@ -27,6 +27,7 @@ public sealed class RuntimeSafetyTests
         Assert.False(instant.WritesEnabled);
         Assert.Empty(instant.TemporaryBucket);
         Assert.Empty(instant.FinalBucket);
+        Assert.False(legacy.Enabled);
         Assert.False(legacy.WritesEnabled);
         Assert.Empty(legacy.AllowedBuckets);
     }
@@ -99,6 +100,20 @@ public sealed class RuntimeSafetyTests
             null,
             [new MemoryUploadFile()],
             CancellationToken.None));
+    }
+
+    [Fact]
+    public void AddFileServiceRuntime_LegacyEnabledFalseWritesTrue_DoesNotRegisterAdcOrRealBoundaries()
+    {
+        using var provider = CreateServices(
+        [
+            new("FileStorage:Enabled", "false"),
+            new("FileStorage:WritesEnabled", "true"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Null(provider.GetService<StorageClient>());
+        Assert.IsType<DisabledObjectStorage>(provider.GetRequiredService<IObjectStorage>());
+        Assert.IsType<DisabledFileSafetyScanner>(provider.GetRequiredService<IFileSafetyScanner>());
     }
 
     [Fact]

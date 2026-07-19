@@ -138,6 +138,7 @@ public sealed class FileApplicationServiceTests
     {
         var options = Options.Create(new FileStorageOptions
         {
+            Enabled = true,
             WritesEnabled = true,
             AllowedBuckets = ["maliev.com"],
             QuarantinePrefix = "_quarantine",
@@ -150,6 +151,7 @@ public sealed class FileApplicationServiceTests
             repository,
             new ObjectNamePolicy(options, time),
             options,
+            new LegacyFileRuntimeGate(options),
             NullLogger<FileApplicationService>.Instance);
     }
 

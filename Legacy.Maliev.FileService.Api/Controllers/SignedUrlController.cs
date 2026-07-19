@@ -1,4 +1,5 @@
 using Legacy.Maliev.FileService.Api.Authorization;
+using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Services;
 using Maliev.Aspire.ServiceDefaults.Authorization;
@@ -31,6 +32,10 @@ public sealed class SignedUrlController(IFileService service) : ControllerBase
         catch (FileUploadValidationException)
         {
             return BadRequest();
+        }
+        catch (MalwareScannerUnavailableException)
+        {
+            return LegacyFileProblem.Unavailable();
         }
     }
 }
