@@ -31,6 +31,42 @@ public sealed class InstantQuoteWholeStreamValidationReadStreamTests
         await DrainAsync(InstantQuoteWholeStreamValidation.Wrap(".gltf", new ChunkedNonSeekableStream(bytes, 1)));
     }
 
+    [Fact]
+    public async Task Read_GltfCompleteJsonGrammarAcrossSingleByteChunks_AcceptsDocument()
+    {
+        var document =
+            "{\"asset\":{\"version\":\"2.0\",\"generator\":\"MALIEV ไทย 🚀\"}," +
+            "\"extras\":{\"escaped\":\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"," +
+            "\"values\":[true,false,null,-0,12,1.25,1e+3,-2E-2],\"empty\":[]}}";
+        var bytes = Encoding.UTF8.GetBytes(document);
+
+        var read = await DrainAsync(
+            InstantQuoteWholeStreamValidation.Wrap(".gltf", new ChunkedNonSeekableStream(bytes, 1)));
+
+        Assert.Equal(bytes.Length, read);
+    }
+
+    [Fact]
+    public void Read_GltfThroughSynchronousStream_ValidatesCompleteDocument()
+    {
+        var bytes = Encoding.UTF8.GetBytes("{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"mesh\":0}]}");
+        using var stream = InstantQuoteWholeStreamValidation.Wrap(".gltf", new MemoryStream(bytes));
+        var buffer = new byte[7];
+        var total = 0;
+
+        while (true)
+        {
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+            {
+                break;
+            }
+            total += read;
+        }
+
+        Assert.Equal(bytes.Length, total);
+    }
+
     [Theory]
     [InlineData("{\"scene\":0}")]
     [InlineData("{\"asset\":null}")]
@@ -57,6 +93,47 @@ public sealed class InstantQuoteWholeStreamValidationReadStreamTests
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => DrainAsync(stream));
     }
 
+    [Theory]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"value\":-}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"value\":01}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"value\":1.}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"value\":1e}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"value\":1e+}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"value\":truX}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"items\":[1 2]}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"items\":[1,]}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"items\":{]}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"bad\\q\":1}")]
+    [InlineData("{\"asset\":{\"version\":\"2.0\"},\"bad\\u12xz\":1}")]
+    public async Task Read_GltfMalformedJsonTokens_RejectsFailClosed(string document)
+    {
+        var stream = InstantQuoteWholeStreamValidation.Wrap(
+            ".gltf", new ChunkedNonSeekableStream(Encoding.UTF8.GetBytes(document), 1));
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => DrainAsync(stream, bufferSize: 3));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidUtf8Documents))]
+    public async Task Read_GltfInvalidUtf8_RejectsFailClosed(byte[] document)
+    {
+        var stream = InstantQuoteWholeStreamValidation.Wrap(
+            ".gltf", new ChunkedNonSeekableStream(document, 1));
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => DrainAsync(stream, bufferSize: 2));
+    }
+
+    [Fact]
+    public async Task Read_GltfNestingAboveBound_RejectsBeforeResourceGrowth()
+    {
+        var document = "{\"asset\":{\"version\":\"2.0\"},\"extras\":" +
+            new string('[', 257) + "0" + new string(']', 257) + "}";
+        var stream = InstantQuoteWholeStreamValidation.Wrap(
+            ".gltf", new ChunkedNonSeekableStream(Encoding.UTF8.GetBytes(document), 17));
+
+        await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => DrainAsync(stream));
+    }
+
     [Fact]
     public async Task Read_LargeNonSeekableGltf_UsesCallerBoundedReadsAndDoesNotBufferLongTokens()
     {
@@ -79,6 +156,28 @@ public sealed class InstantQuoteWholeStreamValidationReadStreamTests
         var wrapped = InstantQuoteWholeStreamValidation.Wrap(".stl", source);
 
         Assert.Same(source, wrapped);
+    }
+
+    public static TheoryData<byte[]> InvalidUtf8Documents()
+    {
+        static byte[] WithInvalidString(params byte[] invalidBytes) =>
+        [
+            .. "{\"asset\":{\"version\":\"2.0\"},\"extras\":\""u8.ToArray(),
+            .. invalidBytes,
+            .. "\"}"u8.ToArray(),
+        ];
+
+        return new TheoryData<byte[]>
+        {
+            WithInvalidString(0x01),
+            WithInvalidString(0x80),
+            WithInvalidString(0xc0, 0x80),
+            WithInvalidString(0xe0, 0x80, 0x80),
+            WithInvalidString(0xed, 0xa0, 0x80),
+            WithInvalidString(0xf0, 0x80, 0x80, 0x80),
+            WithInvalidString(0xf4, 0x90, 0x80, 0x80),
+            WithInvalidString(0xf5, 0x80, 0x80, 0x80),
+        };
     }
 
     private static async Task<long> DrainAsync(Stream stream, int bufferSize = 257)
