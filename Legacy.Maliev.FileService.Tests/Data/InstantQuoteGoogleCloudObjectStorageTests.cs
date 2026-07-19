@@ -205,6 +205,43 @@ public sealed class InstantQuoteGoogleCloudObjectStorageTests
     }
 
     [Fact]
+    public async Task PromoteGenerationAsync_MalformedReturnedMetadata_DeletesExactDestinationGenerationAndThrows()
+    {
+        var client = new RecordingClient
+        {
+            CopyHandler = (_, _, _, _, _, _) => Task.FromResult(Object("wrong-bucket", "destination", 102, 4, Sha256)),
+        };
+        var storage = new InstantQuoteGoogleCloudObjectStorage(client);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => storage.PromoteGenerationAsync(
+            "temp", "source", 99, "final", "destination", CurrentCancellationToken));
+
+        var deletion = Assert.Single(client.DeleteRequests);
+        Assert.Equal("final", deletion.Bucket);
+        Assert.Equal("destination", deletion.ObjectName);
+        Assert.Equal(102, deletion.Options.Generation);
+        Assert.Equal(102, deletion.Options.IfGenerationMatch);
+    }
+
+    [Fact]
+    public async Task PromoteGenerationAsync_MalformedReturnedMetadataAndCleanupRace_PreservesValidationFailure()
+    {
+        var client = new RecordingClient
+        {
+            CopyHandler = (_, _, _, _, _, _) => Task.FromResult(Object("final", "wrong-object", 103, 4, Sha256)),
+            DeleteHandler = (_, _, _, _) => throw ApiException(HttpStatusCode.PreconditionFailed),
+        };
+        var storage = new InstantQuoteGoogleCloudObjectStorage(client);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => storage.PromoteGenerationAsync(
+            "temp", "source", 99, "final", "destination", CurrentCancellationToken));
+
+        Assert.Contains("unexpected object identity", exception.Message);
+        var deletion = Assert.Single(client.DeleteRequests);
+        Assert.Equal(103, deletion.Options.IfGenerationMatch);
+    }
+
+    [Fact]
     public async Task DeleteGenerationAsync_NotFound_IsIdempotent()
     {
         var client = new RecordingClient

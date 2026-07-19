@@ -143,7 +143,23 @@ public sealed class InstantQuoteGoogleCloudObjectStorage : IInstantQuoteObjectSt
                 DestinationPredefinedAcl = PredefinedObjectAcl.Private,
             },
             cancellationToken);
-        return ToMetadata(promoted, destinationBucket, destinationObjectName);
+        try
+        {
+            return ToMetadata(promoted, destinationBucket, destinationObjectName);
+        }
+        catch (InvalidDataException)
+        {
+            if (TryGetPositiveGeneration(promoted, out var destinationGeneration))
+            {
+                await DeleteForValidationFailureAsync(
+                    destinationBucket,
+                    destinationObjectName,
+                    destinationGeneration,
+                    cancellationToken);
+            }
+
+            throw;
+        }
     }
 
     /// <inheritdoc />
