@@ -965,9 +965,33 @@ public sealed class InstantQuoteFileServiceTests
 
         Assert.Equal(1, storage.DeleteCount);
         Assert.Equal(upload.TemporaryBucket, storage.DeletedBucket);
-        Assert.Equal(upload.GcsGeneration, storage.DeletedGeneration);
+        Assert.Equal(101, storage.DeletedGeneration);
+        Assert.Equal(2, repository.SavedUploads.Count);
         Assert.Equal(InstantQuoteWorkflowState.Removed, repository.SavedUploads[^1].Upload.State);
-        Assert.Equal(27U, repository.SavedUploads[^1].ExpectedVersion);
+        Assert.Null(repository.SavedUploads[^1].Upload.GcsGeneration);
+        Assert.Equal(27U, repository.SavedUploads[0].ExpectedVersion);
+        Assert.Equal(28U, repository.SavedUploads[^1].ExpectedVersion);
+    }
+
+    [Fact]
+    public async Task Remove_DeleteFails_RemainsDurablyRemovedAndRetryable()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 27)],
+        };
+        var storage = new FakeStorage { DeleteException = new IOException("delete failed") };
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage).RemoveAsync(
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.Id, CancellationToken.None));
+
+        var claimed = Assert.Single(repository.SavedUploads);
+        Assert.Equal(InstantQuoteWorkflowState.Removed, claimed.Upload.State);
+        Assert.Equal(101, claimed.Upload.GcsGeneration);
+        Assert.Equal(27U, claimed.ExpectedVersion);
     }
 
     [Fact]
@@ -1195,6 +1219,7 @@ public sealed class InstantQuoteFileServiceTests
         public Exception? UploadException { get; init; }
         public Exception? MetadataException { get; init; }
         public Exception? DownloadException { get; init; }
+        public Exception? DeleteException { get; init; }
         public InstantQuoteObjectMetadata Metadata { get; private set; } = new(
             "private-bucket", "", 101, 0, new string('0', 64));
 
@@ -1266,7 +1291,7 @@ public sealed class InstantQuoteFileServiceTests
             DeletedBucket = bucket;
             DeletedObjectName = objectName;
             DeletedGeneration = generation;
-            return Task.CompletedTask;
+            return DeleteException is null ? Task.CompletedTask : Task.FromException(DeleteException);
         }
     }
 

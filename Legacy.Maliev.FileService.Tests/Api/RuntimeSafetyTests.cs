@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Legacy.Maliev.FileService.Tests.Api;
@@ -25,11 +26,28 @@ public sealed class RuntimeSafetyTests
 
         Assert.False(instant.Enabled);
         Assert.False(instant.WritesEnabled);
+        Assert.False(instant.CleanupEnabled);
         Assert.Empty(instant.TemporaryBucket);
         Assert.Empty(instant.FinalBucket);
         Assert.False(legacy.Enabled);
         Assert.False(legacy.WritesEnabled);
         Assert.Empty(legacy.AllowedBuckets);
+    }
+
+    [Fact]
+    public void AddFileServiceRuntime_CleanupDisabled_RegistersNoHostedWriter()
+    {
+        using var provider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:CleanupEnabled", "false"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.DoesNotContain(provider.GetServices<IHostedService>(),
+            service => service is InstantQuoteTemporaryObjectCleanupHostedService);
     }
 
     [Fact]

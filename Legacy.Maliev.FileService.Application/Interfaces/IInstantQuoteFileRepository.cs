@@ -55,3 +55,20 @@ public interface IInstantQuoteFileRepository
     /// <summary>Persists authoritative finalization state.</summary>
     Task<uint> SaveFinalizationAsync(InstantQuoteFinalization finalization, uint expectedVersion, CancellationToken cancellationToken);
 }
+
+/// <summary>Persistence boundary for bounded temporary-object lifecycle work.</summary>
+public interface IInstantQuoteCleanupRepository
+{
+    /// <summary>Returns a deterministic batch of terminal or expired-clean temporary generations eligible for cleanup.</summary>
+    Task<IReadOnlyList<InstantQuoteStoredUpload>> GetTemporaryCleanupCandidatesAsync(
+        DateTimeOffset expiredBefore,
+        DateTimeOffset retryBefore,
+        int batchSize,
+        CancellationToken cancellationToken);
+
+    /// <summary>Persists an xmin-protected cleanup claim or completion transition.</summary>
+    Task<uint> SaveCleanupStateAsync(
+        InstantQuoteUploadFile upload,
+        uint expectedVersion,
+        CancellationToken cancellationToken);
+}

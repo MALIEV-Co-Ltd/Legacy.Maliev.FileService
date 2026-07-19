@@ -23,4 +23,19 @@ public sealed class InstantQuoteFileOptions
 
     /// <summary>Gets or sets the independent timeout used for temporary-object cleanup.</summary>
     public TimeSpan CleanupTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>Gets or sets whether background temporary-object cleanup is enabled.</summary>
+    public bool CleanupEnabled { get; set; }
+
+    /// <summary>Gets or sets the interval between cleanup sweeps.</summary>
+    public TimeSpan CleanupInterval { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>Gets or sets the delay before a claimed or failed cleanup may be retried.</summary>
+    public TimeSpan CleanupRetryDelay { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>Gets or sets the grace period after session expiry before clean uploads are removed.</summary>
+    public TimeSpan CleanupSessionExpiryGrace { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Gets or sets the maximum number of temporary generations processed per sweep.</summary>
+    public int CleanupBatchSize { get; set; } = 50;
 }

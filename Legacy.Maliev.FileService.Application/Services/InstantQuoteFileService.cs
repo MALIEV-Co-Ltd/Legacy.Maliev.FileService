@@ -266,30 +266,30 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             throw new InstantQuoteOwnershipException("Finalized files cannot be removed through the upload session.");
         }
 
+        upload.State = InstantQuoteWorkflowState.Removed;
+        upload.ModifiedAt = _timeProvider.GetUtcNow();
+        var removalVersion = await ExecuteDurableStateAsync(() =>
+            _repository.SaveUploadAsync(upload, stored.Version, cancellationToken));
+
         try
         {
             if (upload.GcsGeneration is not null)
             {
                 await _storage.DeleteGenerationAsync(
                     upload.TemporaryBucket, upload.TemporaryObjectName, upload.GcsGeneration.Value, cancellationToken);
+                upload.GcsGeneration = null;
+                upload.ModifiedAt = _timeProvider.GetUtcNow();
+                await _repository.SaveUploadAsync(upload, removalVersion, cancellationToken);
             }
-            upload.State = InstantQuoteWorkflowState.Removed;
-            upload.ModifiedAt = _timeProvider.GetUtcNow();
-            await _repository.SaveUploadAsync(upload, stored.Version, cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            upload.State = InstantQuoteWorkflowState.Unknown;
-            upload.ModifiedAt = _timeProvider.GetUtcNow();
-            await SaveTerminalIgnoringCancellationAsync(upload, stored.Version);
             throw;
         }
         catch (Exception exception)
         {
-            upload.State = InstantQuoteWorkflowState.Unknown;
-            upload.ModifiedAt = _timeProvider.GetUtcNow();
-            await SaveTerminalIgnoringCancellationAsync(upload, stored.Version);
-            throw new InstantQuoteAmbiguousOutcomeException("File removal outcome requires reconciliation.", exception);
+            throw new InstantQuoteDependencyUnavailableException(
+                "The file is removed but temporary-object cleanup is pending.", exception);
         }
     }
 
