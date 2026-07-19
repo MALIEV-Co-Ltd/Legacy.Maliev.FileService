@@ -79,6 +79,7 @@ public sealed class UploadsController(
 
     /// <summary>Uploads files through private quarantine and malware scanning.</summary>
     [HttpPost]
+    [RequireLegacyFileWrites]
     [RequestSizeLimit(FileApplicationService.MaximumRequestBytes)]
     [RequirePermission(FilePermissions.Create)]
     public async Task<ActionResult<UploadResultResponse>> UploadAsync(
