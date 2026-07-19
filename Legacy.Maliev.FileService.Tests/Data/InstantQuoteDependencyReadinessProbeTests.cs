@@ -10,18 +10,6 @@ namespace Legacy.Maliev.FileService.Tests.Data;
 public sealed class InstantQuoteDependencyReadinessProbeTests
 {
     [Fact]
-    public async Task GoogleCloudProbe_CheckBucketAsync_UsesMetadataReadOnly()
-    {
-        var client = new RecordingGoogleBucketClient();
-        var probe = new InstantQuoteGoogleCloudReadinessProbe(client);
-
-        await probe.CheckBucketAsync("quote-temp-local", CancellationToken.None);
-
-        Assert.Equal(["quote-temp-local"], client.MetadataReads);
-        Assert.Equal(0, client.WriteCalls);
-    }
-
-    [Fact]
     public async Task ClamAvProbe_CheckAsync_SendsPingAndRequiresPong()
     {
         await using var server = new PingServer("PONG\0");
@@ -70,18 +58,6 @@ public sealed class InstantQuoteDependencyReadinessProbeTests
             }));
 
         await Assert.ThrowsAsync<IOException>(() => probe.CheckAsync(CancellationToken.None));
-    }
-
-    private sealed class RecordingGoogleBucketClient : IInstantQuoteGoogleBucketReadinessClient
-    {
-        public List<string> MetadataReads { get; } = [];
-        public int WriteCalls { get; private set; }
-
-        public Task GetBucketMetadataAsync(string bucket, CancellationToken cancellationToken)
-        {
-            MetadataReads.Add(bucket);
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class PingServer : IAsyncDisposable

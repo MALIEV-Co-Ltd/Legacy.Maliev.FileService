@@ -1,8 +1,10 @@
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api;
 using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Data;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Legacy.Maliev.FileService.Tests.Api;
@@ -33,42 +35,94 @@ public sealed class InstantQuoteFilesReadinessTests
         Assert.Equal(HealthStatus.Healthy, entry.Status);
         Assert.Equal("disabled", entry.Description);
         Assert.Null(provider.GetService<StorageClient>());
-        Assert.Null(provider.GetService<IInstantQuoteObjectStorageReadinessProbe>());
         Assert.Null(provider.GetService<IInstantQuoteScannerReadinessProbe>());
     }
 
     [Fact]
-    public async Task Readiness_EnabledWrites_ChecksBothBucketsAndScannerExactlyOnce()
+    public async Task Readiness_EnabledWrites_DoesNotResolveStorageClientAndChecksScannerExactlyOnce()
     {
-        var storage = new RecordingStorageReadinessProbe();
+        var storageClientResolutionCalls = 0;
         var scanner = new RecordingScannerReadinessProbe();
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IInstantQuoteObjectStorageReadinessProbe>(storage);
+        services.AddSingleton<StorageClient>(_ =>
+        {
+            storageClientResolutionCalls++;
+            throw new InvalidOperationException("Readiness must not resolve ADC-backed storage.");
+        });
         services.AddSingleton<IInstantQuoteScannerReadinessProbe>(scanner);
         services.AddFileServiceRuntime(BuildConfiguration(EnabledConfiguration));
+        Assert.Contains(services, descriptor =>
+            descriptor.ServiceType == typeof(IInstantQuoteObjectStorage) &&
+            descriptor.ImplementationType == typeof(InstantQuoteGoogleCloudObjectStorage));
         await using var provider = services.BuildServiceProvider();
 
         var report = await provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(
             registration => registration.Tags.Contains("ready"));
 
         Assert.Equal(HealthStatus.Healthy, report.Entries["instant_quote_files"].Status);
-        Assert.Equal(["quote-final-local", "quote-temp-local"], storage.Buckets.Order().ToArray());
+        Assert.Equal(0, storageClientResolutionCalls);
         Assert.Equal(1, scanner.Calls);
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public async Task Readiness_EnabledDependencyUnavailable_IsUnhealthy(
-        bool storageUnavailable,
-        bool scannerUnavailable)
+    [Fact]
+    public async Task Readiness_EnabledWrites_MissingStorageAdapterRegistrationIsUnhealthyWithoutResolvingAdc()
     {
-        var storage = new RecordingStorageReadinessProbe(storageUnavailable);
-        var scanner = new RecordingScannerReadinessProbe(scannerUnavailable);
+        var storageClientResolutionCalls = 0;
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IInstantQuoteObjectStorageReadinessProbe>(storage);
+        services.AddSingleton<StorageClient>(_ =>
+        {
+            storageClientResolutionCalls++;
+            throw new InvalidOperationException("Readiness must not resolve ADC-backed storage.");
+        });
+        services.AddSingleton<IInstantQuoteScannerReadinessProbe>(new RecordingScannerReadinessProbe());
+        services.AddFileServiceRuntime(BuildConfiguration(EnabledConfiguration));
+        services.RemoveAll<IInstantQuoteObjectStorage>();
+        await using var provider = services.BuildServiceProvider();
+
+        var report = await provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(
+            registration => registration.Tags.Contains("ready"));
+
+        Assert.Equal(HealthStatus.Unhealthy, report.Entries["instant_quote_files"].Status);
+        Assert.Equal(0, storageClientResolutionCalls);
+    }
+
+    [Fact]
+    public async Task Readiness_EnabledWrites_InvalidBucketConfigurationIsUnhealthyWithoutDetailsOrAdc()
+    {
+        var storageClientResolutionCalls = 0;
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<StorageClient>(_ =>
+        {
+            storageClientResolutionCalls++;
+            throw new InvalidOperationException("Readiness must not resolve ADC-backed storage.");
+        });
+        services.AddSingleton<IInstantQuoteScannerReadinessProbe>(new RecordingScannerReadinessProbe());
+        services.AddFileServiceRuntime(BuildConfiguration(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:CleanupEnabled", "true"),
+        ]));
+        await using var provider = services.BuildServiceProvider();
+
+        var report = await provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(
+            registration => registration.Tags.Contains("ready"));
+
+        var entry = report.Entries["instant_quote_files"];
+        Assert.Equal(HealthStatus.Unhealthy, entry.Status);
+        Assert.Null(entry.Exception);
+        Assert.Equal(0, storageClientResolutionCalls);
+    }
+
+    [Fact]
+    public async Task Readiness_EnabledScannerUnavailable_IsUnhealthy()
+    {
+        var scanner = new RecordingScannerReadinessProbe(unavailable: true);
+        var services = new ServiceCollection();
+        services.AddLogging();
         services.AddSingleton<IInstantQuoteScannerReadinessProbe>(scanner);
         services.AddFileServiceRuntime(BuildConfiguration(EnabledConfiguration));
         await using var provider = services.BuildServiceProvider();
@@ -84,8 +138,7 @@ public sealed class InstantQuoteFilesReadinessTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IInstantQuoteObjectStorageReadinessProbe, UnexpectedFailureStorageProbe>();
-        services.AddSingleton<IInstantQuoteScannerReadinessProbe>(new RecordingScannerReadinessProbe());
+        services.AddSingleton<IInstantQuoteScannerReadinessProbe, UnexpectedFailureScannerProbe>();
         services.AddFileServiceRuntime(BuildConfiguration(EnabledConfiguration));
         await using var provider = services.BuildServiceProvider();
 
@@ -101,11 +154,9 @@ public sealed class InstantQuoteFilesReadinessTests
     [Fact]
     public async Task Readiness_EnabledProbeHangs_CancelsWithinCallerBound()
     {
-        var storage = new RecordingStorageReadinessProbe(hang: true);
-        var scanner = new RecordingScannerReadinessProbe();
+        var scanner = new RecordingScannerReadinessProbe(hang: true);
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IInstantQuoteObjectStorageReadinessProbe>(storage);
         services.AddSingleton<IInstantQuoteScannerReadinessProbe>(scanner);
         services.AddFileServiceRuntime(BuildConfiguration(EnabledConfiguration));
         await using var provider = services.BuildServiceProvider();
@@ -116,8 +167,8 @@ public sealed class InstantQuoteFilesReadinessTests
             cancellation.Token);
 
         Assert.Equal(HealthStatus.Unhealthy, report.Entries["instant_quote_files"].Status);
-        Assert.True(storage.CancellationObserved);
-        Assert.Equal(0, scanner.Calls);
+        Assert.True(scanner.CancellationObserved);
+        Assert.Equal(1, scanner.Calls);
     }
 
     private static readonly KeyValuePair<string, string?>[] EnabledConfiguration =
@@ -133,18 +184,18 @@ public sealed class InstantQuoteFilesReadinessTests
     private static IConfiguration BuildConfiguration(IEnumerable<KeyValuePair<string, string?>> values) =>
         new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
-    private sealed class RecordingStorageReadinessProbe(bool unavailable = false, bool hang = false)
-        : IInstantQuoteObjectStorageReadinessProbe
+    private sealed class RecordingScannerReadinessProbe(bool unavailable = false, bool hang = false)
+        : IInstantQuoteScannerReadinessProbe
     {
-        public List<string> Buckets { get; } = [];
+        public int Calls { get; private set; }
         public bool CancellationObserved { get; private set; }
 
-        public async Task CheckBucketAsync(string bucket, CancellationToken cancellationToken)
+        public async Task CheckAsync(CancellationToken cancellationToken)
         {
-            Buckets.Add(bucket);
+            Calls++;
             if (unavailable)
             {
-                throw new IOException("storage unavailable");
+                throw new IOException("scanner unavailable");
             }
 
             if (hang)
@@ -162,23 +213,9 @@ public sealed class InstantQuoteFilesReadinessTests
         }
     }
 
-    private sealed class RecordingScannerReadinessProbe(bool unavailable = false)
-        : IInstantQuoteScannerReadinessProbe
+    private sealed class UnexpectedFailureScannerProbe : IInstantQuoteScannerReadinessProbe
     {
-        public int Calls { get; private set; }
-
-        public Task CheckAsync(CancellationToken cancellationToken)
-        {
-            Calls++;
-            return unavailable
-                ? Task.FromException(new IOException("scanner unavailable"))
-                : Task.CompletedTask;
-        }
-    }
-
-    private sealed class UnexpectedFailureStorageProbe : IInstantQuoteObjectStorageReadinessProbe
-    {
-        public Task CheckBucketAsync(string bucket, CancellationToken cancellationToken) =>
+        public Task CheckAsync(CancellationToken cancellationToken) =>
             throw new InvalidOperationException("sensitive provider detail");
     }
 }
