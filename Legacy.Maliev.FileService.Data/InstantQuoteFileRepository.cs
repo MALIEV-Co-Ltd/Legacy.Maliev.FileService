@@ -174,6 +174,8 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
                     (upload.State == InstantQuoteWorkflowState.Pending ||
                      upload.State == InstantQuoteWorkflowState.Uploaded ||
                      upload.State == InstantQuoteWorkflowState.Unknown ||
+                     upload.State == InstantQuoteWorkflowState.PayloadTooLarge ||
+                     upload.State == InstantQuoteWorkflowState.InvalidRequest ||
                      upload.GcsGeneration != null &&
                     (upload.State == InstantQuoteWorkflowState.Finalized ||
                      upload.State == InstantQuoteWorkflowState.Failed ||

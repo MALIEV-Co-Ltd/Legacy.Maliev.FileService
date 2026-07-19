@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Legacy.Maliev.FileService.Api.Http;
+using Legacy.Maliev.FileService.Application.Models;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
@@ -318,6 +319,7 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         {
             Type = JsonSchemaType.Array,
             Items = StringSchema("uuid"),
+            MaxItems = InstantQuoteFileContract.MaximumFilesPerSession,
         }));
 
     private static OpenApiSchema FinalizationSchema() => ObjectSchema(

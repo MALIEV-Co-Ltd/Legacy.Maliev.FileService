@@ -103,6 +103,8 @@ public static class FileServiceRuntimeRegistration
             options.SessionLifetime > TimeSpan.FromDays(7) ||
             options.CleanupTimeout < TimeSpan.FromSeconds(1) ||
             options.CleanupTimeout > TimeSpan.FromMinutes(5) ||
+            options.OperationTimeout < TimeSpan.FromSeconds(1) ||
+            options.OperationTimeout.Add(TimeSpan.FromSeconds(5)) > options.OperationLeaseTimeout ||
             options.OperationLeaseTimeout <= options.CleanupTimeout ||
             options.OperationLeaseTimeout > TimeSpan.FromDays(1))
         {
@@ -124,6 +126,7 @@ public static class FileServiceRuntimeRegistration
         }
 
         return !options.WritesEnabled ||
+            options.CleanupEnabled &&
             IsBucketName(options.TemporaryBucket) &&
             IsBucketName(options.FinalBucket) &&
             !string.Equals(options.TemporaryBucket, options.FinalBucket, StringComparison.Ordinal);
