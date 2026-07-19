@@ -206,6 +206,30 @@ public sealed class RuntimeSafetyTests
             provider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
     }
 
+    [Fact]
+    public void InstantQuoteOptionsValidator_WritesRequireCleanupAndLeaseMargin()
+    {
+        using var cleanupDisabled = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"), new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+            new("InstantQuoteFiles:CleanupEnabled", "false"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+        using var noMargin = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"), new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+            new("InstantQuoteFiles:CleanupEnabled", "true"),
+            new("InstantQuoteFiles:OperationTimeout", "00:09:56"),
+            new("InstantQuoteFiles:OperationLeaseTimeout", "00:10:00"),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => cleanupDisabled.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+        Assert.Throws<OptionsValidationException>(() => noMargin.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+    }
+
     [Theory]
     [InlineData("Quote-temp-local")]
     [InlineData("quote_temp_local")]
@@ -321,8 +345,16 @@ public sealed class RuntimeSafetyTests
         return services;
     }
 
-    private static IConfiguration BuildConfiguration(IReadOnlyCollection<KeyValuePair<string, string?>> values) =>
-        new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    private static IConfiguration BuildConfiguration(IReadOnlyCollection<KeyValuePair<string, string?>> values)
+    {
+        var writesEnabled = values.Any(value =>
+            value.Key == "InstantQuoteFiles:WritesEnabled" && value.Value == "true");
+        var hasCleanupSetting = values.Any(value => value.Key == "InstantQuoteFiles:CleanupEnabled");
+        var effective = writesEnabled && !hasCleanupSetting
+            ? new[] { new KeyValuePair<string, string?>("InstantQuoteFiles:CleanupEnabled", "true") }.Concat(values)
+            : values;
+        return new ConfigurationBuilder().AddInMemoryCollection(effective).Build();
+    }
 
     private sealed class MemoryUploadFile : IUploadFile
     {

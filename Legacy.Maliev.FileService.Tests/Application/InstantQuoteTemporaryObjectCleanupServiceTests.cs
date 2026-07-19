@@ -70,7 +70,8 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(0, cleaned);
-        Assert.Equal(InstantQuoteWorkflowState.Failed, Assert.Single(repository.Saves).State);
+        Assert.Equal(2, repository.Saves.Count);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, repository.Saves[^1].State);
         Assert.Empty(storage.Deletes);
     }
 
@@ -95,7 +96,8 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(0, cleaned);
-        var reconciled = Assert.Single(repository.Saves);
+        Assert.Equal(2, repository.Saves.Count);
+        var reconciled = repository.Saves[^1];
         Assert.Equal(InstantQuoteWorkflowState.Clean, reconciled.State);
         Assert.Equal(73, reconciled.Generation);
         Assert.Empty(storage.Deletes);

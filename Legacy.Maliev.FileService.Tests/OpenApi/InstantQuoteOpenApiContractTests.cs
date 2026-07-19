@@ -97,6 +97,9 @@ public sealed class InstantQuoteOpenApiContractTests
         Assert.Equal("integer", quotationRequestIdSchema.GetProperty("type").GetString());
         Assert.Equal("int32", quotationRequestIdSchema.GetProperty("format").GetString());
         Assert.Equal(1, quotationRequestIdSchema.GetProperty("minimum").GetInt32());
+        Assert.Equal(
+            Models.InstantQuoteFileContract.MaximumFilesPerSession,
+            finalizeRequest.GetProperty("schema").GetProperty("properties").GetProperty("fileIds").GetProperty("maxItems").GetInt32());
         Assert.Equal(417, finalizeRequest.GetProperty("example").GetProperty("quotationRequestId").GetInt32());
         Assert.Equal("22222222-2222-2222-2222-222222222222", finalizeRequest.GetProperty("example").GetProperty("fileIds")[0].GetString());
         AssertResponse(finalize, "200", "application/json", "quotationRequestId", "files");

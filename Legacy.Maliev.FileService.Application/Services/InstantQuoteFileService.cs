@@ -63,7 +63,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
     }
 
     /// <inheritdoc />
-    public Task<InstantQuoteFileResponse> UploadAsync(
+    public async Task<InstantQuoteFileResponse> UploadAsync(
         Guid sessionId,
         InstantQuoteOwner owner,
         string token,
@@ -71,8 +71,20 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         string expectedSha256,
         Stream body,
         InstantQuoteUploadMetadata metadata,
-        CancellationToken cancellationToken) => UploadCoreAsync(
-            sessionId, owner, token, idempotencyKey, expectedSha256, body, metadata, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(_options.OperationTimeout, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            return await UploadCoreAsync(
+                sessionId, owner, token, idempotencyKey, expectedSha256, body, metadata, linked.Token);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new InstantQuoteDependencyUnavailableException("The upload operation timed out and requires retry.", exception);
+        }
+    }
 
     private async Task<InstantQuoteFileResponse> UploadCoreAsync(
         Guid sessionId,
@@ -233,14 +245,25 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
     }
 
     /// <inheritdoc />
-    public Task<FinalizeInstantQuoteFilesResponse> FinalizeAsync(
+    public async Task<FinalizeInstantQuoteFilesResponse> FinalizeAsync(
         Guid sessionId,
         InstantQuoteOwner owner,
         string token,
         string idempotencyKey,
         FinalizeInstantQuoteFilesRequest request,
-        CancellationToken cancellationToken) => FinalizeCoreAsync(
-            sessionId, owner, token, idempotencyKey, request, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(_options.OperationTimeout, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            return await FinalizeCoreAsync(sessionId, owner, token, idempotencyKey, request, linked.Token);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new InstantQuoteDependencyUnavailableException("The finalization operation timed out and requires retry.", exception);
+        }
+    }
 
     /// <inheritdoc />
     public async Task RemoveAsync(
@@ -688,12 +711,13 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
 
     private async Task CleanupDiscoveredTemporaryGenerationAsync(InstantQuoteUploadFile upload)
     {
+        using var cleanup = new CancellationTokenSource(_options.CleanupTimeout, _timeProvider);
         try
         {
             var metadata = await _storage.GetMetadataAsync(
                 upload.TemporaryBucket,
                 upload.TemporaryObjectName,
-                CancellationToken.None);
+                cleanup.Token);
             if (metadata is not null)
             {
                 upload.GcsGeneration = metadata.Generation;

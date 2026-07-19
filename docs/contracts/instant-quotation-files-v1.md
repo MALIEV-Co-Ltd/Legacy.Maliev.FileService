@@ -45,6 +45,8 @@ Required headers:
 
 The multipart body must contain exactly one part named `files`. The file is streamed; the endpoint does not use `IFormFile` buffering. End-of-file validates the terminal multipart boundary before storage acceptance can become `clean`, so zero parts, extra parts, a different field name, an empty file, or an invalid digest is rejected without an accepted object.
 
+Upload progress is the number of request-body bytes observed by the browser or BFF while sending this request. FileService does not expose a separate progress endpoint or publish server-side progress state.
+
 This is the normative multipart example represented by generated OpenAPI. The example file bytes are exactly `solid example\nendsolid example\n` in UTF-8, whose SHA-256 is shown below; production callers send the exact selected file bytes and their matching digest.
 
 ```http

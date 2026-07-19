@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using System.IO.Pipelines;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Domain;
@@ -29,7 +29,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         var now = timeProvider.GetUtcNow();
         var candidates = await repository.GetTemporaryCleanupCandidatesAsync(
             now.Subtract(_options.CleanupSessionExpiryGrace),
-            now.Subtract(_options.CleanupRetryDelay),
+            now.Subtract(_options.OperationLeaseTimeout),
             _options.CleanupBatchSize,
             cancellationToken);
         var completed = 0;
@@ -40,7 +40,33 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             if (upload.State is InstantQuoteWorkflowState.Pending or InstantQuoteWorkflowState.Uploaded or
                 InstantQuoteWorkflowState.Unknown)
             {
-                await ReconcileRecoverableAsync(stored, cancellationToken);
+                upload.ModifiedAt = timeProvider.GetUtcNow();
+                uint recoveryClaimVersion;
+                try
+                {
+                    recoveryClaimVersion = await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+                }
+                catch (InstantQuoteConcurrencyException)
+                {
+                    continue;
+                }
+                await ReconcileRecoverableAsync(upload, recoveryClaimVersion, cancellationToken);
+                continue;
+            }
+            if (upload.State is InstantQuoteWorkflowState.PayloadTooLarge or InstantQuoteWorkflowState.InvalidRequest &&
+                upload.GcsGeneration is null)
+            {
+                upload.ModifiedAt = timeProvider.GetUtcNow();
+                uint discoveryClaimVersion;
+                try
+                {
+                    discoveryClaimVersion = await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+                }
+                catch (InstantQuoteConcurrencyException)
+                {
+                    continue;
+                }
+                await DiscoverAndDeleteRejectedAsync(upload, discoveryClaimVersion, cancellationToken);
                 continue;
             }
             if (upload.GcsGeneration is null)
@@ -108,10 +134,10 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
     }
 
     private async Task ReconcileRecoverableAsync(
-        InstantQuoteStoredUpload stored,
+        InstantQuoteUploadFile upload,
+        uint claimedVersion,
         CancellationToken cancellationToken)
     {
-        var upload = stored.Upload;
         try
         {
             using var timeout = new CancellationTokenSource(_options.CleanupTimeout, timeProvider);
@@ -124,7 +150,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             {
                 upload.State = InstantQuoteWorkflowState.Failed;
                 upload.ModifiedAt = timeProvider.GetUtcNow();
-                await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+                await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
                 return;
             }
 
@@ -133,34 +159,24 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             {
                 upload.State = InstantQuoteWorkflowState.Failed;
                 upload.ModifiedAt = timeProvider.GetUtcNow();
-                await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+                await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
                 return;
             }
 
-            await using var content = new MemoryStream(checked((int)metadata.SizeBytes));
-            await storage.DownloadGenerationAsync(
-                metadata.Bucket,
-                metadata.ObjectName,
-                metadata.Generation,
-                content,
-                linked.Token);
-            var bytes = content.ToArray();
-            var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            content.Position = 0;
-            var scan = await scanner.ScanAsync(content, linked.Token);
-            var matches = bytes.LongLength == metadata.SizeBytes &&
-                string.Equals(sha256, metadata.Sha256, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(sha256, upload.ExpectedSha256, StringComparison.OrdinalIgnoreCase);
-            if (matches && scan == InstantQuoteScanResult.Clean)
+            var outcome = await ScanGenerationAsync(metadata, linked.Token);
+            var matches = outcome.SizeBytes == metadata.SizeBytes &&
+                string.Equals(outcome.Sha256, metadata.Sha256, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(outcome.Sha256, upload.ExpectedSha256, StringComparison.OrdinalIgnoreCase);
+            if (matches && outcome.Result == InstantQuoteScanResult.Clean)
             {
                 try
                 {
                     InstantQuoteContentSignaturePolicy.Validate(
                         upload.ValidatedExtension,
-                        bytes.AsSpan(0, Math.Min(bytes.Length, 4096)),
-                        bytes.LongLength);
-                    upload.ActualSha256 = sha256;
-                    upload.ActualSizeBytes = bytes.LongLength;
+                        outcome.Prefix,
+                        outcome.SizeBytes);
+                    upload.ActualSha256 = outcome.Sha256;
+                    upload.ActualSizeBytes = outcome.SizeBytes;
                     upload.State = InstantQuoteWorkflowState.Clean;
                 }
                 catch (InstantQuoteUnsafeContentException)
@@ -168,12 +184,12 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                     upload.State = InstantQuoteWorkflowState.Failed;
                 }
             }
-            else if (scan != InstantQuoteScanResult.Unavailable)
+            else if (outcome.Result != InstantQuoteScanResult.Unavailable)
             {
                 upload.State = InstantQuoteWorkflowState.Failed;
             }
             upload.ModifiedAt = timeProvider.GetUtcNow();
-            await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+            await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -190,4 +206,111 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
                 upload.SessionId);
         }
     }
+
+    private async Task<RecoveryScanOutcome> ScanGenerationAsync(
+        InstantQuoteObjectMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        var pipe = new Pipe();
+        await using var reader = pipe.Reader.AsStream(leaveOpen: true);
+        await using var writer = pipe.Writer.AsStream(leaveOpen: true);
+        await using var hashing = new BoundedHashingReadStream(reader);
+        await using var prefix = new RecoveryPrefixStream(hashing, 4096);
+        var download = DownloadAsync();
+        var scan = scanner.ScanAsync(prefix, cancellationToken);
+        try
+        {
+            await Task.WhenAll(download, scan);
+            if (!hashing.IsComplete)
+            {
+                throw new InstantQuoteDependencyUnavailableException("The recovery scanner did not consume the complete generation.");
+            }
+            return new(scan.Result, prefix.Prefix.ToArray(), hashing.Sha256, hashing.BytesRead);
+        }
+        finally
+        {
+            await pipe.Writer.CompleteAsync();
+            await pipe.Reader.CompleteAsync();
+        }
+
+        async Task DownloadAsync()
+        {
+            Exception? error = null;
+            try
+            {
+                await storage.DownloadGenerationAsync(
+                    metadata.Bucket, metadata.ObjectName, metadata.Generation, writer, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                error = exception;
+                throw;
+            }
+            finally
+            {
+                await pipe.Writer.CompleteAsync(error);
+            }
+        }
+    }
+
+    private async Task DiscoverAndDeleteRejectedAsync(
+        InstantQuoteUploadFile upload,
+        uint claimedVersion,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(_options.CleanupTimeout, timeProvider);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+            var metadata = await storage.GetMetadataAsync(
+                upload.TemporaryBucket, upload.TemporaryObjectName, linked.Token);
+            if (metadata is null)
+            {
+                return;
+            }
+            upload.GcsGeneration = metadata.Generation;
+            await storage.DeleteGenerationAsync(metadata.Bucket, metadata.ObjectName, metadata.Generation, linked.Token);
+            upload.GcsGeneration = null;
+            upload.ModifiedAt = timeProvider.GetUtcNow();
+            await repository.SaveCleanupStateAsync(upload, claimedVersion, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "Rejected temporary generation discovery failed for upload {UploadId} in session {SessionId}",
+                upload.Id,
+                upload.SessionId);
+        }
+    }
+
+    private sealed class RecoveryPrefixStream(Stream source, int maximumPrefixBytes) : Stream
+    {
+        private readonly MemoryStream prefix = new(maximumPrefixBytes);
+        public ReadOnlySpan<byte> Prefix => prefix.GetBuffer().AsSpan(0, checked((int)prefix.Length));
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            var remaining = maximumPrefixBytes - checked((int)prefix.Length);
+            if (remaining > 0 && read > 0) prefix.Write(buffer.Span[..Math.Min(read, remaining)]);
+            return read;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) source.Dispose(); base.Dispose(disposing); }
+        public override async ValueTask DisposeAsync() { await source.DisposeAsync(); await prefix.DisposeAsync(); GC.SuppressFinalize(this); }
+    }
+
+    private sealed record RecoveryScanOutcome(InstantQuoteScanResult Result, byte[] Prefix, string Sha256, long SizeBytes);
 }
