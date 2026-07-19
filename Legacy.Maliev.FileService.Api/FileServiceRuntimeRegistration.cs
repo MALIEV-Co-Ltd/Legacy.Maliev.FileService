@@ -22,10 +22,10 @@ public static class FileServiceRuntimeRegistration
         services.AddOptions<FileStorageOptions>()
             .Bind(configuration.GetSection(FileStorageOptions.SectionName))
             .Validate(
-                options => !options.WritesEnabled || options.AllowedBuckets.Length > 0,
+                options => !IsLegacyWriteEnabled(options) || options.AllowedBuckets.Length > 0,
                 "At least one allowed bucket is required when legacy writes are enabled")
             .Validate(
-                options => !options.WritesEnabled || options.SignedUrlHours is >= 1 and <= 168,
+                options => !IsLegacyWriteEnabled(options) || options.SignedUrlHours is >= 1 and <= 168,
                 "Signed URL lifetime must be between one hour and seven days")
             .ValidateOnStart();
         services.AddOptions<InstantQuoteFileOptions>()
@@ -38,7 +38,8 @@ public static class FileServiceRuntimeRegistration
             .Validate(options => options.TimeoutSeconds is >= 1 and <= 300, "Scanner timeout is invalid")
             .ValidateOnStart();
 
-        var legacyWritesEnabled = configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:WritesEnabled");
+        var legacyWritesEnabled = configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:Enabled") &&
+            configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:WritesEnabled");
         var instantQuoteEnabled = configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:Enabled") &&
             configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:WritesEnabled");
 
@@ -74,6 +75,7 @@ public static class FileServiceRuntimeRegistration
         services.TryAddScoped<IUploadIdempotencyStore, RedisUploadIdempotencyStore>();
         services.TryAddScoped<IInstantQuoteFileRepository, InstantQuoteFileRepository>();
         services.TryAddScoped<ObjectNamePolicy>();
+        services.TryAddSingleton<LegacyFileRuntimeGate>();
         services.TryAddScoped<IFileService, FileApplicationService>();
         services.TryAddScoped<IInstantQuoteFileService, InstantQuoteFileService>();
         services.TryAddScoped<IdempotentUploadCoordinator>();
@@ -101,6 +103,9 @@ public static class FileServiceRuntimeRegistration
             IsBucketName(options.FinalBucket) &&
             !string.Equals(options.TemporaryBucket, options.FinalBucket, StringComparison.Ordinal);
     }
+
+    private static bool IsLegacyWriteEnabled(FileStorageOptions options) =>
+        options.Enabled && options.WritesEnabled;
 
     private static bool IsBucketName(string value) =>
         value.Length is >= 3 and <= 63 &&

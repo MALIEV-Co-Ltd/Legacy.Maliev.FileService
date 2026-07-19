@@ -5,6 +5,8 @@ public sealed class FileStorageOptions
 {
     /// <summary>Configuration section name.</summary>
     public const string SectionName = "FileStorage";
+    /// <summary>Gets or sets whether the legacy workflow is available in this runtime.</summary>
+    public bool Enabled { get; set; }
     /// <summary>Gets or sets whether legacy storage mutations are allowed in this runtime.</summary>
     public bool WritesEnabled { get; set; }
     /// <summary>Gets or sets buckets accepted from legacy callers.</summary>

@@ -1,4 +1,5 @@
 using Legacy.Maliev.FileService.Api.Authorization;
+using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
@@ -13,7 +14,10 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 [ApiController]
 [Route("[controller]")]
 [Authorize]
-public sealed class UploadsController(IFileService service, IdempotentUploadCoordinator idempotency) : ControllerBase
+public sealed class UploadsController(
+    IFileService service,
+    IdempotentUploadCoordinator idempotency,
+    LegacyFileRuntimeGate runtimeGate) : ControllerBase
 {
     /// <summary>Deletes an uploaded object.</summary>
     [HttpDelete]
@@ -34,6 +38,10 @@ public sealed class UploadsController(IFileService service, IdempotentUploadCoor
         catch (FileUploadValidationException)
         {
             return BadRequest("Could not delete uploaded file");
+        }
+        catch (MalwareScannerUnavailableException)
+        {
+            return LegacyFileProblem.Unavailable();
         }
     }
 
@@ -63,6 +71,10 @@ public sealed class UploadsController(IFileService service, IdempotentUploadCoor
         {
             return BadRequest("Could not move the uploaded file");
         }
+        catch (MalwareScannerUnavailableException)
+        {
+            return LegacyFileProblem.Unavailable();
+        }
     }
 
     /// <summary>Uploads files through private quarantine and malware scanning.</summary>
@@ -89,6 +101,7 @@ public sealed class UploadsController(IFileService service, IdempotentUploadCoor
 
         try
         {
+            runtimeGate.EnsureWritesEnabled();
             var uploadFiles = files!.Select(file => (IUploadFile)new FormUploadFile(file)).ToArray();
             var principalId = User.FindFirst("client_id")?.Value
                 ?? User.FindFirst("azp")?.Value
@@ -123,14 +136,9 @@ public sealed class UploadsController(IFileService service, IdempotentUploadCoor
                 Detail = exception.Message,
             });
         }
-        catch (MalwareScannerUnavailableException exception)
+        catch (MalwareScannerUnavailableException)
         {
-            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
-            {
-                Status = StatusCodes.Status503ServiceUnavailable,
-                Title = "Upload scanning unavailable",
-                Detail = exception.Message,
-            });
+            return LegacyFileProblem.Unavailable();
         }
         catch (UploadIdempotencyConflictException exception)
         {

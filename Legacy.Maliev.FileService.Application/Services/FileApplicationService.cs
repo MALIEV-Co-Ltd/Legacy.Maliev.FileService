@@ -13,6 +13,7 @@ public sealed class FileApplicationService(
     IUploadRepository repository,
     ObjectNamePolicy names,
     IOptions<FileStorageOptions> options,
+    LegacyFileRuntimeGate runtimeGate,
     ILogger<FileApplicationService> logger) : IFileService
 {
     /// <summary>Maximum aggregate size preserved from the legacy controller.</summary>
@@ -36,7 +37,7 @@ public sealed class FileApplicationService(
         Guid operationId,
         CancellationToken cancellationToken)
     {
-        EnsureWritesEnabled();
+        runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(bucket);
         ValidateFiles(files);
 
@@ -113,7 +114,7 @@ public sealed class FileApplicationService(
         Guid operationId,
         CancellationToken cancellationToken)
     {
-        EnsureWritesEnabled();
+        runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(bucket);
         ValidateFiles(files);
         var duration = TimeSpan.FromHours(Math.Clamp(options.Value.SignedUrlHours, 1, 168));
@@ -132,7 +133,7 @@ public sealed class FileApplicationService(
     /// <inheritdoc />
     public async Task<bool> DeleteAsync(string bucket, string objectName, CancellationToken cancellationToken)
     {
-        EnsureWritesEnabled();
+        runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(bucket);
         objectName = names.RequireObjectName(objectName);
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken) ||
@@ -153,7 +154,7 @@ public sealed class FileApplicationService(
         string destinationObjectName,
         CancellationToken cancellationToken)
     {
-        EnsureWritesEnabled();
+        runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(sourceBucket);
         names.RequireBucket(destinationBucket);
         sourceObjectName = names.RequireObjectName(sourceObjectName);
@@ -171,7 +172,7 @@ public sealed class FileApplicationService(
     /// <inheritdoc />
     public async Task<Uri?> GetSignedUrlAsync(string bucket, string objectName, CancellationToken cancellationToken)
     {
-        EnsureWritesEnabled();
+        runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(bucket);
         objectName = names.RequireObjectName(objectName);
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken))
@@ -181,14 +182,6 @@ public sealed class FileApplicationService(
 
         var duration = TimeSpan.FromHours(Math.Clamp(options.Value.SignedUrlHours, 1, 168));
         return await storage.CreateSignedReadUriAsync(bucket, objectName, duration, cancellationToken);
-    }
-
-    private void EnsureWritesEnabled()
-    {
-        if (!options.Value.WritesEnabled)
-        {
-            throw new MalwareScannerUnavailableException("Legacy file writes are disabled.");
-        }
     }
 
     private static void ValidateFiles(IReadOnlyList<IUploadFile> files)
