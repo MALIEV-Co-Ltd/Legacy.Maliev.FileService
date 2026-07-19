@@ -154,16 +154,17 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         AddHeader(operation, "Idempotency-Key", "Stable key for identical finalization retries.", 16, 128);
         if (operation.RequestBody?.Content?.TryGetValue(JsonMediaType, out var requestMedia) == true)
         {
+            requestMedia.Schema = FinalizationRequestSchema();
             requestMedia.Example = JsonNode.Parse(
                 """
-                {"quotationRequestId":"33333333-3333-3333-3333-333333333333","fileIds":["22222222-2222-2222-2222-222222222222"]}
+                {"quotationRequestId":417,"fileIds":["22222222-2222-2222-2222-222222222222"]}
                 """);
         }
         operation.Responses!["200"] = JsonResponse(
             "Files finalized and linked",
             FinalizationSchema(),
             """
-            {"quotationRequestId":"33333333-3333-3333-3333-333333333333","files":[{"fileId":"22222222-2222-2222-2222-222222222222","bucket":"private-upload-bucket","objectName":"instant-quotation/33333333333333333333333333333333/22222222222222222222222222222222.stl","fileName":"customer-part.stl","contentType":"model/stl","sizeBytes":123456,"sha256":"8f0d000000000000000000000000000000000000000000000000000000000000","status":"finalized"}]}
+            {"quotationRequestId":417,"files":[{"fileId":"22222222-2222-2222-2222-222222222222","bucket":"private-upload-bucket","objectName":"instant-quotation/417/22222222222222222222222222222222.stl","fileName":"customer-part.stl","contentType":"model/stl","sizeBytes":123456,"sha256":"8f0d000000000000000000000000000000000000000000000000000000000000","status":"finalized"}]}
             """);
         AddProblemResponse(operation, "400", "validation_error");
         AddProblemResponse(operation, "403", "session_forbidden", append: true);
@@ -308,9 +309,18 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         ("sha256", StringSchema()),
         ("status", StringSchema()));
 
+    private static OpenApiSchema FinalizationRequestSchema() => ObjectSchema(
+        new HashSet<string> { "quotationRequestId", "fileIds" },
+        ("quotationRequestId", PositiveInt32Schema()),
+        ("fileIds", new OpenApiSchema
+        {
+            Type = JsonSchemaType.Array,
+            Items = StringSchema("uuid"),
+        }));
+
     private static OpenApiSchema FinalizationSchema() => ObjectSchema(
         new HashSet<string> { "quotationRequestId", "files" },
-        ("quotationRequestId", StringSchema("uuid")),
+        ("quotationRequestId", PositiveInt32Schema()),
         ("files", new OpenApiSchema
         {
             Type = JsonSchemaType.Array,
@@ -346,5 +356,12 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
     {
         Type = JsonSchemaType.Integer,
         Format = format,
+    };
+
+    private static OpenApiSchema PositiveInt32Schema() => new()
+    {
+        Type = JsonSchemaType.Integer,
+        Format = "int32",
+        Minimum = "1",
     };
 }
