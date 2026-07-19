@@ -9,13 +9,15 @@ public sealed class InstantQuoteFinalization
 
     /// <summary>Creates a finalization reservation.</summary>
     public InstantQuoteFinalization(Guid id, Guid sessionId, byte[] idempotencyKeyHash, string requestFingerprint,
-        Guid quotationRequestId, IReadOnlyCollection<Guid> selectedFileIds, InstantQuoteWorkflowState state,
+        int quotationRequestId, IReadOnlyCollection<Guid> selectedFileIds, InstantQuoteWorkflowState state,
         DateTimeOffset createdAt, DateTimeOffset modifiedAt)
     {
         ArgumentNullException.ThrowIfNull(idempotencyKeyHash);
         if (idempotencyKeyHash.Length != 32) throw new ArgumentException("Idempotency hashes must be SHA-256 values.", nameof(idempotencyKeyHash));
         if (requestFingerprint.Length != 64 || requestFingerprint.Any(value => !char.IsAsciiHexDigit(value) || char.IsUpper(value)))
             throw new ArgumentException("Fingerprints must be 64 lowercase hexadecimal characters.", nameof(requestFingerprint));
+        if (quotationRequestId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(quotationRequestId), "Quotation request identifiers must be positive.");
 
         Id = id;
         SessionId = sessionId;
@@ -37,7 +39,7 @@ public sealed class InstantQuoteFinalization
     /// <summary>Gets the lowercase SHA-256 request fingerprint.</summary>
     public string RequestFingerprint { get; private set; } = string.Empty;
     /// <summary>Gets the quotation request identifier.</summary>
-    public Guid QuotationRequestId { get; private set; }
+    public int QuotationRequestId { get; private set; }
     /// <summary>Gets selected file identifiers in deterministic order.</summary>
     public Guid[] SelectedFileIds { get; private set; } = [];
     /// <summary>Gets or sets the workflow state.</summary>

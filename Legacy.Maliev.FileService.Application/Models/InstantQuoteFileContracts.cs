@@ -79,12 +79,12 @@ public sealed record FinalizedInstantQuoteFileResponse(
 /// <param name="QuotationRequestId">Identifier owned by the Web quotation workflow.</param>
 /// <param name="FileIds">Files selected from this upload session.</param>
 public sealed record FinalizeInstantQuoteFilesRequest(
-    [property: JsonPropertyName("quotationRequestId")] Guid QuotationRequestId,
+    [property: JsonPropertyName("quotationRequestId")] int QuotationRequestId,
     [property: JsonPropertyName("fileIds")] IReadOnlyList<Guid> FileIds);
 
 /// <summary>Returns the files linked to the quotation request.</summary>
 /// <param name="QuotationRequestId">Identifier owned by the Web quotation workflow.</param>
 /// <param name="Files">Authoritative finalized file results.</param>
 public sealed record FinalizeInstantQuoteFilesResponse(
-    [property: JsonPropertyName("quotationRequestId")] Guid QuotationRequestId,
+    [property: JsonPropertyName("quotationRequestId")] int QuotationRequestId,
     [property: JsonPropertyName("files")] IReadOnlyList<FinalizedInstantQuoteFileResponse> Files);

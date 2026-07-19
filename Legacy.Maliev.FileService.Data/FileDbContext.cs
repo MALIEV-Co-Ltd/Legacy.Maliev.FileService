@@ -59,6 +59,8 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
             table.HasCheckConstraint("CK_InstantQuoteUploadFile_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
             table.HasCheckConstraint("CK_InstantQuoteUploadFile_ExpectedSha256", "\"ExpectedSha256\" ~ '^[0-9a-f]{64}$'");
             table.HasCheckConstraint("CK_InstantQuoteUploadFile_ActualSha256", "\"ActualSha256\" IS NULL OR \"ActualSha256\" ~ '^[0-9a-f]{64}$'");
+            table.HasCheckConstraint("CK_InstantQuoteUploadFile_FinalizedQuotationRequestId_Positive",
+                "\"FinalizedQuotationRequestId\" IS NULL OR \"FinalizedQuotationRequestId\" > 0");
         });
         instantFile.HasKey(value => value.Id);
         instantFile.Property(value => value.IdempotencyKeyHash).HasColumnType("bytea").IsRequired();
@@ -87,6 +89,7 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         {
             table.HasCheckConstraint("CK_InstantQuoteFinalization_KeyHash_Length", "octet_length(\"IdempotencyKeyHash\") = 32");
             table.HasCheckConstraint("CK_InstantQuoteFinalization_Fingerprint", "\"RequestFingerprint\" ~ '^[0-9a-f]{64}$'");
+            table.HasCheckConstraint("CK_InstantQuoteFinalization_QuotationRequestId_Positive", "\"QuotationRequestId\" > 0");
         });
         finalization.HasKey(value => value.Id);
         finalization.Property(value => value.IdempotencyKeyHash).HasColumnType("bytea").IsRequired();

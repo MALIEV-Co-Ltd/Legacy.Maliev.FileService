@@ -4,6 +4,7 @@ namespace Legacy.Maliev.FileService.Domain;
 public sealed class InstantQuoteUploadFile
 {
     private string? actualSha256;
+    private int? finalizedQuotationRequestId;
 
     private InstantQuoteUploadFile()
     {
@@ -86,7 +87,18 @@ public sealed class InstantQuoteUploadFile
     /// <summary>Gets or sets the opaque final object name.</summary>
     public string? FinalObjectName { get; set; }
     /// <summary>Gets or sets the quotation request that authoritatively owns the finalized object.</summary>
-    public Guid? FinalizedQuotationRequestId { get; set; }
+    public int? FinalizedQuotationRequestId
+    {
+        get => finalizedQuotationRequestId;
+        set
+        {
+            if (value <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "Quotation request identifiers must be positive.");
+            }
+            finalizedQuotationRequestId = value;
+        }
+    }
     /// <summary>Gets or sets the workflow state.</summary>
     public InstantQuoteWorkflowState State { get; set; }
     /// <summary>Gets the creation timestamp.</summary>

@@ -112,7 +112,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var first = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
         var second = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
         var finalization = new InstantQuoteFinalization(
-            Guid.NewGuid(), session.Id, Hash("finalize-key"), new string('c', 64), Guid.NewGuid(),
+            Guid.NewGuid(), session.Id, Hash("finalize-key"), new string('c', 64), 1001,
             [second, first], InstantQuoteWorkflowState.Pending, Now, Now);
 
         var acquired = await repository.ReserveFinalizationAsync(finalization, CancellationToken.None);
@@ -140,7 +140,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         await repository.ReserveUploadAsync(CreateUpload(session.Id, "fingerprint-a"), CancellationToken.None);
         await repository.ReserveFinalizationAsync(
             new InstantQuoteFinalization(Guid.NewGuid(), session.Id, Hash("finalize-key"), new string('c', 64),
-                Guid.NewGuid(), [], InstantQuoteWorkflowState.Pending, Now, Now),
+                1001, [], InstantQuoteWorkflowState.Pending, Now, Now),
             CancellationToken.None);
 
         context.InstantQuoteUploadSessions.Remove(session);
@@ -155,6 +155,10 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         Assert.False(upload.FindProperty("TemporaryBucket")!.IsNullable);
         Assert.True(upload.FindProperty("FinalBucket")!.IsNullable);
         Assert.True(upload.FindProperty("FinalizedQuotationRequestId")!.IsNullable);
+        Assert.Equal(typeof(int?), upload.FindProperty("FinalizedQuotationRequestId")!.ClrType);
+        Assert.Equal(
+            typeof(int),
+            context.Model.FindEntityType(typeof(InstantQuoteFinalization))!.FindProperty("QuotationRequestId")!.ClrType);
     }
 
     [Fact]
@@ -196,7 +200,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     public async Task SaveFinalization_DetachedReplayWithStaleXmin_RejectsLostUpdate()
     {
         Guid sessionId;
-        var quotationRequestId = Guid.NewGuid();
+        const int quotationRequestId = 1001;
         await using (var setupContext = await CreateMigratedContextAsync())
         {
             var repository = new InstantQuoteFileRepository(setupContext);
@@ -261,7 +265,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var acquired = await repository.ReserveUploadAsync(CreateUpload(session.Id, "removed"), CancellationToken.None);
         acquired.Record.FinalBucket = "final-bucket";
         acquired.Record.FinalObjectName = "instant-quotation/final.stl";
-        acquired.Record.FinalizedQuotationRequestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        acquired.Record.FinalizedQuotationRequestId = 1001;
         acquired.Record.State = InstantQuoteWorkflowState.Removed;
         await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
 
@@ -296,8 +300,8 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var secondRepository = new InstantQuoteFileRepository(secondContext);
         var first = Assert.Single(await firstRepository.GetSessionFilesAsync(sessionId, [fileId], CancellationToken.None));
         var second = Assert.Single(await secondRepository.GetSessionFilesAsync(sessionId, [fileId], CancellationToken.None));
-        var firstAuthority = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
-        var secondAuthority = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        const int firstAuthority = 1001;
+        const int secondAuthority = 1002;
         first.Upload.FinalizedQuotationRequestId = firstAuthority;
         first.Upload.State = InstantQuoteWorkflowState.Finalized;
         second.Upload.FinalizedQuotationRequestId = secondAuthority;
@@ -328,8 +332,8 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
         context.ChangeTracker.Clear();
 
-        var requestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
-        var destination = $"instant-quotation/{requestId:N}/{acquired.Record.Id:N}.stl";
+        const int requestId = 1001;
+        var destination = $"instant-quotation/{requestId}/{acquired.Record.Id:N}.stl";
         var storage = new SameAuthorityRaceStorage(
             destination,
             async () =>
@@ -428,7 +432,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             await new InstantQuoteFileRepository(setupContext).CreateSessionAsync(session, CancellationToken.None);
         }
 
-        var quotationRequestId = Guid.NewGuid();
+        const int quotationRequestId = 1001;
         await using var firstContext = fixture.CreateContext();
         await using var secondContext = fixture.CreateContext();
         var concurrent = await Task.WhenAll(
@@ -495,6 +499,29 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         Assert.Equal(PostgresErrorCodes.CheckViolation, actualException.SqlState);
     }
 
+    [Fact]
+    public async Task QuotationAuthorityConstraints_NonPositiveIdentifiers_PostgreSqlRejectsWrite()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        var upload = await repository.ReserveUploadAsync(
+            CreateUpload(session.Id, "authority-constraint"), CancellationToken.None);
+        var finalization = await repository.ReserveFinalizationAsync(
+            CreateFinalization(session.Id, 1001, "authority-constraint"), CancellationToken.None);
+
+        var uploadException = await Assert.ThrowsAsync<PostgresException>(() =>
+            context.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE \"InstantQuoteUploadFile\" SET \"FinalizedQuotationRequestId\" = {0} WHERE \"Id\" = {upload.Record.Id}"));
+        var finalizationException = await Assert.ThrowsAsync<PostgresException>(() =>
+            context.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE \"InstantQuoteFinalization\" SET \"QuotationRequestId\" = {-1} WHERE \"Id\" = {finalization.Record.Id}"));
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, uploadException.SqlState);
+        Assert.Equal(PostgresErrorCodes.CheckViolation, finalizationException.SqlState);
+    }
+
     private async Task<FileDbContext> CreateMigratedContextAsync()
     {
         var context = fixture.CreateContext();
@@ -518,7 +545,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         $"instant-quote/{sessionId:N}/{Guid.NewGuid():N}", null, null,
         InstantQuoteWorkflowState.Pending, Now, Now);
 
-    private static InstantQuoteFinalization CreateFinalization(Guid sessionId, Guid quotationRequestId, string fingerprint) => new(
+    private static InstantQuoteFinalization CreateFinalization(Guid sessionId, int quotationRequestId, string fingerprint) => new(
         Guid.NewGuid(), sessionId, Hash("finalize-key"), Fingerprint(fingerprint), quotationRequestId,
         [Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")], InstantQuoteWorkflowState.Pending, Now, Now);
 
