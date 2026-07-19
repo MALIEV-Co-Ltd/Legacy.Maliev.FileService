@@ -1,6 +1,7 @@
+using System.Globalization;
+using System.IO.Pipelines;
 using System.Security.Cryptography;
 using System.Text;
-using System.IO.Pipelines;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Domain;
@@ -301,7 +302,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         FinalizeInstantQuoteFilesRequest request,
         CancellationToken cancellationToken)
     {
-        if (request.QuotationRequestId == Guid.Empty || request.FileIds.Count == 0 ||
+        if (request.QuotationRequestId <= 0 || request.FileIds.Count == 0 ||
             request.FileIds.Any(value => value == Guid.Empty) || request.FileIds.Distinct().Count() != request.FileIds.Count)
         {
             throw new InstantQuoteValidationException("Finalization selection is invalid.");
@@ -332,7 +333,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteReplayConflictException("A selected file is already finalized for another quotation request.");
         }
-        var fingerprint = HashText($"{sessionId:N}\n{request.QuotationRequestId:N}\n{string.Join(',', selected.Select(value => value.ToString("N")))}");
+        var quotationRequestId = request.QuotationRequestId.ToString(CultureInfo.InvariantCulture);
+        var fingerprint = HashText($"{sessionId:N}\n{quotationRequestId}\n{string.Join(',', selected.Select(value => value.ToString("N")))}");
         var now = _timeProvider.GetUtcNow();
         var reservation = await ExecuteDurableStateAsync(() => _repository.ReserveFinalizationAsync(new InstantQuoteFinalization(
             Guid.NewGuid(), sessionId, SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)), fingerprint,
@@ -351,7 +353,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             foreach (var stored in files.OrderBy(value => value.Upload.Id))
             {
                 var upload = stored.Upload;
-                var destination = $"instant-quotation/{request.QuotationRequestId:N}/{upload.Id:N}{upload.ValidatedExtension}";
+                var destination = $"instant-quotation/{quotationRequestId}/{upload.Id:N}{upload.ValidatedExtension}";
                 InstantQuoteObjectMetadata final;
                 if (upload.State == InstantQuoteWorkflowState.Finalized)
                 {
