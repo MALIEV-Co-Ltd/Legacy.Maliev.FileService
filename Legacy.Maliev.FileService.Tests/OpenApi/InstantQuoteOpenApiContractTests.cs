@@ -76,10 +76,25 @@ public sealed class InstantQuoteOpenApiContractTests
         AssertHeader(finalize, "X-Quote-Session-Token", 32, 512, null);
         AssertHeader(finalize, "Idempotency-Key", 16, 128, null);
         var finalizeRequest = finalize.GetProperty("requestBody").GetProperty("content").GetProperty("application/json");
-        Assert.Equal("33333333-3333-3333-3333-333333333333", finalizeRequest.GetProperty("example").GetProperty("quotationRequestId").GetString());
+        Assert.Contains(
+            "quotationRequestId",
+            finalizeRequest.GetProperty("schema").GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+        var quotationRequestIdSchema = finalizeRequest.GetProperty("schema").GetProperty("properties").GetProperty("quotationRequestId");
+        Assert.Equal("integer", quotationRequestIdSchema.GetProperty("type").GetString());
+        Assert.Equal("int32", quotationRequestIdSchema.GetProperty("format").GetString());
+        Assert.Equal(1, quotationRequestIdSchema.GetProperty("minimum").GetInt32());
+        Assert.Equal(417, finalizeRequest.GetProperty("example").GetProperty("quotationRequestId").GetInt32());
         Assert.Equal("22222222-2222-2222-2222-222222222222", finalizeRequest.GetProperty("example").GetProperty("fileIds")[0].GetString());
         AssertResponse(finalize, "200", "application/json", "quotationRequestId", "files");
         var finalizedMedia = finalize.GetProperty("responses").GetProperty("200").GetProperty("content").GetProperty("application/json");
+        Assert.Contains(
+            "quotationRequestId",
+            finalizedMedia.GetProperty("schema").GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+        var responseQuotationRequestId = finalizedMedia.GetProperty("schema").GetProperty("properties").GetProperty("quotationRequestId");
+        Assert.Equal("integer", responseQuotationRequestId.GetProperty("type").GetString());
+        Assert.Equal("int32", responseQuotationRequestId.GetProperty("format").GetString());
+        Assert.Equal(1, responseQuotationRequestId.GetProperty("minimum").GetInt32());
+        Assert.Equal(417, finalizedMedia.GetProperty("example").GetProperty("quotationRequestId").GetInt32());
         var finalizedItemSchema = finalizedMedia.GetProperty("schema").GetProperty("properties").GetProperty("files").GetProperty("items");
         Assert.Equal(
             new[] { "bucket", "contentType", "fileId", "fileName", "objectName", "sha256", "sizeBytes", "status" },

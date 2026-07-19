@@ -98,7 +98,7 @@ Required headers are `X-Quote-Session-Token` and `Idempotency-Key`.
 
 ```json
 {
-  "quotationRequestId": "33333333-3333-3333-3333-333333333333",
+  "quotationRequestId": 417,
   "fileIds": ["22222222-2222-2222-2222-222222222222"]
 }
 ```
@@ -107,12 +107,12 @@ Success: `200 OK`
 
 ```json
 {
-  "quotationRequestId": "33333333-3333-3333-3333-333333333333",
+  "quotationRequestId": 417,
   "files": [
     {
       "fileId": "22222222-2222-2222-2222-222222222222",
       "bucket": "private-upload-bucket",
-      "objectName": "instant-quotation/33333333333333333333333333333333/22222222222222222222222222222222.stl",
+      "objectName": "instant-quotation/417/22222222222222222222222222222222.stl",
       "fileName": "customer-part.stl",
       "contentType": "model/stl",
       "sizeBytes": 123456,
@@ -124,6 +124,10 @@ Success: `200 OK`
 ```
 
 Only file IDs owned by the same unexpired session and already recorded clean can be finalized. A file or token from another session is rejected without disclosing whether that resource exists.
+
+`quotationRequestId` is a required positive JSON integer. It is the authoritative legacy `Request.ID` created by QuotationRequestService and later stored unchanged as `RequestFile.RequestID`. At the Web checkpoint, Web first creates the legacy quotation request, reads that returned integer ID, and passes the same value unchanged to this finalization endpoint. FileService uses it only to bind and idempotently finalize the selected files.
+
+The value is not a UUID, quote-session ID, hash, string encoding, submission identifier, or FileService-generated identifier. Web and FileService must not derive or substitute another value. The legacy database remains the source of truth for `Request.ID` and `RequestFile.RequestID`; this API does not write, migrate, or otherwise alter that legacy database.
 
 `bucket` and `objectName` are server-only linking coordinates for the BFF's existing QuotationRequest integration. They are not download URLs or public object identifiers and must be removed from any browser-facing response. Replacing these coordinates with an opaque cross-service link requires a coordinated QuotationRequest API change and is outside this compatibility contract.
 

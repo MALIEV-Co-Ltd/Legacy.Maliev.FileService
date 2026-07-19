@@ -23,7 +23,7 @@ public sealed class InstantQuotationFilesContractTests
 {
     private static readonly Guid SessionId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid FileId = Guid.Parse("22222222-2222-2222-2222-222222222222");
-    private static readonly Guid QuotationRequestId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+    private const int QuotationRequestId = 417;
 
     [Fact]
     public void Controller_PublishesExactAuthenticatedRoutesAndPermission()
@@ -113,6 +113,13 @@ public sealed class InstantQuotationFilesContractTests
         Assert.Contains("server-side session state", documentation, StringComparison.Ordinal);
         Assert.Contains("current Web integration does not delegate the member subject", documentation, StringComparison.Ordinal);
         Assert.Contains("Web service identity", documentation, StringComparison.Ordinal);
+        Assert.Contains("required positive JSON integer", documentation, StringComparison.Ordinal);
+        Assert.Contains("legacy `Request.ID`", documentation, StringComparison.Ordinal);
+        Assert.Contains("`RequestFile.RequestID`", documentation, StringComparison.Ordinal);
+        Assert.Contains("passes the same value unchanged", documentation, StringComparison.Ordinal);
+        Assert.Contains("not a UUID", documentation, StringComparison.Ordinal);
+        Assert.Contains("legacy database remains the source of truth", documentation, StringComparison.Ordinal);
+        Assert.DoesNotContain("33333333-3333-3333-3333-333333333333", documentation, StringComparison.Ordinal);
         foreach (var code in new[]
         {
             "validation_error", "session_forbidden", "idempotency_conflict", "upload_in_progress",
