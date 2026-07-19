@@ -112,6 +112,7 @@ public static class FileServiceRuntimeRegistration
              options.CleanupInterval > TimeSpan.FromDays(1) ||
              options.CleanupRetryDelay < TimeSpan.FromSeconds(10) ||
              options.CleanupRetryDelay > TimeSpan.FromDays(1) ||
+             options.CleanupRetryDelay < options.CleanupTimeout.Add(TimeSpan.FromSeconds(5)) ||
              options.CleanupSessionExpiryGrace < TimeSpan.Zero ||
              options.CleanupSessionExpiryGrace > TimeSpan.FromDays(7) ||
              options.CleanupBatchSize is < 1 or > 500))

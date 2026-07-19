@@ -96,10 +96,33 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         Assert.Equal(1001, upload.FinalizedQuotationRequestId);
     }
 
+    [Fact]
+    public async Task RunOnce_MultipleCandidates_StampsEachClaimAtItsActualStartTime()
+    {
+        var first = CreateUpload(InstantQuoteWorkflowState.Finalized);
+        var second = CreateUpload(InstantQuoteWorkflowState.Finalized);
+        var repository = new FakeCleanupRepository(
+            new InstantQuoteStoredUpload(first, 17),
+            new InstantQuoteStoredUpload(second, 27));
+        var time = new FakeTimeProvider(Now);
+        var storage = new FakeStorage
+        {
+            AfterDelete = () => time.Advance(TimeSpan.FromMinutes(2)),
+        };
+
+        await CreateService(repository, storage, timeProvider: time).RunOnceAsync(CancellationToken.None);
+
+        var claims = repository.Saves.Where(value => value.Generation is not null).ToArray();
+        Assert.Equal(2, claims.Length);
+        Assert.Equal(Now, claims[0].ModifiedAt);
+        Assert.Equal(Now.AddMinutes(2), claims[1].ModifiedAt);
+    }
+
     private static InstantQuoteTemporaryObjectCleanupService CreateService(
         FakeCleanupRepository repository,
         FakeStorage storage,
-        bool cleanupEnabled = true) => new(
+        bool cleanupEnabled = true,
+        FakeTimeProvider? timeProvider = null) => new(
             repository,
             storage,
             Options.Create(new InstantQuoteFileOptions
@@ -112,7 +135,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
                 CleanupSessionExpiryGrace = TimeSpan.FromMinutes(15),
                 CleanupTimeout = TimeSpan.FromSeconds(5),
             }),
-            new FakeTimeProvider(Now),
+            timeProvider ?? new FakeTimeProvider(Now),
             NullLogger<InstantQuoteTemporaryObjectCleanupService>.Instance);
 
     private static InstantQuoteUploadFile CreateUpload(InstantQuoteWorkflowState state) => new(
@@ -124,7 +147,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         : IInstantQuoteCleanupRepository
     {
         public int QueryCount { get; private set; }
-        public List<(InstantQuoteWorkflowState State, long? Generation, uint ExpectedVersion)> Saves { get; } = [];
+        public List<(InstantQuoteWorkflowState State, long? Generation, DateTimeOffset ModifiedAt, uint ExpectedVersion)> Saves { get; } = [];
 
         public Task<IReadOnlyList<InstantQuoteStoredUpload>> GetTemporaryCleanupCandidatesAsync(
             DateTimeOffset expiredBefore,
@@ -141,7 +164,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
             uint expectedVersion,
             CancellationToken cancellationToken)
         {
-            Saves.Add((upload.State, upload.GcsGeneration, expectedVersion));
+            Saves.Add((upload.State, upload.GcsGeneration, upload.ModifiedAt, expectedVersion));
             return Task.FromResult(expectedVersion + 1);
         }
     }
@@ -149,12 +172,18 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
     private sealed class FakeStorage : IInstantQuoteObjectStorage
     {
         public Exception? DeleteException { get; init; }
+        public Action? AfterDelete { get; init; }
         public List<(string Bucket, string ObjectName, long Generation)> Deletes { get; } = [];
 
         public Task DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken)
         {
             Deletes.Add((bucket, objectName, generation));
-            return DeleteException is null ? Task.CompletedTask : Task.FromException(DeleteException);
+            if (DeleteException is not null)
+            {
+                return Task.FromException(DeleteException);
+            }
+            AfterDelete?.Invoke();
+            return Task.CompletedTask;
         }
 
         public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(string bucket, string objectName, Stream content,
