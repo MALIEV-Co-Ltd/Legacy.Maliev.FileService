@@ -1021,7 +1021,13 @@ public sealed class InstantQuoteFileServiceTests
         repository,
         storage ?? new FakeStorage(),
         scanner ?? new FakeScanner(),
-        Options.Create(new InstantQuoteFileOptions { StorageBucket = "private-bucket" }),
+        Options.Create(new InstantQuoteFileOptions
+        {
+            Enabled = true,
+            WritesEnabled = true,
+            TemporaryBucket = "private-bucket",
+            FinalBucket = "private-bucket",
+        }),
         new FakeTimeProvider(Now));
 
     private static (InstantQuoteFileService Service, FakeRepository Repository, FakeStorage Storage, FakeScanner Scanner)

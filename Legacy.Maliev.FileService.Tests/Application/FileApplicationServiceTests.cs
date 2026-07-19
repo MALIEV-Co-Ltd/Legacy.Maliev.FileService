@@ -138,6 +138,7 @@ public sealed class FileApplicationServiceTests
     {
         var options = Options.Create(new FileStorageOptions
         {
+            WritesEnabled = true,
             AllowedBuckets = ["maliev.com"],
             QuarantinePrefix = "_quarantine",
             SignedUrlHours = 168,
