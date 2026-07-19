@@ -45,7 +45,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             {
                 upload.State = InstantQuoteWorkflowState.Removed;
             }
-            upload.ModifiedAt = now;
+            upload.ModifiedAt = timeProvider.GetUtcNow();
 
             uint claimVersion;
             try

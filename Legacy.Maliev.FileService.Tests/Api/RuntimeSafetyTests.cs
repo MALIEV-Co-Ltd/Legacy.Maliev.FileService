@@ -187,6 +187,26 @@ public sealed class RuntimeSafetyTests
             unsafeLifetimes.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
     }
 
+    [Theory]
+    [InlineData("00:00:15")]
+    [InlineData("00:00:10")]
+    public void InstantQuoteOptionsValidator_CleanupRetryMustSafelyExceedDeleteTimeout(string retryDelay)
+    {
+        using var provider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:CleanupEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+            new("InstantQuoteFiles:CleanupTimeout", "00:00:15"),
+            new("InstantQuoteFiles:CleanupRetryDelay", retryDelay),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+    }
+
     private static IServiceCollection CreateServices(
         IReadOnlyCollection<KeyValuePair<string, string?>> values,
         RecordingInstantQuoteRepository repository)
