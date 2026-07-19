@@ -6,6 +6,7 @@ using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Data;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Legacy.Maliev.FileService.Api;
 
@@ -67,11 +68,23 @@ public static class FileServiceRuntimeRegistration
         {
             services.TryAddScoped<IInstantQuoteObjectStorage, InstantQuoteGoogleCloudObjectStorage>();
             services.TryAddScoped<IInstantQuoteFileSafetyScanner, ClamAvFileSafetyScanner>();
+            services.TryAddSingleton<IInstantQuoteObjectStorageReadinessProbe, InstantQuoteGoogleCloudReadinessProbe>();
+            services.TryAddSingleton<IInstantQuoteScannerReadinessProbe, InstantQuoteClamAvReadinessProbe>();
+            services.AddHealthChecks()
+                .AddCheck<InstantQuoteFilesReadinessHealthCheck>(
+                    "instant_quote_files",
+                    failureStatus: HealthStatus.Unhealthy,
+                    tags: ["ready"]);
         }
         else
         {
             services.TryAddScoped<IInstantQuoteObjectStorage, DisabledInstantQuoteObjectStorage>();
             services.TryAddScoped<IInstantQuoteFileSafetyScanner, DisabledInstantQuoteFileSafetyScanner>();
+            services.AddHealthChecks()
+                .AddCheck(
+                    "instant_quote_files",
+                    () => HealthCheckResult.Healthy("disabled"),
+                    tags: ["ready"]);
         }
 
         services.TryAddScoped<IUploadRepository, UploadRepository>();
