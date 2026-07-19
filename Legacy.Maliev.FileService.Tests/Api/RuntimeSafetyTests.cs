@@ -213,8 +213,11 @@ public sealed class RuntimeSafetyTests
     [InlineData("quote.-temp")]
     [InlineData("quote.temp-")]
     [InlineData("192.0.2.1")]
+    [InlineData("goog-quotes")]
+    [InlineData("my-google-bucket")]
+    [InlineData("my-g00gle-bucket")]
     [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    public void InstantQuoteOptionsValidator_EnabledWritesRejectNonDnsCompatibleBucketNames(string bucket)
+    public void InstantQuoteOptionsValidator_EnabledWritesRejectInvalidOrProviderReservedBucketNames(string bucket)
     {
         using var provider = CreateServices(
         [

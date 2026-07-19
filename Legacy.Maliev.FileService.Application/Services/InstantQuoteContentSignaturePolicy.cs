@@ -61,8 +61,6 @@ public static class InstantQuoteContentSignaturePolicy
             var reader = new Utf8JsonReader(prefix, isFinalBlock, default);
             var rootObject = false;
             var rootComplete = false;
-            var assetPropertyPending = false;
-            var assetObject = false;
 
             while (reader.Read())
             {
@@ -82,33 +80,13 @@ public static class InstantQuoteContentSignaturePolicy
                     return false;
                 }
 
-                if (assetPropertyPending)
-                {
-                    if (reader.TokenType != JsonTokenType.StartObject || reader.CurrentDepth != 1)
-                    {
-                        return false;
-                    }
-
-                    assetObject = true;
-                    assetPropertyPending = false;
-                    continue;
-                }
-
-                if (reader.TokenType == JsonTokenType.PropertyName &&
-                    reader.CurrentDepth == 1 &&
-                    reader.ValueTextEquals("asset"u8))
-                {
-                    assetPropertyPending = true;
-                    continue;
-                }
-
                 if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
                 {
                     rootComplete = true;
                 }
             }
 
-            return rootObject && assetObject && (!isFinalBlock || rootComplete);
+            return rootObject && (!isFinalBlock || rootComplete);
         }
         catch (JsonException)
         {
