@@ -97,8 +97,8 @@ public sealed class InstantQuoteFilePolicyTests
     [Theory]
     [InlineData("short", "idem-01234567890", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     [InlineData("token-value", "bad\u0001key-0123456", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData("token-value", "idem-01234567890", "xyz")]
-    [InlineData("token-value", "idem-01234567890", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG")]
+    [InlineData("token-value", "idem-01234567890", "xyz")] // gitleaks:allow -- deterministic invalid-header fixture
+    [InlineData("token-value", "idem-01234567890", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG")] // gitleaks:allow -- deterministic invalid-header fixture
     public void NormalizeHeaders_InvalidValue_Throws(string token, string idempotencyKey, string digest)
     {
         Assert.Throws<InstantQuoteValidationException>(() =>
