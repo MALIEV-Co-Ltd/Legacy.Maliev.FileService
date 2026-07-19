@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Legacy.Maliev.FileService.Data.Migrations
 {
     [DbContext(typeof(FileDbContext))]
-    [Migration("20260719001250_ReplaceQuotationRequestIdsWithInteger")]
-    partial class ReplaceQuotationRequestIdsWithInteger
+    [Migration("20260719033405_AddInstantQuoteUploadWorkflow")]
+    partial class AddInstantQuoteUploadWorkflow
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
