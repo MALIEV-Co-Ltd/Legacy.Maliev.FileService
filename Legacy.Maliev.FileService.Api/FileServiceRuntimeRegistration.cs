@@ -135,7 +135,10 @@ public static class FileServiceRuntimeRegistration
     private static bool IsBucketName(string value)
     {
         if (value.Length is < 3 or > 222 ||
-            value.Count(character => character == '.') == 3 && IPAddress.TryParse(value, out _))
+            value.Count(character => character == '.') == 3 && IPAddress.TryParse(value, out _) ||
+            value.StartsWith("goog", StringComparison.Ordinal) ||
+            value.Contains("google", StringComparison.Ordinal) ||
+            value.Contains("g00gle", StringComparison.Ordinal))
         {
             return false;
         }

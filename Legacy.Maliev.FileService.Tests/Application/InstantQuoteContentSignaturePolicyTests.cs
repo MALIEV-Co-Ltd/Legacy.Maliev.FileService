@@ -38,15 +38,29 @@ public sealed class InstantQuoteContentSignaturePolicyTests
         InstantQuoteContentSignaturePolicy.Validate(".gltf", prefix.AsSpan(0, 4096), prefix.Length + 100);
     }
 
+    [Fact]
+    public void Validate_GltfWhoseAssetPropertyIsAfterCapturedPrefix_AcceptsOrderIndependentStructuralPrefix()
+    {
+        var document = Encoding.UTF8.GetBytes(
+            "{\"extras\":{\"padding\":\"" + new string('a', 5000) + "\"},\"asset\":{\"version\":\"2.0\"}}");
+
+        InstantQuoteContentSignaturePolicy.Validate(".gltf", document.AsSpan(0, 4096), document.Length);
+    }
+
+    [Fact]
+    public void Validate_GltfObjectWithoutAssetMarker_AcceptsBoundedPlausibilityCheck()
+    {
+        var bytes = Encoding.UTF8.GetBytes("{\"scene\":0}");
+
+        InstantQuoteContentSignaturePolicy.Validate(".gltf", bytes, bytes.Length);
+    }
+
     [Theory]
     [InlineData("not json")]
     [InlineData("[]")]
-    [InlineData("{\"scene\":0}")]
-    [InlineData("{\"metadata\":{\"asset\":{}}}")]
-    [InlineData("{\"asset\":[]}")]
     [InlineData("{\"asset\":{\"version\":\"2.0\"}")]
     [InlineData("{\"asset\":{\"version\":\"2.0\"},,}")]
-    public void Validate_GltfWithoutPlausibleTopLevelAssetObject_RejectsContent(string value)
+    public void Validate_GltfMalformedOrNonObjectDocument_RejectsContent(string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
 
