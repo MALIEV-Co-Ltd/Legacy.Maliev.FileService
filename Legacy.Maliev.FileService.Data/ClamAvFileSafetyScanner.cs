@@ -11,12 +11,31 @@ namespace Legacy.Maliev.FileService.Data;
 /// <summary>Streams complete files to a ClamAV daemon without writing them to local disk.</summary>
 public sealed class ClamAvFileSafetyScanner(
     IOptions<MalwareScannerOptions> options,
-    ILogger<ClamAvFileSafetyScanner> logger) : IFileSafetyScanner
+    ILogger<ClamAvFileSafetyScanner> logger) : IFileSafetyScanner, IInstantQuoteFileSafetyScanner
 {
     private const int ChunkSize = 64 * 1024;
+    private const int MaxResponseBytes = 4096;
 
     /// <inheritdoc />
     public async Task<FileSafetyResult> ScanAsync(IUploadFile file, CancellationToken cancellationToken)
+    {
+        await using var content = file.OpenReadStream();
+        return await ScanContentAsync(content, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstantQuoteScanResult> ScanAsync(Stream content, CancellationToken cancellationToken)
+    {
+        var result = await ScanContentAsync(content, cancellationToken);
+        return result.Verdict switch
+        {
+            FileSafetyVerdict.Clean => InstantQuoteScanResult.Clean,
+            FileSafetyVerdict.Infected => InstantQuoteScanResult.Unsafe,
+            _ => InstantQuoteScanResult.Unavailable,
+        };
+    }
+
+    private async Task<FileSafetyResult> ScanContentAsync(Stream content, CancellationToken cancellationToken)
     {
         var settings = options.Value;
         if (string.IsNullOrWhiteSpace(settings.Host))
@@ -33,7 +52,6 @@ public sealed class ClamAvFileSafetyScanner(
             await using var network = client.GetStream();
             await network.WriteAsync("zINSTREAM\0"u8.ToArray(), timeout.Token);
 
-            await using var content = file.OpenReadStream();
             var buffer = new byte[ChunkSize];
             while (true)
             {
@@ -52,15 +70,44 @@ public sealed class ClamAvFileSafetyScanner(
             await network.WriteAsync(new byte[sizeof(int)], timeout.Token);
             await network.FlushAsync(timeout.Token);
 
-            var responseBuffer = new byte[4096];
-            var responseLength = await network.ReadAsync(responseBuffer, timeout.Token);
-            return ParseResponse(Encoding.UTF8.GetString(responseBuffer, 0, responseLength));
+            var response = await ReadResponseAsync(network, timeout.Token);
+            return response is null
+                ? new FileSafetyResult(FileSafetyVerdict.Unavailable)
+                : ParseResponse(response);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException)
         {
             logger.LogWarning(exception, "ClamAV could not scan upload");
             return new FileSafetyResult(FileSafetyVerdict.Unavailable);
         }
+    }
+
+    private static async Task<string?> ReadResponseAsync(NetworkStream network, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[MaxResponseBytes];
+        var length = 0;
+        while (length < buffer.Length)
+        {
+            var read = await network.ReadAsync(buffer.AsMemory(length), cancellationToken);
+            if (read == 0)
+            {
+                return null;
+            }
+
+            var terminatorOffset = buffer.AsSpan(length, read).IndexOf((byte)0);
+            if (terminatorOffset >= 0)
+            {
+                return Encoding.UTF8.GetString(buffer, 0, length + terminatorOffset + 1);
+            }
+
+            length += read;
+        }
+
+        return null;
     }
 
     /// <summary>Parses a ClamAV INSTREAM response.</summary>
