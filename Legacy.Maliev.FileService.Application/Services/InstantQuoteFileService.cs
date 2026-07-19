@@ -38,6 +38,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         InstantQuoteOwner owner,
         CancellationToken cancellationToken)
     {
+        EnsureWritesEnabled();
         var token = RandomNumberGenerator.GetBytes(32);
         var now = _timeProvider.GetUtcNow();
         var session = new InstantQuoteUploadSession(
@@ -82,6 +83,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         InstantQuoteUploadMetadata metadata,
         CancellationToken cancellationToken)
     {
+        EnsureWritesEnabled();
         var headers = InstantQuoteFilePolicy.NormalizeHeaders(token, idempotencyKey, expectedSha256);
         var normalized = InstantQuoteFilePolicy.NormalizeFileMetadata(metadata.FileName, metadata.ContentType);
         var tokenHash = SHA256.HashData(DecodeBase64Url(headers.Token));
@@ -98,13 +100,9 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         var fileId = Guid.NewGuid();
         var temporaryName = $"instant-quotation/temp/{sessionId:N}/{fileId:N}{normalized.Extension}";
         var now = _timeProvider.GetUtcNow();
-        if (string.IsNullOrWhiteSpace(_options.StorageBucket))
-        {
-            throw new InstantQuoteDependencyUnavailableException("Instant quotation storage is not configured.");
-        }
         var reservation = await ExecuteDurableStateAsync(() => _repository.ReserveUploadAsync(new InstantQuoteUploadFile(
             fileId, sessionId, idempotencyHash, fingerprint, normalized.Metadata.FileName, normalized.Extension,
-            normalized.Metadata.ContentType, headers.ExpectedSha256, null, null, null, _options.StorageBucket,
+            normalized.Metadata.ContentType, headers.ExpectedSha256, null, null, null, _options.TemporaryBucket,
             temporaryName, null, null,
             InstantQuoteWorkflowState.Pending, now, now), cancellationToken));
 
@@ -235,6 +233,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         Guid fileId,
         CancellationToken cancellationToken)
     {
+        EnsureWritesEnabled();
         if (fileId == Guid.Empty)
         {
             throw new InstantQuoteValidationException("File identifier is invalid.");
@@ -302,6 +301,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         FinalizeInstantQuoteFilesRequest request,
         CancellationToken cancellationToken)
     {
+        EnsureWritesEnabled();
         if (request.QuotationRequestId <= 0 || request.FileIds.Count == 0 ||
             request.FileIds.Any(value => value == Guid.Empty) || request.FileIds.Distinct().Count() != request.FileIds.Count)
         {
@@ -371,7 +371,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                     {
                         throw new InstantQuoteAmbiguousOutcomeException("Clean upload generation is unavailable.");
                     }
-                    var existing = await _storage.GetMetadataAsync(_options.StorageBucket, destination, cancellationToken);
+                    var existing = await _storage.GetMetadataAsync(_options.FinalBucket, destination, cancellationToken);
                     var promoted = false;
                     if (existing is not null)
                     {
@@ -386,7 +386,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
                     {
                         final = await _storage.PromoteGenerationAsync(
                             upload.TemporaryBucket, upload.TemporaryObjectName, upload.GcsGeneration.Value,
-                            _options.StorageBucket, destination, cancellationToken);
+                            _options.FinalBucket, destination, cancellationToken);
                         promoted = true;
                     }
                     upload.FinalBucket = final.Bucket;
@@ -736,6 +736,14 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteDependencyUnavailableException(
                 "A required instant quotation dependency is unavailable.", exception);
+        }
+    }
+
+    private void EnsureWritesEnabled()
+    {
+        if (!_options.Enabled || !_options.WritesEnabled)
+        {
+            throw new InstantQuoteDependencyUnavailableException("Instant quotation file writes are disabled.");
         }
     }
 
