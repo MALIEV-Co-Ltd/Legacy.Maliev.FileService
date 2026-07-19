@@ -77,6 +77,10 @@ signer, and are issued only when clean `Upload` metadata exists.
 - Planned database: `legacy-postgres-file`
 - GCS authentication: Application Default Credentials / GKE Workload Identity only
 
+GCS object privacy is enforced by private bucket IAM with Uniform Bucket-Level
+Access (UBLA). The service does not set per-object ACLs; enabled instant-quotation
+buckets must be distinct, lowercase DNS-compatible GCS names.
+
 ClamAV must be configured for at least the legacy 200 MB request ceiling. Leaving
 `MalwareScanner__Host` empty is safe for local startup, but all upload requests fail
 closed with `503` until a scanner is available.
