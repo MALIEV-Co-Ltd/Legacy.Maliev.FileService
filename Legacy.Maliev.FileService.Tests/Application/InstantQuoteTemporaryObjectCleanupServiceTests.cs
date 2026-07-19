@@ -59,20 +59,45 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         Assert.Equal(42, claimed.Generation);
     }
 
-    [Theory]
-    [InlineData(InstantQuoteWorkflowState.Pending)]
-    [InlineData(InstantQuoteWorkflowState.Uploaded)]
-    [InlineData(InstantQuoteWorkflowState.Unknown)]
-    public async Task RunOnce_AmbiguousOrActiveState_NeverDeletes(
-        InstantQuoteWorkflowState state)
+    [Fact]
+    public async Task RunOnce_StalePendingWithoutObject_PersistsTerminalFailure()
     {
-        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(CreateUpload(state), 17));
+        var upload = CreateUpload(InstantQuoteWorkflowState.Pending);
+        upload.GcsGeneration = null;
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
         var storage = new FakeStorage();
 
         var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(0, cleaned);
-        Assert.Empty(repository.Saves);
+        Assert.Equal(InstantQuoteWorkflowState.Failed, Assert.Single(repository.Saves).State);
+        Assert.Empty(storage.Deletes);
+    }
+
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Pending)]
+    [InlineData(InstantQuoteWorkflowState.Uploaded)]
+    [InlineData(InstantQuoteWorkflowState.Unknown)]
+    public async Task RunOnce_StaleRecoverableObject_ReconcilesExactGenerationToClean(
+        InstantQuoteWorkflowState state)
+    {
+        var bytes = new byte[84];
+        System.Text.Encoding.ASCII.GetBytes("binary stl").CopyTo(bytes, 0);
+        var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var upload = CreateUpload(state, sha);
+        upload.ActualSha256 = null;
+        upload.ActualSizeBytes = null;
+        upload.GcsGeneration = null;
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage(bytes, new InstantQuoteObjectMetadata(
+            upload.TemporaryBucket, upload.TemporaryObjectName, 73, bytes.Length, sha));
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, cleaned);
+        var reconciled = Assert.Single(repository.Saves);
+        Assert.Equal(InstantQuoteWorkflowState.Clean, reconciled.State);
+        Assert.Equal(73, reconciled.Generation);
         Assert.Empty(storage.Deletes);
     }
 
@@ -125,6 +150,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         FakeTimeProvider? timeProvider = null) => new(
             repository,
             storage,
+            new CleanScanner(),
             Options.Create(new InstantQuoteFileOptions
             {
                 Enabled = true,
@@ -138,9 +164,9 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
             timeProvider ?? new FakeTimeProvider(Now),
             NullLogger<InstantQuoteTemporaryObjectCleanupService>.Instance);
 
-    private static InstantQuoteUploadFile CreateUpload(InstantQuoteWorkflowState state) => new(
+    private static InstantQuoteUploadFile CreateUpload(InstantQuoteWorkflowState state, string? expectedSha256 = null) => new(
         Guid.NewGuid(), Guid.NewGuid(), new byte[32], new string('a', 64), "part.stl", ".stl", "model/stl",
-        new string('b', 64), new string('b', 64), 128, 42, "temporary-bucket",
+        expectedSha256 ?? new string('b', 64), expectedSha256 ?? new string('b', 64), 128, 42, "temporary-bucket",
         $"instant-quotation/temp/{Guid.NewGuid():N}.stl", null, null, state, Now.AddHours(-2), Now.AddHours(-1));
 
     private sealed class FakeCleanupRepository(params InstantQuoteStoredUpload[] candidates)
@@ -169,7 +195,9 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         }
     }
 
-    private sealed class FakeStorage : IInstantQuoteObjectStorage
+    private sealed class FakeStorage(
+        byte[]? bytes = null,
+        InstantQuoteObjectMetadata? metadata = null) : IInstantQuoteObjectStorage
     {
         public Exception? DeleteException { get; init; }
         public Action? AfterDelete { get; init; }
@@ -189,11 +217,26 @@ public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
         public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(string bucket, string objectName, Stream content,
             string expectedSha256, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(string bucket, string objectName,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task DownloadGenerationAsync(string bucket, string objectName, long generation, Stream destination,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            CancellationToken cancellationToken) => Task.FromResult(metadata);
+        public async Task DownloadGenerationAsync(string bucket, string objectName, long generation, Stream destination,
+            CancellationToken cancellationToken)
+        {
+            if (bytes is not null)
+            {
+                await destination.WriteAsync(bytes, cancellationToken);
+            }
+        }
         public Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(string sourceBucket, string sourceObjectName,
             long sourceGeneration, string destinationBucket, string destinationObjectName,
             CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class CleanScanner : IInstantQuoteFileSafetyScanner
+    {
+        public async Task<InstantQuoteScanResult> ScanAsync(Stream content, CancellationToken cancellationToken)
+        {
+            await content.CopyToAsync(Stream.Null, cancellationToken);
+            return InstantQuoteScanResult.Clean;
+        }
     }
 }

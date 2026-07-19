@@ -86,6 +86,7 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
               "sessionToken":"opaque-session-capability-32-chars",
               "expiresAt":"2026-07-18T12:00:00Z",
               "maxUploadBytes":209715200,
+              "maxFilesPerSession":100,
               "supportedExtensions":[".stl",".obj",".3mf",".step",".stp",".iges",".igs",".glb",".gltf"]
             }
             """);
@@ -293,11 +294,12 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         ("code", StringSchema()));
 
     private static OpenApiSchema SessionSchema() => ObjectSchema(
-        new HashSet<string> { "sessionId", "sessionToken", "expiresAt", "maxUploadBytes", "supportedExtensions" },
+        new HashSet<string> { "sessionId", "sessionToken", "expiresAt", "maxUploadBytes", "maxFilesPerSession", "supportedExtensions" },
         ("sessionId", StringSchema("uuid")),
         ("sessionToken", StringSchema()),
         ("expiresAt", StringSchema("date-time")),
         ("maxUploadBytes", IntegerSchema("int64")),
+        ("maxFilesPerSession", IntegerSchema("int32")),
         ("supportedExtensions", new OpenApiSchema { Type = JsonSchemaType.Array, Items = StringSchema() }));
 
     private static OpenApiSchema FileSchema() => ObjectSchema(

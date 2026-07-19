@@ -24,6 +24,9 @@ public sealed class InstantQuoteFileOptions
     /// <summary>Gets or sets the independent timeout used for temporary-object cleanup.</summary>
     public TimeSpan CleanupTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>Gets or sets the inactivity interval after which an operation reservation may be recovered.</summary>
+    public TimeSpan OperationLeaseTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
     /// <summary>Gets or sets whether background temporary-object cleanup is enabled.</summary>
     public bool CleanupEnabled { get; set; }
 

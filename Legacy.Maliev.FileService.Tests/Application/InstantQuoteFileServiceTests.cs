@@ -32,6 +32,7 @@ public sealed class InstantQuoteFileServiceTests
         Assert.Equal(owner.IsAuthenticated, session.IsAuthenticated);
         Assert.Equal(Now.AddHours(24), response.ExpiresAt);
         Assert.Equal(response.SessionId, session.Id);
+        Assert.Equal(InstantQuoteFileContract.MaximumFilesPerSession, response.MaxFilesPerSession);
     }
 
     [Fact]
@@ -157,6 +158,122 @@ public sealed class InstantQuoteFileServiceTests
         Assert.Equal(18U, repository.SavedUploads[1].ExpectedVersion);
         Assert.Equal(InstantQuoteWorkflowState.Clean, repository.SavedUploads[^1].Upload.State);
         Assert.Equal(storage.Metadata.Generation, repository.SavedUploads[^1].Upload.GcsGeneration);
+    }
+
+    [Fact]
+    public async Task Upload_ActualMaximumPlusOne_PersistsStablePayloadTooLargeAndCleansDiscoveredGeneration()
+    {
+        var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
+        var storage = new OversizeStreamingStorage();
+        var service = CreateService(repository, storage);
+
+        await Assert.ThrowsAsync<InstantQuotePayloadTooLargeException>(() => service.UploadAsync(
+            repository.VerifySessionResult.Id,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43),
+            new string('i', 16),
+            new string('a', 64),
+            new GeneratedStream(InstantQuoteFileContract.MaximumUploadBytes + 1),
+            new InstantQuoteUploadMetadata("part.stl", "model/stl"),
+            CancellationToken.None));
+
+        var terminal = Assert.Single(repository.SavedUploads).Upload;
+        Assert.Equal(InstantQuoteWorkflowState.PayloadTooLarge, terminal.State);
+        Assert.Equal(storage.Metadata.Generation, terminal.GcsGeneration);
+        Assert.Equal((storage.Metadata.Bucket, storage.Metadata.ObjectName, storage.Metadata.Generation),
+            Assert.Single(storage.Deletes));
+
+        repository.UploadReservation = new(InstantQuoteReservationStatus.Replay, terminal, 18);
+        await Assert.ThrowsAsync<InstantQuotePayloadTooLargeException>(() => service.UploadAsync(
+            repository.VerifySessionResult.Id,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43),
+            new string('i', 16),
+            new string('a', 64),
+            Stream.Null,
+            new InstantQuoteUploadMetadata("part.stl", "model/stl"),
+            CancellationToken.None));
+        Assert.Equal(1, storage.UploadCount);
+    }
+
+    [Fact]
+    public async Task Upload_StreamedMultipartTerminalValidation_PersistsStableValidationAndCleansGeneration()
+    {
+        var bytes = BinaryStl();
+        var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
+        var storage = new TerminalValidationStorage();
+
+        await Assert.ThrowsAsync<InstantQuoteValidationException>(() => CreateService(repository, storage).UploadAsync(
+            repository.VerifySessionResult.Id,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43),
+            new string('i', 16),
+            sha,
+            new ValidationAtEndStream(bytes),
+            new InstantQuoteUploadMetadata("part.stl", "model/stl"),
+            CancellationToken.None));
+
+        Assert.Equal(InstantQuoteWorkflowState.InvalidRequest, Assert.Single(repository.SavedUploads).Upload.State);
+        Assert.Single(storage.Deletes);
+    }
+
+    [Fact]
+    public async Task Upload_RecoveredStalePendingWithoutObject_ReusesReservationAndBody()
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Pending);
+        stored.GcsGeneration = null;
+        stored.ActualSha256 = null;
+        stored.ActualSizeBytes = null;
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Recovered, stored, 22),
+        };
+
+        var response = await CreateService(repository).UploadAsync(
+            stored.SessionId,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43),
+            new string('i', 16),
+            stored.ExpectedSha256,
+            new MemoryStream(BinaryStl()),
+            new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+            CancellationToken.None);
+
+        Assert.Equal("clean", response.Status);
+        Assert.Equal(22U, repository.SavedUploads[0].ExpectedVersion);
+    }
+
+    [Fact]
+    public async Task Upload_RecoveredUploaded_ReconcilesExactGenerationWithoutReupload()
+    {
+        var stored = CreateStoredUpload(InstantQuoteWorkflowState.Uploaded);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            UploadReservation = new(InstantQuoteReservationStatus.Recovered, stored, 22),
+        };
+        var storage = new FakeStorage
+        {
+            ReconciliationMetadata = new InstantQuoteObjectMetadata(
+                stored.TemporaryBucket, stored.TemporaryObjectName, stored.GcsGeneration!.Value,
+                stored.ActualSizeBytes!.Value, stored.ExpectedSha256),
+        };
+        storage.Seed(BinaryStl());
+
+        var response = await CreateService(repository, storage).UploadAsync(
+            stored.SessionId,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43),
+            new string('i', 16),
+            stored.ExpectedSha256,
+            Stream.Null,
+            new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
+            CancellationToken.None);
+
+        Assert.Equal("clean", response.Status);
+        Assert.Equal(0, storage.UploadCount);
     }
 
     [Theory]
@@ -906,6 +1023,26 @@ public sealed class InstantQuoteFileServiceTests
     }
 
     [Fact]
+    public async Task Finalize_SelectionAboveSessionBound_RejectsBeforeLookupSortOrReservation()
+    {
+        var repository = new FakeRepository { VerifySessionResult = CreateSessionRecord() };
+        var fileIds = Enumerable.Range(0, InstantQuoteFileContract.MaximumFilesPerSession + 1)
+            .Select(_ => Guid.NewGuid())
+            .ToArray();
+
+        await Assert.ThrowsAsync<InstantQuoteValidationException>(() => CreateService(repository).FinalizeAsync(
+            repository.VerifySessionResult.Id,
+            new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43),
+            new string('k', 16),
+            new FinalizeInstantQuoteFilesRequest(1001, fileIds),
+            CancellationToken.None));
+
+        Assert.Equal(0, repository.SessionFileReadCount);
+        Assert.Equal(0, repository.ReserveFinalizationCount);
+    }
+
+    [Fact]
     public async Task Finalize_NotCleanSelection_IsRejected()
     {
         var upload = CreateStoredUpload(InstantQuoteWorkflowState.Failed);
@@ -1040,8 +1177,8 @@ public sealed class InstantQuoteFileServiceTests
 
     private static InstantQuoteFileService CreateService(
         FakeRepository repository,
-        FakeStorage? storage = null,
-        FakeScanner? scanner = null) => new(
+        IInstantQuoteObjectStorage? storage = null,
+        IInstantQuoteFileSafetyScanner? scanner = null) => new(
         repository,
         storage ?? new FakeStorage(),
         scanner ?? new FakeScanner(),
@@ -1103,7 +1240,7 @@ public sealed class InstantQuoteFileServiceTests
         public InstantQuoteUploadSession? CreatedSession { get; private set; }
         public InstantQuoteUploadSession? VerifySessionResult { get; init; }
         public List<(InstantQuoteUploadFile Upload, uint ExpectedVersion)> SavedUploads { get; } = [];
-        public InstantQuoteReservation<InstantQuoteUploadFile>? UploadReservation { get; init; }
+        public InstantQuoteReservation<InstantQuoteUploadFile>? UploadReservation { get; set; }
         public IReadOnlyList<InstantQuoteStoredUpload> SessionFiles { get; init; } = [];
         public IReadOnlyList<InstantQuoteStoredUpload>? ReloadedSessionFiles { get; init; }
         public (InstantQuoteFinalization Finalization, uint ExpectedVersion)? SavedFinalization { get; private set; }
@@ -1325,4 +1462,102 @@ public sealed class InstantQuoteFileServiceTests
     {
         public override bool CanSeek => false;
     }
+
+    private sealed class GeneratedStream(long bytesRemaining) : Stream
+    {
+        private long remaining = bytesRemaining;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = checked((int)Math.Min(buffer.Length, remaining));
+            buffer.Span[..count].Fill(0x5a);
+            remaining -= count;
+            return ValueTask.FromResult(count);
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class ValidationAtEndStream(byte[] bytes) : Stream
+    {
+        private int position;
+        private bool validationThrown;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (position < bytes.Length)
+            {
+                var count = Math.Min(buffer.Length, bytes.Length - position);
+                bytes.AsSpan(position, count).CopyTo(buffer.Span);
+                position += count;
+                return ValueTask.FromResult(count);
+            }
+            if (!validationThrown)
+            {
+                validationThrown = true;
+                throw new InstantQuoteValidationException("Additional multipart sections are not allowed.");
+            }
+            return ValueTask.FromResult(0);
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private abstract class FailureDiscoveringStorage : IInstantQuoteObjectStorage
+    {
+        public int UploadCount { get; private set; }
+        public List<(string Bucket, string ObjectName, long Generation)> Deletes { get; } = [];
+        public InstantQuoteObjectMetadata Metadata { get; private set; } = new("private-bucket", "", 501, 1, new string('a', 64));
+
+        public async Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(
+            string bucket, string objectName, Stream content, string expectedSha256, CancellationToken cancellationToken)
+        {
+            UploadCount++;
+            Metadata = new(bucket, objectName, 501, 1, expectedSha256);
+            try
+            {
+                await content.CopyToAsync(Stream.Null, cancellationToken);
+            }
+            catch
+            {
+                throw;
+            }
+            throw new InvalidOperationException("Expected streamed request failure.");
+        }
+
+        public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(
+            string bucket, string objectName, CancellationToken cancellationToken) =>
+            Task.FromResult<InstantQuoteObjectMetadata?>(Metadata);
+        public Task DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken)
+        {
+            Deletes.Add((bucket, objectName, generation));
+            return Task.CompletedTask;
+        }
+        public Task DownloadGenerationAsync(string bucket, string objectName, long generation, Stream destination,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(string sourceBucket, string sourceObjectName,
+            long sourceGeneration, string destinationBucket, string destinationObjectName,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class OversizeStreamingStorage : FailureDiscoveringStorage;
+    private sealed class TerminalValidationStorage : FailureDiscoveringStorage;
 }

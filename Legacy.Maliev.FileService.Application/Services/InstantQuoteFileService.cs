@@ -58,6 +58,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             Convert.ToBase64String(token).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
             session.ExpiresAt,
             InstantQuoteFileContract.MaximumUploadBytes,
+            InstantQuoteFileContract.MaximumFilesPerSession,
             InstantQuoteFileContract.SupportedExtensions);
     }
 
@@ -104,7 +105,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             fileId, sessionId, idempotencyHash, fingerprint, normalized.Metadata.FileName, normalized.Extension,
             normalized.Metadata.ContentType, headers.ExpectedSha256, null, null, null, _options.TemporaryBucket,
             temporaryName, null, null,
-            InstantQuoteWorkflowState.Pending, now, now), cancellationToken));
+            InstantQuoteWorkflowState.Pending, now, now), now, _options.OperationLeaseTimeout, cancellationToken));
 
         if (reservation.Status == InstantQuoteReservationStatus.Conflict)
         {
@@ -114,9 +115,25 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         {
             throw new InstantQuoteUploadInProgressException("The upload is still in progress.");
         }
+        if (reservation.Status == InstantQuoteReservationStatus.LimitExceeded)
+        {
+            throw new InstantQuoteValidationException("The upload session has reached its file limit.");
+        }
         if (reservation.Status == InstantQuoteReservationStatus.Unknown)
         {
             return await ReconcileUnknownUploadAsync(reservation, cancellationToken);
+        }
+        if (reservation.Status == InstantQuoteReservationStatus.Recovered)
+        {
+            var existing = await ExecuteDependencyReadAsync(() => _storage.GetMetadataAsync(
+                reservation.Record.TemporaryBucket,
+                reservation.Record.TemporaryObjectName,
+                cancellationToken));
+            if (existing is not null || reservation.Record.State is InstantQuoteWorkflowState.Uploaded or InstantQuoteWorkflowState.Unknown)
+            {
+                return await ReconcileUnknownUploadAsync(reservation, cancellationToken);
+            }
+            return await StoreAndScanAsync(reservation, body, cancellationToken);
         }
         if (reservation.Status == InstantQuoteReservationStatus.Replay)
         {
@@ -303,6 +320,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
     {
         EnsureWritesEnabled();
         if (request.QuotationRequestId <= 0 || request.FileIds.Count == 0 ||
+            request.FileIds.Count > InstantQuoteFileContract.MaximumFilesPerSession ||
             request.FileIds.Any(value => value == Guid.Empty) || request.FileIds.Distinct().Count() != request.FileIds.Count)
         {
             throw new InstantQuoteValidationException("Finalization selection is invalid.");
@@ -338,7 +356,8 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         var now = _timeProvider.GetUtcNow();
         var reservation = await ExecuteDurableStateAsync(() => _repository.ReserveFinalizationAsync(new InstantQuoteFinalization(
             Guid.NewGuid(), sessionId, SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)), fingerprint,
-            request.QuotationRequestId, selected, InstantQuoteWorkflowState.Pending, now, now), cancellationToken));
+            request.QuotationRequestId, selected, InstantQuoteWorkflowState.Pending, now, now),
+            now, _options.OperationLeaseTimeout, cancellationToken));
         if (reservation.Status == InstantQuoteReservationStatus.Conflict)
         {
             throw new InstantQuoteReplayConflictException("Idempotency key belongs to another finalization.");
@@ -514,6 +533,22 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             await SaveUnknownIgnoringCancellationAsync(upload, version);
             throw;
         }
+        catch (InstantQuotePayloadTooLargeException)
+        {
+            await CleanupDiscoveredTemporaryGenerationAsync(upload);
+            upload.State = InstantQuoteWorkflowState.PayloadTooLarge;
+            upload.ModifiedAt = _timeProvider.GetUtcNow();
+            await SaveTerminalIgnoringCancellationAsync(upload, version);
+            throw;
+        }
+        catch (InstantQuoteValidationException)
+        {
+            await CleanupDiscoveredTemporaryGenerationAsync(upload);
+            upload.State = InstantQuoteWorkflowState.InvalidRequest;
+            upload.ModifiedAt = _timeProvider.GetUtcNow();
+            await SaveTerminalIgnoringCancellationAsync(upload, version);
+            throw;
+        }
         catch (InstantQuoteUnsafeContentException)
         {
             if (stored is not null)
@@ -651,6 +686,26 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
     }
 
+    private async Task CleanupDiscoveredTemporaryGenerationAsync(InstantQuoteUploadFile upload)
+    {
+        try
+        {
+            var metadata = await _storage.GetMetadataAsync(
+                upload.TemporaryBucket,
+                upload.TemporaryObjectName,
+                CancellationToken.None);
+            if (metadata is not null)
+            {
+                upload.GcsGeneration = metadata.Generation;
+                await CleanupAsync(metadata);
+            }
+        }
+        catch (Exception)
+        {
+            // A deterministic-name retry or lifecycle sweep can reconcile the remaining exact generation.
+        }
+    }
+
     private async Task DeleteLoserDestinationAsync(InstantQuoteObjectMetadata stored)
     {
         using var cleanup = new CancellationTokenSource(_options.CleanupTimeout, _timeProvider);
@@ -690,6 +745,14 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
             if (upload.State == InstantQuoteWorkflowState.Failed)
             {
                 throw new InstantQuoteUnsafeContentException("The recorded upload was rejected as unsafe.");
+            }
+            if (upload.State == InstantQuoteWorkflowState.PayloadTooLarge)
+            {
+                throw new InstantQuotePayloadTooLargeException("Uploaded file exceeds the maximum size.");
+            }
+            if (upload.State == InstantQuoteWorkflowState.InvalidRequest)
+            {
+                throw new InstantQuoteValidationException("The recorded upload request is invalid.");
             }
             throw new InstantQuoteAmbiguousOutcomeException("The recorded upload is not replayable.");
         }

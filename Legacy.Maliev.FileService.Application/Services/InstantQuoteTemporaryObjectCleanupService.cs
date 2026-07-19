@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Domain;
@@ -10,6 +11,7 @@ namespace Legacy.Maliev.FileService.Application.Services;
 public sealed class InstantQuoteTemporaryObjectCleanupService(
     IInstantQuoteCleanupRepository repository,
     IInstantQuoteObjectStorage storage,
+    IInstantQuoteFileSafetyScanner scanner,
     IOptions<InstantQuoteFileOptions> options,
     TimeProvider timeProvider,
     ILogger<InstantQuoteTemporaryObjectCleanupService> logger)
@@ -35,8 +37,13 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var upload = stored.Upload;
-            if (upload.GcsGeneration is null || upload.State is InstantQuoteWorkflowState.Pending or
-                InstantQuoteWorkflowState.Uploaded or InstantQuoteWorkflowState.Unknown)
+            if (upload.State is InstantQuoteWorkflowState.Pending or InstantQuoteWorkflowState.Uploaded or
+                InstantQuoteWorkflowState.Unknown)
+            {
+                await ReconcileRecoverableAsync(stored, cancellationToken);
+                continue;
+            }
+            if (upload.GcsGeneration is null)
             {
                 continue;
             }
@@ -98,5 +105,89 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         }
 
         return completed;
+    }
+
+    private async Task ReconcileRecoverableAsync(
+        InstantQuoteStoredUpload stored,
+        CancellationToken cancellationToken)
+    {
+        var upload = stored.Upload;
+        try
+        {
+            using var timeout = new CancellationTokenSource(_options.CleanupTimeout, timeProvider);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+            var metadata = await storage.GetMetadataAsync(
+                upload.TemporaryBucket,
+                upload.TemporaryObjectName,
+                linked.Token);
+            if (metadata is null)
+            {
+                upload.State = InstantQuoteWorkflowState.Failed;
+                upload.ModifiedAt = timeProvider.GetUtcNow();
+                await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+                return;
+            }
+
+            upload.GcsGeneration = metadata.Generation;
+            if (metadata.SizeBytes <= 0 || metadata.SizeBytes > InstantQuoteFileContract.MaximumUploadBytes)
+            {
+                upload.State = InstantQuoteWorkflowState.Failed;
+                upload.ModifiedAt = timeProvider.GetUtcNow();
+                await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+                return;
+            }
+
+            await using var content = new MemoryStream(checked((int)metadata.SizeBytes));
+            await storage.DownloadGenerationAsync(
+                metadata.Bucket,
+                metadata.ObjectName,
+                metadata.Generation,
+                content,
+                linked.Token);
+            var bytes = content.ToArray();
+            var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            content.Position = 0;
+            var scan = await scanner.ScanAsync(content, linked.Token);
+            var matches = bytes.LongLength == metadata.SizeBytes &&
+                string.Equals(sha256, metadata.Sha256, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(sha256, upload.ExpectedSha256, StringComparison.OrdinalIgnoreCase);
+            if (matches && scan == InstantQuoteScanResult.Clean)
+            {
+                try
+                {
+                    InstantQuoteContentSignaturePolicy.Validate(
+                        upload.ValidatedExtension,
+                        bytes.AsSpan(0, Math.Min(bytes.Length, 4096)),
+                        bytes.LongLength);
+                    upload.ActualSha256 = sha256;
+                    upload.ActualSizeBytes = bytes.LongLength;
+                    upload.State = InstantQuoteWorkflowState.Clean;
+                }
+                catch (InstantQuoteUnsafeContentException)
+                {
+                    upload.State = InstantQuoteWorkflowState.Failed;
+                }
+            }
+            else if (scan != InstantQuoteScanResult.Unavailable)
+            {
+                upload.State = InstantQuoteWorkflowState.Failed;
+            }
+            upload.ModifiedAt = timeProvider.GetUtcNow();
+            await repository.SaveCleanupStateAsync(upload, stored.Version, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InstantQuoteConcurrencyException)
+        {
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "Temporary generation reconciliation failed for upload {UploadId} in session {SessionId}",
+                upload.Id,
+                upload.SessionId);
+        }
     }
 }

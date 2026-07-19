@@ -64,6 +64,7 @@ public sealed class InstantQuotationFilesContractTests
             "opaque-token",
             DateTimeOffset.Parse("2026-07-18T12:00:00Z"),
             InstantQuoteFileContract.MaximumUploadBytes,
+            InstantQuoteFileContract.MaximumFilesPerSession,
             InstantQuoteFileContract.SupportedExtensions);
         var json = JsonSerializer.Serialize(response);
 
@@ -421,6 +422,7 @@ public sealed class InstantQuotationFilesContractTests
                 "opaque-token",
                 DateTimeOffset.Parse("2026-07-18T12:00:00Z"),
                 InstantQuoteFileContract.MaximumUploadBytes,
+                InstantQuoteFileContract.MaximumFilesPerSession,
                 InstantQuoteFileContract.SupportedExtensions));
         }
 

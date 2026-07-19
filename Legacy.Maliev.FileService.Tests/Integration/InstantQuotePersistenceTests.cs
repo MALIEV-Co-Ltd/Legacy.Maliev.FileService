@@ -377,7 +377,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
-    public async Task Upload_ConcurrentUnknownReconciliation_BothCallersReturnAuthoritativeClean()
+    public async Task Upload_ConcurrentStaleUnknownReconciliation_OneLeaseWinnerReturnsClean()
     {
         Guid sessionId;
         Guid fileId;
@@ -402,7 +402,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
                 Fingerprint($"{session.Id:N}\n{fileName}\n{contentType}\n{sha}"),
                 fileName, ".stl", contentType, sha, sha, bytes.Length, 101, "private-bucket",
                 $"instant-quotation/temp/{session.Id:N}/part.stl", null, null,
-                InstantQuoteWorkflowState.Unknown, Now, Now);
+                InstantQuoteWorkflowState.Unknown, Now, Now.AddMinutes(-30));
             var acquired = await repository.ReserveUploadAsync(upload, CancellationToken.None);
             fileId = acquired.Record.Id;
         }
@@ -414,13 +414,14 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var second = CreateReconciliationService(new InstantQuoteFileRepository(secondContext), storage);
         var owner = new InstantQuoteOwner("https://issuer.example|user-42", true);
 
-        var results = await Task.WhenAll(
-            first.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
-                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None),
-            second.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
-                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None));
+        var attempts = await Task.WhenAll(
+            Record.ExceptionAsync(() => first.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
+                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None)),
+            Record.ExceptionAsync(() => second.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
+                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None)));
 
-        Assert.All(results, result => Assert.Equal("clean", result.Status));
+        Assert.Single(attempts, exception => exception is null);
+        Assert.Single(attempts, exception => exception is InstantQuoteUploadInProgressException);
         await using var verify = fixture.CreateContext();
         var stored = await verify.InstantQuoteUploadFiles.AsNoTracking().SingleAsync(value => value.Id == fileId);
         Assert.Equal(InstantQuoteWorkflowState.Clean, stored.State);
@@ -469,6 +470,83 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         Assert.Equal(InstantQuoteReservationStatus.Conflict, conflict.Status);
     }
 
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Pending)]
+    [InlineData(InstantQuoteWorkflowState.Uploaded)]
+    [InlineData(InstantQuoteWorkflowState.Unknown)]
+    public async Task ReserveUpload_StaleRecoverableState_ConcurrentRetryHasOneLeaseWinner(
+        InstantQuoteWorkflowState state)
+    {
+        Guid sessionId;
+        await using (var setup = await CreateMigratedContextAsync())
+        {
+            var repository = new InstantQuoteFileRepository(setup);
+            var session = CreateSession();
+            sessionId = session.Id;
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            var acquired = await repository.ReserveUploadAsync(
+                CreateUpload(sessionId, "stale-recovery"), CancellationToken.None);
+            acquired.Record.State = state;
+            acquired.Record.ModifiedAt = Now.AddMinutes(-30);
+            await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
+        }
+
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var results = await Task.WhenAll(
+            new InstantQuoteFileRepository(firstContext).ReserveUploadAsync(
+                CreateUpload(sessionId, "stale-recovery"), Now, TimeSpan.FromMinutes(5), CancellationToken.None),
+            new InstantQuoteFileRepository(secondContext).ReserveUploadAsync(
+                CreateUpload(sessionId, "stale-recovery"), Now, TimeSpan.FromMinutes(5), CancellationToken.None));
+
+        Assert.Single(results, value => value.Status == InstantQuoteReservationStatus.Recovered);
+        Assert.Single(results, value => value.Status == InstantQuoteReservationStatus.InProgress);
+    }
+
+    [Fact]
+    public async Task ReserveUpload_FreshPending_RemainsInProgress()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var session = CreateSession();
+        await repository.CreateSessionAsync(session, CancellationToken.None);
+        await repository.ReserveUploadAsync(CreateUpload(session.Id, "fresh-pending"), CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        var result = await repository.ReserveUploadAsync(
+            CreateUpload(session.Id, "fresh-pending"), Now.AddMinutes(1), TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        Assert.Equal(InstantQuoteReservationStatus.InProgress, result.Status);
+    }
+
+    [Fact]
+    public async Task ReserveFinalization_StalePending_ConcurrentRetryHasOneLeaseWinner()
+    {
+        Guid sessionId;
+        await using (var setup = await CreateMigratedContextAsync())
+        {
+            var repository = new InstantQuoteFileRepository(setup);
+            var session = CreateSession();
+            sessionId = session.Id;
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            var acquired = await repository.ReserveFinalizationAsync(
+                CreateFinalization(sessionId, 1001, "stale-finalization"), CancellationToken.None);
+            acquired.Record.ModifiedAt = Now.AddMinutes(-30);
+            await repository.SaveFinalizationAsync(acquired.Record, acquired.Version, CancellationToken.None);
+        }
+
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var results = await Task.WhenAll(
+            new InstantQuoteFileRepository(firstContext).ReserveFinalizationAsync(
+                CreateFinalization(sessionId, 1001, "stale-finalization"), Now, TimeSpan.FromMinutes(5), CancellationToken.None),
+            new InstantQuoteFileRepository(secondContext).ReserveFinalizationAsync(
+                CreateFinalization(sessionId, 1001, "stale-finalization"), Now, TimeSpan.FromMinutes(5), CancellationToken.None));
+
+        Assert.Single(results, value => value.Status == InstantQuoteReservationStatus.Recovered);
+        Assert.Single(results, value => value.Status == InstantQuoteReservationStatus.InProgress);
+    }
+
     [Fact]
     public async Task ReserveUpload_PrimaryKeyCollision_IsNotClassifiedAsIdempotency()
     {
@@ -485,6 +563,41 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
 
         var postgresException = Assert.IsType<PostgresException>(exception.InnerException);
         Assert.Equal("PK_InstantQuoteUploadFile", postgresException.ConstraintName);
+    }
+
+    [Fact]
+    public async Task ReserveUpload_ConcurrentSessionBoundary_AcceptsExactlyMaximumFiles()
+    {
+        Guid sessionId;
+        await using (var setup = await CreateMigratedContextAsync())
+        {
+            var repository = new InstantQuoteFileRepository(setup);
+            var session = CreateSession();
+            sessionId = session.Id;
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            for (var index = 0; index < InstantQuoteFileContract.MaximumFilesPerSession - 1; index++)
+            {
+                var reserved = await repository.ReserveUploadAsync(
+                    CreateUpload(sessionId, $"boundary-{index}", idempotencyKey: $"boundary-{index}"),
+                    CancellationToken.None);
+                Assert.Equal(InstantQuoteReservationStatus.Acquired, reserved.Status);
+            }
+        }
+
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var attempts = await Task.WhenAll(
+            new InstantQuoteFileRepository(firstContext).ReserveUploadAsync(
+                CreateUpload(sessionId, "boundary-first", idempotencyKey: "boundary-first"), CancellationToken.None),
+            new InstantQuoteFileRepository(secondContext).ReserveUploadAsync(
+                CreateUpload(sessionId, "boundary-second", idempotencyKey: "boundary-second"), CancellationToken.None));
+
+        Assert.Single(attempts, value => value.Status == InstantQuoteReservationStatus.Acquired);
+        Assert.Single(attempts, value => value.Status == InstantQuoteReservationStatus.LimitExceeded);
+        await using var verify = fixture.CreateContext();
+        Assert.Equal(
+            InstantQuoteFileContract.MaximumFilesPerSession,
+            await verify.InstantQuoteUploadFiles.CountAsync(value => value.SessionId == sessionId));
     }
 
     [Fact]
@@ -550,20 +663,25 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             InstantQuoteWorkflowState.Clean, Now.AddMinutes(-45));
         await AddCleanupUploadAsync(repository, active.Id, "active-clean",
             InstantQuoteWorkflowState.Clean, Now.AddHours(-2));
-        await AddCleanupUploadAsync(repository, expired.Id, "pending",
+        var pending = await AddCleanupUploadAsync(repository, expired.Id, "pending",
             InstantQuoteWorkflowState.Pending, Now.AddHours(-2));
-        await AddCleanupUploadAsync(repository, expired.Id, "uploaded",
+        var uploaded = await AddCleanupUploadAsync(repository, expired.Id, "uploaded",
             InstantQuoteWorkflowState.Uploaded, Now.AddHours(-2));
-        await AddCleanupUploadAsync(repository, expired.Id, "unknown",
+        var unknown = await AddCleanupUploadAsync(repository, expired.Id, "unknown",
             InstantQuoteWorkflowState.Unknown, Now.AddHours(-2));
         await AddCleanupUploadAsync(repository, expired.Id, "recent-finalized",
             InstantQuoteWorkflowState.Finalized, Now.AddMinutes(-2));
         context.ChangeTracker.Clear();
 
         var candidates = await repository.GetTemporaryCleanupCandidatesAsync(
-            Now.AddMinutes(-15), Now.AddMinutes(-5), 2, CancellationToken.None);
+            Now.AddMinutes(-15), Now.AddMinutes(-5), 20, CancellationToken.None);
 
-        Assert.Equal([finalized.Id, failed.Id], candidates.Select(value => value.Upload.Id));
+        Assert.Contains(candidates, value => value.Upload.Id == finalized.Id);
+        Assert.Contains(candidates, value => value.Upload.Id == failed.Id);
+        Assert.Contains(candidates, value => value.Upload.Id == pending.Id);
+        Assert.Contains(candidates, value => value.Upload.Id == uploaded.Id);
+        Assert.Contains(candidates, value => value.Upload.Id == unknown.Id);
+        Assert.Equal(7, candidates.Count);
         Assert.All(candidates, value => Assert.NotEqual(0U, value.Version));
     }
 
@@ -736,7 +854,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             string bucket, string objectName, long generation, Stream destination,
             CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref downloadCount) == 2)
+            if (Interlocked.Increment(ref downloadCount) == 1)
             {
                 release.TrySetResult();
             }

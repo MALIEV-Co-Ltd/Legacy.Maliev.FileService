@@ -15,6 +15,10 @@ public enum InstantQuoteReservationStatus
     InProgress,
     /// <summary>A matching reservation has an ambiguous outcome.</summary>
     Unknown,
+    /// <summary>A stale matching reservation was atomically claimed for recovery.</summary>
+    Recovered,
+    /// <summary>The owning upload session already reached its bounded file capacity.</summary>
+    LimitExceeded,
 }
 
 /// <summary>Result of atomically reserving an idempotency key.</summary>
@@ -43,6 +47,12 @@ public interface IInstantQuoteFileRepository
         bool isAuthenticated, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Atomically reserves or classifies an upload idempotency key.</summary>
     Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(InstantQuoteUploadFile upload, CancellationToken cancellationToken);
+    /// <summary>Atomically reserves, classifies, or leases a stale upload idempotency key.</summary>
+    Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(
+        InstantQuoteUploadFile upload,
+        DateTimeOffset now,
+        TimeSpan operationLeaseTimeout,
+        CancellationToken cancellationToken) => ReserveUploadAsync(upload, cancellationToken);
     /// <summary>Persists authoritative upload metadata and state.</summary>
     Task<uint> SaveUploadAsync(InstantQuoteUploadFile upload, uint expectedVersion, CancellationToken cancellationToken);
     /// <summary>Loads exactly the requested file IDs when they all belong to the session.</summary>
@@ -52,6 +62,12 @@ public interface IInstantQuoteFileRepository
         CancellationToken cancellationToken);
     /// <summary>Atomically reserves or classifies a finalization idempotency key.</summary>
     Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(InstantQuoteFinalization finalization, CancellationToken cancellationToken);
+    /// <summary>Atomically reserves, classifies, or leases a stale finalization idempotency key.</summary>
+    Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
+        InstantQuoteFinalization finalization,
+        DateTimeOffset now,
+        TimeSpan operationLeaseTimeout,
+        CancellationToken cancellationToken) => ReserveFinalizationAsync(finalization, cancellationToken);
     /// <summary>Persists authoritative finalization state.</summary>
     Task<uint> SaveFinalizationAsync(InstantQuoteFinalization finalization, uint expectedVersion, CancellationToken cancellationToken);
 }

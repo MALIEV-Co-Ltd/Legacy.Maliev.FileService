@@ -25,11 +25,12 @@ Success: `201 Created`
   "sessionToken": "opaque-session-capability",
   "expiresAt": "2026-07-18T12:00:00+00:00",
   "maxUploadBytes": 209715200,
+  "maxFilesPerSession": 100,
   "supportedExtensions": [".stl", ".obj", ".3mf", ".step", ".stp", ".iges", ".igs", ".glb", ".gltf"]
 }
 ```
 
-The BFF keeps the token only for the active quote-upload workflow. It proves ownership for upload, removal, and finalization calls and cannot be recovered later.
+The BFF keeps the token only for the active quote-upload workflow. It proves ownership for upload, removal, and finalization calls and cannot be recovered later. A session accepts at most 100 file reservations; an identical idempotent retry does not consume another slot.
 
 ## Upload one file
 
@@ -42,7 +43,7 @@ Required headers:
 - `X-Content-SHA256`: the hexadecimal SHA-256 digest of the exact file bytes.
 - `Content-Type: multipart/form-data; boundary=...`
 
-The multipart body must contain exactly one part named `files`. The file is streamed; the endpoint does not use `IFormFile` buffering. Zero parts, extra parts, a different field name, an empty file, or an invalid digest is rejected.
+The multipart body must contain exactly one part named `files`. The file is streamed; the endpoint does not use `IFormFile` buffering. End-of-file validates the terminal multipart boundary before storage acceptance can become `clean`, so zero parts, extra parts, a different field name, an empty file, or an invalid digest is rejected without an accepted object.
 
 This is the normative multipart example represented by generated OpenAPI. The example file bytes are exactly `solid example\nendsolid example\n` in UTF-8, whose SHA-256 is shown below; production callers send the exact selected file bytes and their matching digest.
 
@@ -149,6 +150,8 @@ Success: `204 No Content`. Removal is idempotent: retrying an already removed fi
 | `finalized` | Return 403 `session_forbidden`; never delete a file already linked to a quotation request. |
 
 An HTTP request abort cancels the in-flight operation through the request cancellation token. It is not converted to a 2xx response or a definitive failed state. If the durable outcome is ambiguous, retry the identical operation using its original idempotency key where that route requires one.
+
+Fresh in-flight reservations return `409 upload_in_progress`. After the configured operation lease expires, an identical retry atomically claims the stale PostgreSQL `xmin` version and reconciles the deterministic exact object generation before resuming work. Background lifecycle reconciliation applies the same digest, signature, and scanner gates to stale `pending`, `uploaded`, and `unknown` records; deletion is always authorized by an exact stored generation.
 
 Removal can return 503 `outcome_unknown` when a conditional object deletion or durable state write has an ambiguous outcome. Because DELETE has no idempotency-key header, retry the same session/file DELETE; its recorded `removed` state makes the successful replay return 204 without another object deletion.
 

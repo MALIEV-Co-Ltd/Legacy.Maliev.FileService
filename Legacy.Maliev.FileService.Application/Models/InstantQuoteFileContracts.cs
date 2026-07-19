@@ -8,6 +8,9 @@ public static class InstantQuoteFileContract
     /// <summary>Maximum number of uploaded file bytes accepted by the workflow.</summary>
     public const long MaximumUploadBytes = 200L * 1024 * 1024;
 
+    /// <summary>Maximum number of file reservations accepted by one upload session.</summary>
+    public const int MaximumFilesPerSession = 100;
+
     /// <summary>Exact case-insensitive extension allowlist for instant quotations.</summary>
     public static IReadOnlyList<string> SupportedExtensions { get; } = Array.AsReadOnly([
         ".stl",
@@ -34,12 +37,14 @@ public sealed record InstantQuoteOwner(
 /// <param name="SessionToken">One-time-disclosed capability token used to prove session ownership.</param>
 /// <param name="ExpiresAt">UTC instant after which the session cannot be used.</param>
 /// <param name="MaxUploadBytes">Maximum actual bytes accepted for one upload.</param>
+/// <param name="MaxFilesPerSession">Maximum file reservations accepted by the session.</param>
 /// <param name="SupportedExtensions">Exact normalized supported extension list.</param>
 public sealed record CreateInstantQuoteSessionResponse(
     [property: JsonPropertyName("sessionId")] Guid SessionId,
     [property: JsonPropertyName("sessionToken")] string SessionToken,
     [property: JsonPropertyName("expiresAt")] DateTimeOffset ExpiresAt,
     [property: JsonPropertyName("maxUploadBytes")] long MaxUploadBytes,
+    [property: JsonPropertyName("maxFilesPerSession")] int MaxFilesPerSession,
     [property: JsonPropertyName("supportedExtensions")] IReadOnlyList<string> SupportedExtensions);
 
 /// <summary>Safe customer-supplied metadata for a streamed upload.</summary>

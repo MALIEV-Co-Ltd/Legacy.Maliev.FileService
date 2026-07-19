@@ -49,7 +49,7 @@ public sealed class InstantQuoteOpenApiContractTests
             session,
             "201",
             "application/json",
-            "sessionId", "sessionToken", "expiresAt", "maxUploadBytes", "supportedExtensions");
+            "sessionId", "sessionToken", "expiresAt", "maxUploadBytes", "maxFilesPerSession", "supportedExtensions");
         AssertProblem(session, "401", "platform_authentication_required");
         AssertProblem(session, "403", "permission_forbidden");
         AssertProblem(session, "503", "dependency_unavailable");
