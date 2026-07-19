@@ -6,7 +6,7 @@ using Npgsql;
 namespace Legacy.Maliev.FileService.Data;
 
 /// <summary>PostgreSQL persistence for instant-quotation ownership and workflow state.</summary>
-public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInstantQuoteFileRepository
+public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInstantQuoteFileRepository, IInstantQuoteCleanupRepository
 {
     private const string UploadIdempotencyIndexName = "IX_InstantQuoteUploadFile_SessionId_IdempotencyKeyHash";
     private const string FinalizationIdempotencyIndexName = "IX_InstantQuoteFinalization_SessionId_IdempotencyKeyHash";
@@ -106,6 +106,41 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
             .ToListAsync(cancellationToken);
         return stored.Select(value => new InstantQuoteStoredUpload(value.Upload, value.Version)).ToArray();
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<InstantQuoteStoredUpload>> GetTemporaryCleanupCandidatesAsync(
+        DateTimeOffset expiredBefore,
+        DateTimeOffset retryBefore,
+        int batchSize,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        var candidates = await (
+                from upload in dbContext.InstantQuoteUploadFiles.AsNoTracking()
+                join session in dbContext.InstantQuoteUploadSessions.AsNoTracking()
+                    on upload.SessionId equals session.Id
+                where upload.GcsGeneration != null &&
+                    upload.ModifiedAt <= retryBefore &&
+                    (upload.State == InstantQuoteWorkflowState.Finalized ||
+                     upload.State == InstantQuoteWorkflowState.Failed ||
+                     upload.State == InstantQuoteWorkflowState.Removed ||
+                     upload.State == InstantQuoteWorkflowState.Clean && session.ExpiresAt <= expiredBefore)
+                orderby session.ExpiresAt, upload.ModifiedAt, upload.Id
+                select new
+                {
+                    Upload = upload,
+                    Version = EF.Property<uint>(upload, "xmin"),
+                })
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+        return candidates.Select(value => new InstantQuoteStoredUpload(value.Upload, value.Version)).ToArray();
+    }
+
+    /// <inheritdoc />
+    public Task<uint> SaveCleanupStateAsync(
+        InstantQuoteUploadFile upload,
+        uint expectedVersion,
+        CancellationToken cancellationToken) => SaveUploadAsync(upload, expectedVersion, cancellationToken);
 
     /// <inheritdoc />
     public async Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(

@@ -42,6 +42,8 @@ public static class FileServiceRuntimeRegistration
             configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:WritesEnabled");
         var instantQuoteEnabled = configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:Enabled") &&
             configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:WritesEnabled");
+        var instantQuoteCleanupEnabled = instantQuoteEnabled &&
+            configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:CleanupEnabled");
 
         if (legacyWritesEnabled || instantQuoteEnabled)
         {
@@ -74,12 +76,18 @@ public static class FileServiceRuntimeRegistration
         services.TryAddScoped<IUploadRepository, UploadRepository>();
         services.TryAddScoped<IUploadIdempotencyStore, RedisUploadIdempotencyStore>();
         services.TryAddScoped<IInstantQuoteFileRepository, InstantQuoteFileRepository>();
+        services.TryAddScoped<IInstantQuoteCleanupRepository, InstantQuoteFileRepository>();
         services.TryAddScoped<ObjectNamePolicy>();
         services.TryAddSingleton<LegacyFileRuntimeGate>();
         services.TryAddScoped<IFileService, FileApplicationService>();
         services.TryAddScoped<IInstantQuoteFileService, InstantQuoteFileService>();
+        services.TryAddScoped<InstantQuoteTemporaryObjectCleanupService>();
         services.TryAddScoped<IdempotentUploadCoordinator>();
         services.TryAddSingleton<IInstantQuoteMultipartReader, SingleFileMultipartReader>();
+        if (instantQuoteCleanupEnabled)
+        {
+            services.AddHostedService<InstantQuoteTemporaryObjectCleanupHostedService>();
+        }
         return services;
     }
 
@@ -87,13 +95,26 @@ public static class FileServiceRuntimeRegistration
     {
         if (!options.Enabled)
         {
-            return true;
+            return !options.CleanupEnabled;
         }
 
         if (options.SessionLifetime < TimeSpan.FromMinutes(5) ||
             options.SessionLifetime > TimeSpan.FromDays(7) ||
             options.CleanupTimeout < TimeSpan.FromSeconds(1) ||
             options.CleanupTimeout > TimeSpan.FromMinutes(5))
+        {
+            return false;
+        }
+
+        if (options.CleanupEnabled &&
+            (!options.WritesEnabled ||
+             options.CleanupInterval < TimeSpan.FromSeconds(10) ||
+             options.CleanupInterval > TimeSpan.FromDays(1) ||
+             options.CleanupRetryDelay < TimeSpan.FromSeconds(10) ||
+             options.CleanupRetryDelay > TimeSpan.FromDays(1) ||
+             options.CleanupSessionExpiryGrace < TimeSpan.Zero ||
+             options.CleanupSessionExpiryGrace > TimeSpan.FromDays(7) ||
+             options.CleanupBatchSize is < 1 or > 500))
         {
             return false;
         }

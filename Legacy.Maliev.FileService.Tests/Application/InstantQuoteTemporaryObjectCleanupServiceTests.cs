@@ -1,0 +1,170 @@
+using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Application.Models;
+using Legacy.Maliev.FileService.Application.Services;
+using Legacy.Maliev.FileService.Domain;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Legacy.Maliev.FileService.Tests.Application;
+
+public sealed class InstantQuoteTemporaryObjectCleanupServiceTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 7, 19, 1, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public async Task RunOnce_CleanupDisabled_PerformsNoRepositoryOrStorageWork()
+    {
+        var repository = new FakeCleanupRepository();
+        var storage = new FakeStorage();
+        var service = CreateService(repository, storage, cleanupEnabled: false);
+
+        var cleaned = await service.RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, cleaned);
+        Assert.Equal(0, repository.QueryCount);
+        Assert.Empty(storage.Deletes);
+    }
+
+    [Fact]
+    public async Task RunOnce_ExpiredCleanUpload_ClaimsRemovedThenDeletesExactGeneration()
+    {
+        var upload = CreateUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage();
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(1, cleaned);
+        Assert.Equal(2, repository.Saves.Count);
+        Assert.Equal(InstantQuoteWorkflowState.Removed, repository.Saves[0].State);
+        Assert.Equal(17U, repository.Saves[0].ExpectedVersion);
+        Assert.Equal(("temporary-bucket", upload.TemporaryObjectName, 42L), Assert.Single(storage.Deletes));
+        Assert.Null(repository.Saves[1].Generation);
+        Assert.Equal(18U, repository.Saves[1].ExpectedVersion);
+    }
+
+    [Fact]
+    public async Task RunOnce_DeleteFails_RetainsRemovedStateAndGenerationForRetry()
+    {
+        var upload = CreateUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage { DeleteException = new IOException("storage unavailable") };
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, cleaned);
+        var claimed = Assert.Single(repository.Saves);
+        Assert.Equal(InstantQuoteWorkflowState.Removed, claimed.State);
+        Assert.Equal(42, claimed.Generation);
+    }
+
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Pending)]
+    [InlineData(InstantQuoteWorkflowState.Uploaded)]
+    [InlineData(InstantQuoteWorkflowState.Unknown)]
+    public async Task RunOnce_AmbiguousOrActiveState_NeverDeletes(
+        InstantQuoteWorkflowState state)
+    {
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(CreateUpload(state), 17));
+        var storage = new FakeStorage();
+
+        var cleaned = await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, cleaned);
+        Assert.Empty(repository.Saves);
+        Assert.Empty(storage.Deletes);
+    }
+
+    [Fact]
+    public async Task RunOnce_FinalizedUpload_DeletesOnlyTemporaryGenerationAndPreservesAuthority()
+    {
+        var upload = CreateUpload(InstantQuoteWorkflowState.Finalized);
+        upload.FinalBucket = "final-bucket";
+        upload.FinalObjectName = "instant-quotation/1001/final.stl";
+        upload.FinalizedQuotationRequestId = 1001;
+        var repository = new FakeCleanupRepository(new InstantQuoteStoredUpload(upload, 17));
+        var storage = new FakeStorage();
+
+        await CreateService(repository, storage).RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal((upload.TemporaryBucket, upload.TemporaryObjectName, 42L), Assert.Single(storage.Deletes));
+        var completed = repository.Saves[^1];
+        Assert.Equal(InstantQuoteWorkflowState.Finalized, completed.State);
+        Assert.Equal("final-bucket", upload.FinalBucket);
+        Assert.Equal("instant-quotation/1001/final.stl", upload.FinalObjectName);
+        Assert.Equal(1001, upload.FinalizedQuotationRequestId);
+    }
+
+    private static InstantQuoteTemporaryObjectCleanupService CreateService(
+        FakeCleanupRepository repository,
+        FakeStorage storage,
+        bool cleanupEnabled = true) => new(
+            repository,
+            storage,
+            Options.Create(new InstantQuoteFileOptions
+            {
+                Enabled = true,
+                WritesEnabled = true,
+                CleanupEnabled = cleanupEnabled,
+                CleanupBatchSize = 25,
+                CleanupRetryDelay = TimeSpan.FromMinutes(5),
+                CleanupSessionExpiryGrace = TimeSpan.FromMinutes(15),
+                CleanupTimeout = TimeSpan.FromSeconds(5),
+            }),
+            new FakeTimeProvider(Now),
+            NullLogger<InstantQuoteTemporaryObjectCleanupService>.Instance);
+
+    private static InstantQuoteUploadFile CreateUpload(InstantQuoteWorkflowState state) => new(
+        Guid.NewGuid(), Guid.NewGuid(), new byte[32], new string('a', 64), "part.stl", ".stl", "model/stl",
+        new string('b', 64), new string('b', 64), 128, 42, "temporary-bucket",
+        $"instant-quotation/temp/{Guid.NewGuid():N}.stl", null, null, state, Now.AddHours(-2), Now.AddHours(-1));
+
+    private sealed class FakeCleanupRepository(params InstantQuoteStoredUpload[] candidates)
+        : IInstantQuoteCleanupRepository
+    {
+        public int QueryCount { get; private set; }
+        public List<(InstantQuoteWorkflowState State, long? Generation, uint ExpectedVersion)> Saves { get; } = [];
+
+        public Task<IReadOnlyList<InstantQuoteStoredUpload>> GetTemporaryCleanupCandidatesAsync(
+            DateTimeOffset expiredBefore,
+            DateTimeOffset retryBefore,
+            int batchSize,
+            CancellationToken cancellationToken)
+        {
+            QueryCount++;
+            return Task.FromResult<IReadOnlyList<InstantQuoteStoredUpload>>(candidates);
+        }
+
+        public Task<uint> SaveCleanupStateAsync(
+            InstantQuoteUploadFile upload,
+            uint expectedVersion,
+            CancellationToken cancellationToken)
+        {
+            Saves.Add((upload.State, upload.GcsGeneration, expectedVersion));
+            return Task.FromResult(expectedVersion + 1);
+        }
+    }
+
+    private sealed class FakeStorage : IInstantQuoteObjectStorage
+    {
+        public Exception? DeleteException { get; init; }
+        public List<(string Bucket, string ObjectName, long Generation)> Deletes { get; } = [];
+
+        public Task DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken)
+        {
+            Deletes.Add((bucket, objectName, generation));
+            return DeleteException is null ? Task.CompletedTask : Task.FromException(DeleteException);
+        }
+
+        public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(string bucket, string objectName, Stream content,
+            string expectedSha256, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<InstantQuoteObjectMetadata?> GetMetadataAsync(string bucket, string objectName,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task DownloadGenerationAsync(string bucket, string objectName, long generation, Stream destination,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<InstantQuoteObjectMetadata> PromoteGenerationAsync(string sourceBucket, string sourceObjectName,
+            long sourceGeneration, string destinationBucket, string destinationObjectName,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+}

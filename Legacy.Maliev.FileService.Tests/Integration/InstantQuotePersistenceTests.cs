@@ -528,6 +528,105 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         Assert.Equal(PostgresErrorCodes.CheckViolation, finalizationException.SqlState);
     }
 
+    [Fact]
+    public async Task CleanupCandidates_EligibleStatesAndExpiry_ReturnDeterministicBoundedBatch()
+    {
+        await using var context = await CreateMigratedContextAsync();
+        var repository = new InstantQuoteFileRepository(context);
+        var expired = new InstantQuoteUploadSession(
+            Guid.NewGuid(), "owner", true, Hash("expired-token"), Now.AddHours(-2), Now.AddDays(-1));
+        var active = new InstantQuoteUploadSession(
+            Guid.NewGuid(), "owner", true, Hash("active-token"), Now.AddHours(1), Now.AddDays(-1));
+        await repository.CreateSessionAsync(expired, CancellationToken.None);
+        await repository.CreateSessionAsync(active, CancellationToken.None);
+
+        var finalized = await AddCleanupUploadAsync(repository, expired.Id, "cleanup-finalized",
+            InstantQuoteWorkflowState.Finalized, Now.AddHours(-3));
+        var failed = await AddCleanupUploadAsync(repository, expired.Id, "cleanup-failed",
+            InstantQuoteWorkflowState.Failed, Now.AddHours(-2));
+        await AddCleanupUploadAsync(repository, expired.Id, "cleanup-removed",
+            InstantQuoteWorkflowState.Removed, Now.AddHours(-1));
+        await AddCleanupUploadAsync(repository, expired.Id, "cleanup-clean",
+            InstantQuoteWorkflowState.Clean, Now.AddMinutes(-45));
+        await AddCleanupUploadAsync(repository, active.Id, "active-clean",
+            InstantQuoteWorkflowState.Clean, Now.AddHours(-2));
+        await AddCleanupUploadAsync(repository, expired.Id, "pending",
+            InstantQuoteWorkflowState.Pending, Now.AddHours(-2));
+        await AddCleanupUploadAsync(repository, expired.Id, "uploaded",
+            InstantQuoteWorkflowState.Uploaded, Now.AddHours(-2));
+        await AddCleanupUploadAsync(repository, expired.Id, "unknown",
+            InstantQuoteWorkflowState.Unknown, Now.AddHours(-2));
+        await AddCleanupUploadAsync(repository, expired.Id, "recent-finalized",
+            InstantQuoteWorkflowState.Finalized, Now.AddMinutes(-2));
+        context.ChangeTracker.Clear();
+
+        var candidates = await repository.GetTemporaryCleanupCandidatesAsync(
+            Now.AddMinutes(-15), Now.AddMinutes(-5), 2, CancellationToken.None);
+
+        Assert.Equal([finalized.Id, failed.Id], candidates.Select(value => value.Upload.Id));
+        Assert.All(candidates, value => Assert.NotEqual(0U, value.Version));
+    }
+
+    [Fact]
+    public async Task SaveCleanupState_ConcurrentClaim_XminAllowsOneWinnerWithoutChangingLegacyUpload()
+    {
+        Guid fileId;
+        await using (var setup = await CreateMigratedContextAsync())
+        {
+            setup.Uploads.Add(new Upload
+            {
+                Bucket = "legacy-bucket",
+                Name = "legacy-object",
+                ContentType = "model/stl",
+                Size = 42,
+            });
+            var repository = new InstantQuoteFileRepository(setup);
+            var session = new InstantQuoteUploadSession(
+                Guid.NewGuid(), "owner", true, Hash("claim-token"), Now.AddHours(-2), Now.AddDays(-1));
+            await repository.CreateSessionAsync(session, CancellationToken.None);
+            fileId = (await AddCleanupUploadAsync(repository, session.Id, "claim",
+                InstantQuoteWorkflowState.Finalized, Now.AddHours(-2))).Id;
+            await setup.SaveChangesAsync(CancellationToken.None);
+        }
+
+        await using var firstContext = fixture.CreateContext();
+        await using var secondContext = fixture.CreateContext();
+        var firstRepository = new InstantQuoteFileRepository(firstContext);
+        var secondRepository = new InstantQuoteFileRepository(secondContext);
+        var first = Assert.Single(await firstRepository.GetTemporaryCleanupCandidatesAsync(
+            Now, Now.AddMinutes(-5), 10, CancellationToken.None));
+        var second = Assert.Single(await secondRepository.GetTemporaryCleanupCandidatesAsync(
+            Now, Now.AddMinutes(-5), 10, CancellationToken.None));
+        Assert.Equal(fileId, first.Upload.Id);
+        first.Upload.ModifiedAt = Now;
+        second.Upload.ModifiedAt = Now;
+
+        await firstRepository.SaveCleanupStateAsync(first.Upload, first.Version, CancellationToken.None);
+        await Assert.ThrowsAsync<InstantQuoteConcurrencyException>(() =>
+            secondRepository.SaveCleanupStateAsync(second.Upload, second.Version, CancellationToken.None));
+
+        await using var verify = fixture.CreateContext();
+        var legacy = Assert.Single(await verify.Uploads.AsNoTracking().ToListAsync(CancellationToken.None));
+        Assert.Equal("legacy-bucket", legacy.Bucket);
+        Assert.Equal("legacy-object", legacy.Name);
+    }
+
+    private static async Task<InstantQuoteUploadFile> AddCleanupUploadAsync(
+        InstantQuoteFileRepository repository,
+        Guid sessionId,
+        string fingerprint,
+        InstantQuoteWorkflowState state,
+        DateTimeOffset modifiedAt)
+    {
+        var acquired = await repository.ReserveUploadAsync(
+            CreateUpload(sessionId, fingerprint, idempotencyKey: fingerprint), CancellationToken.None);
+        acquired.Record.GcsGeneration = 42;
+        acquired.Record.State = state;
+        acquired.Record.ModifiedAt = modifiedAt;
+        await repository.SaveUploadAsync(acquired.Record, acquired.Version, CancellationToken.None);
+        return acquired.Record;
+    }
+
     private async Task<FileDbContext> CreateMigratedContextAsync()
     {
         var context = fixture.CreateContext();
