@@ -102,7 +102,9 @@ public static class FileServiceRuntimeRegistration
         if (options.SessionLifetime < TimeSpan.FromMinutes(5) ||
             options.SessionLifetime > TimeSpan.FromDays(7) ||
             options.CleanupTimeout < TimeSpan.FromSeconds(1) ||
-            options.CleanupTimeout > TimeSpan.FromMinutes(5))
+            options.CleanupTimeout > TimeSpan.FromMinutes(5) ||
+            options.OperationLeaseTimeout <= options.CleanupTimeout ||
+            options.OperationLeaseTimeout > TimeSpan.FromDays(1))
         {
             return false;
         }

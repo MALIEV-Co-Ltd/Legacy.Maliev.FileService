@@ -188,6 +188,25 @@ public sealed class RuntimeSafetyTests
     }
 
     [Theory]
+    [InlineData("00:00:00")]
+    [InlineData("00:00:15")]
+    public void InstantQuoteOptionsValidator_OperationLeaseMustExceedBoundedOperationTimeout(string leaseTimeout)
+    {
+        using var provider = CreateServices(
+        [
+            new("InstantQuoteFiles:Enabled", "true"),
+            new("InstantQuoteFiles:WritesEnabled", "true"),
+            new("InstantQuoteFiles:TemporaryBucket", "quote-temp-local"),
+            new("InstantQuoteFiles:FinalBucket", "quote-final-local"),
+            new("InstantQuoteFiles:CleanupTimeout", "00:00:15"),
+            new("InstantQuoteFiles:OperationLeaseTimeout", leaseTimeout),
+        ], new RecordingInstantQuoteRepository()).BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() =>
+            provider.GetRequiredService<IOptions<InstantQuoteFileOptions>>().Value);
+    }
+
+    [Theory]
     [InlineData("Quote-temp-local")]
     [InlineData("quote_temp_local")]
     [InlineData("quote..temp")]

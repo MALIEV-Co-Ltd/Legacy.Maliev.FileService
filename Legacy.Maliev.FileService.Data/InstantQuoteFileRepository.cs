@@ -1,16 +1,13 @@
 using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Domain;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace Legacy.Maliev.FileService.Data;
 
 /// <summary>PostgreSQL persistence for instant-quotation ownership and workflow state.</summary>
 public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInstantQuoteFileRepository, IInstantQuoteCleanupRepository
 {
-    private const string UploadIdempotencyIndexName = "IX_InstantQuoteUploadFile_SessionId_IdempotencyKeyHash";
-    private const string FinalizationIdempotencyIndexName = "IX_InstantQuoteFinalization_SessionId_IdempotencyKeyHash";
-
     /// <inheritdoc />
     public async Task CreateSessionAsync(InstantQuoteUploadSession session, CancellationToken cancellationToken)
     {
@@ -33,27 +30,81 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
     }
 
     /// <inheritdoc />
-    public async Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(
+    public Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(
         InstantQuoteUploadFile upload,
+        CancellationToken cancellationToken) => ReserveUploadCoreAsync(
+            upload, upload.ModifiedAt, TimeSpan.Zero, allowRecovery: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadAsync(
+        InstantQuoteUploadFile upload,
+        DateTimeOffset now,
+        TimeSpan operationLeaseTimeout,
+        CancellationToken cancellationToken) => ReserveUploadCoreAsync(
+            upload, now, operationLeaseTimeout, allowRecovery: true, cancellationToken);
+
+    private async Task<InstantQuoteReservation<InstantQuoteUploadFile>> ReserveUploadCoreAsync(
+        InstantQuoteUploadFile upload,
+        DateTimeOffset now,
+        TimeSpan operationLeaseTimeout,
+        bool allowRecovery,
         CancellationToken cancellationToken)
     {
+        if (allowRecovery)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(operationLeaseTimeout, TimeSpan.Zero);
+        }
+        else
+        {
+            operationLeaseTimeout = TimeSpan.FromTicks(1);
+        }
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({upload.SessionId.ToString("N")}, 0));",
+            cancellationToken);
+
+        var existingMatch = await dbContext.InstantQuoteUploadFiles
+            .AsNoTracking()
+            .Where(value => value.SessionId == upload.SessionId && value.IdempotencyKeyHash == upload.IdempotencyKeyHash)
+            .Select(value => new { Record = value, Version = EF.Property<uint>(value, "xmin") })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (existingMatch is not null)
+        {
+            var status = Classify(existingMatch.Record.RequestFingerprint, upload.RequestFingerprint, existingMatch.Record.State);
+            var recoverable = string.Equals(
+                    existingMatch.Record.RequestFingerprint,
+                    upload.RequestFingerprint,
+                    StringComparison.Ordinal) &&
+                existingMatch.Record.State is InstantQuoteWorkflowState.Pending or
+                    InstantQuoteWorkflowState.Uploaded or InstantQuoteWorkflowState.Unknown;
+            if (allowRecovery && recoverable &&
+                existingMatch.Record.ModifiedAt <= now.Subtract(operationLeaseTimeout))
+            {
+                existingMatch.Record.ModifiedAt = now;
+                var claimedVersion = await SaveUploadAsync(existingMatch.Record, existingMatch.Version, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new(InstantQuoteReservationStatus.Recovered, existingMatch.Record, claimedVersion);
+            }
+            if (allowRecovery && recoverable)
+            {
+                status = InstantQuoteReservationStatus.InProgress;
+            }
+            await transaction.CommitAsync(cancellationToken);
+            return new(status, existingMatch.Record, existingMatch.Version);
+        }
+
+        var fileCount = await dbContext.InstantQuoteUploadFiles
+            .CountAsync(value => value.SessionId == upload.SessionId, cancellationToken);
+        if (fileCount >= InstantQuoteFileContract.MaximumFilesPerSession)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new(InstantQuoteReservationStatus.LimitExceeded, upload, 0);
+        }
+
         dbContext.InstantQuoteUploadFiles.Add(upload);
-        try
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-            return new(InstantQuoteReservationStatus.Acquired, upload, GetVersion(upload));
-        }
-        catch (DbUpdateException exception) when (IsUniqueViolation(exception, UploadIdempotencyIndexName))
-        {
-            dbContext.Entry(upload).State = EntityState.Detached;
-            var existing = await dbContext.InstantQuoteUploadFiles
-                .AsNoTracking()
-                .Where(value => value.SessionId == upload.SessionId && value.IdempotencyKeyHash == upload.IdempotencyKeyHash)
-                .Select(value => new { Record = value, Version = EF.Property<uint>(value, "xmin") })
-                .SingleAsync(cancellationToken);
-            return new(Classify(existing.Record.RequestFingerprint, upload.RequestFingerprint, existing.Record.State),
-                existing.Record, existing.Version);
-        }
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new(InstantQuoteReservationStatus.Acquired, upload, GetVersion(upload));
     }
 
     /// <inheritdoc />
@@ -119,12 +170,17 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
                 from upload in dbContext.InstantQuoteUploadFiles.AsNoTracking()
                 join session in dbContext.InstantQuoteUploadSessions.AsNoTracking()
                     on upload.SessionId equals session.Id
-                where upload.GcsGeneration != null &&
-                    upload.ModifiedAt <= retryBefore &&
+                where upload.ModifiedAt <= retryBefore &&
+                    (upload.State == InstantQuoteWorkflowState.Pending ||
+                     upload.State == InstantQuoteWorkflowState.Uploaded ||
+                     upload.State == InstantQuoteWorkflowState.Unknown ||
+                     upload.GcsGeneration != null &&
                     (upload.State == InstantQuoteWorkflowState.Finalized ||
                      upload.State == InstantQuoteWorkflowState.Failed ||
+                     upload.State == InstantQuoteWorkflowState.PayloadTooLarge ||
+                     upload.State == InstantQuoteWorkflowState.InvalidRequest ||
                      upload.State == InstantQuoteWorkflowState.Removed ||
-                     upload.State == InstantQuoteWorkflowState.Clean && session.ExpiresAt <= expiredBefore)
+                     upload.State == InstantQuoteWorkflowState.Clean && session.ExpiresAt <= expiredBefore))
                 orderby session.ExpiresAt, upload.ModifiedAt, upload.Id
                 select new
                 {
@@ -143,28 +199,73 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
         CancellationToken cancellationToken) => SaveUploadAsync(upload, expectedVersion, cancellationToken);
 
     /// <inheritdoc />
-    public async Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
+    public Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
         InstantQuoteFinalization finalization,
+        CancellationToken cancellationToken) => ReserveFinalizationCoreAsync(
+            finalization, finalization.ModifiedAt, TimeSpan.Zero, allowRecovery: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationAsync(
+        InstantQuoteFinalization finalization,
+        DateTimeOffset now,
+        TimeSpan operationLeaseTimeout,
+        CancellationToken cancellationToken) => ReserveFinalizationCoreAsync(
+            finalization, now, operationLeaseTimeout, allowRecovery: true, cancellationToken);
+
+    private async Task<InstantQuoteReservation<InstantQuoteFinalization>> ReserveFinalizationCoreAsync(
+        InstantQuoteFinalization finalization,
+        DateTimeOffset now,
+        TimeSpan operationLeaseTimeout,
+        bool allowRecovery,
         CancellationToken cancellationToken)
     {
+        if (allowRecovery)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(operationLeaseTimeout, TimeSpan.Zero);
+        }
+        else
+        {
+            operationLeaseTimeout = TimeSpan.FromTicks(1);
+        }
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({finalization.SessionId.ToString("N")}, 0));",
+            cancellationToken);
+        var existing = await dbContext.InstantQuoteFinalizations
+            .AsNoTracking()
+            .Where(value => value.SessionId == finalization.SessionId
+                && value.IdempotencyKeyHash == finalization.IdempotencyKeyHash)
+            .Select(value => new { Record = value, Version = EF.Property<uint>(value, "xmin") })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (existing is not null)
+        {
+            var status = Classify(existing.Record.RequestFingerprint, finalization.RequestFingerprint, existing.Record.State);
+            var recoverable = string.Equals(
+                    existing.Record.RequestFingerprint,
+                    finalization.RequestFingerprint,
+                    StringComparison.Ordinal) &&
+                existing.Record.State is InstantQuoteWorkflowState.Pending or InstantQuoteWorkflowState.Unknown;
+            if (allowRecovery && recoverable &&
+                existing.Record.ModifiedAt <= now.Subtract(operationLeaseTimeout))
+            {
+                existing.Record.ModifiedAt = now;
+                var claimedVersion = await SaveFinalizationAsync(existing.Record, existing.Version, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new(InstantQuoteReservationStatus.Recovered, existing.Record, claimedVersion);
+            }
+            if (allowRecovery && recoverable)
+            {
+                status = InstantQuoteReservationStatus.InProgress;
+            }
+            await transaction.CommitAsync(cancellationToken);
+            return new(status, existing.Record, existing.Version);
+        }
+
         dbContext.InstantQuoteFinalizations.Add(finalization);
-        try
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-            return new(InstantQuoteReservationStatus.Acquired, finalization, GetVersion(finalization));
-        }
-        catch (DbUpdateException exception) when (IsUniqueViolation(exception, FinalizationIdempotencyIndexName))
-        {
-            dbContext.Entry(finalization).State = EntityState.Detached;
-            var existing = await dbContext.InstantQuoteFinalizations
-                .AsNoTracking()
-                .Where(value => value.SessionId == finalization.SessionId
-                    && value.IdempotencyKeyHash == finalization.IdempotencyKeyHash)
-                .Select(value => new { Record = value, Version = EF.Property<uint>(value, "xmin") })
-                .SingleAsync(cancellationToken);
-            return new(Classify(existing.Record.RequestFingerprint, finalization.RequestFingerprint, existing.Record.State),
-                existing.Record, existing.Version);
-        }
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new(InstantQuoteReservationStatus.Acquired, finalization, GetVersion(finalization));
     }
 
     /// <inheritdoc />
@@ -212,11 +313,4 @@ public sealed class InstantQuoteFileRepository(FileDbContext dbContext) : IInsta
     private uint GetVersion<TEntity>(TEntity entity) where TEntity : class =>
         dbContext.Entry(entity).Property<uint>("xmin").CurrentValue;
 
-    private static bool IsUniqueViolation(DbUpdateException exception, string constraintName) =>
-        exception.InnerException is PostgresException
-        {
-            SqlState: PostgresErrorCodes.UniqueViolation,
-            ConstraintName: var actualConstraint,
-        }
-        && string.Equals(actualConstraint, constraintName, StringComparison.Ordinal);
 }

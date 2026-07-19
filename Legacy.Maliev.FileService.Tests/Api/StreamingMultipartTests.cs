@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Security.Claims;
 using System.Text.Json;
+using Asp.Versioning;
 using Legacy.Maliev.FileService.Api.Controllers;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -87,6 +88,7 @@ public sealed class StreamingMultipartTests
         using var response = await client.SendAsync(request);
 
         await AssertProblemAsync(response, HttpStatusCode.BadRequest, "validation_error");
+        Assert.False(app.Services.GetRequiredService<ConsumingService>().UploadReturned);
     }
 
     [Fact]
@@ -276,6 +278,7 @@ public sealed class StreamingMultipartTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
+        builder.Services.AddApiVersioning();
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton<IAuthorizationPolicyProvider, AllowAllPolicyProvider>();
         builder.Services.AddSingleton<IPolicyEvaluator, AllowAllPolicyEvaluator>();
@@ -309,6 +312,7 @@ public sealed class StreamingMultipartTests
         Exception? uploadException = null) : IInstantQuoteFileService
     {
         public long BytesRead { get; private set; }
+        public bool UploadReturned { get; private set; }
         public string? ExpectedSha256 { get; private set; }
         public InstantQuoteUploadMetadata? Metadata { get; private set; }
         public CancellationToken ObservedCancellationToken { get; private set; }
@@ -371,6 +375,7 @@ public sealed class StreamingMultipartTests
 
             ExpectedSha256 = expectedSha256;
             Metadata = metadata;
+            UploadReturned = true;
             return new InstantQuoteFileResponse(Guid.NewGuid(), metadata.FileName, metadata.ContentType, BytesRead, expectedSha256, "pending");
         }
 

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text.Json;
+using Asp.Versioning;
 using Legacy.Maliev.FileService.Api.Controllers;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -69,6 +70,7 @@ public sealed class LegacyUploadResourceFilterTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(UploadsController).Assembly);
+        builder.Services.AddApiVersioning();
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton<IAuthorizationPolicyProvider, AllowAllPolicyProvider>();
         builder.Services.AddSingleton<IPolicyEvaluator, AllowAllPolicyEvaluator>();

@@ -46,7 +46,9 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
             var normalized = InstantQuoteFilePolicy.NormalizeFileMetadata(
                 fileName ?? string.Empty,
                 section.ContentType ?? string.Empty);
-            var body = new BoundedHashingReadStream(new MultipartSectionReadStream(section.Body));
+            var completion = new MultipartCompletion(reader);
+            var body = new BoundedHashingReadStream(new CompletionValidatingReadStream(
+                new MultipartSectionReadStream(section.Body), completion.ValidateAsync));
 
             return new InstantQuoteMultipartFile(
                 body,
@@ -58,17 +60,7 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
                         throw new InstantQuoteValidationException("The uploaded file was not fully consumed.");
                     }
 
-                    try
-                    {
-                        if (await reader.ReadNextSectionAsync(completionCancellationToken) is not null)
-                        {
-                            throw new InstantQuoteValidationException("Additional multipart sections are not allowed.");
-                        }
-                    }
-                    catch (Exception exception) when (exception is InvalidDataException or IOException)
-                    {
-                        throw new InstantQuoteValidationException("Multipart request is invalid.");
-                    }
+                    await completion.ValidateAsync(completionCancellationToken);
                 });
         }
         catch (InstantQuoteContractException)
@@ -79,6 +71,64 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
         {
             throw new InstantQuoteValidationException($"Multipart request is invalid: {exception.Message}");
         }
+    }
+
+    private sealed class MultipartCompletion(MultipartReader reader)
+    {
+        private readonly object gate = new();
+        private Task? completion;
+
+        public Task ValidateAsync(CancellationToken cancellationToken)
+        {
+            lock (gate)
+            {
+                completion ??= ValidateCoreAsync(cancellationToken);
+                return completion;
+            }
+        }
+
+        private async Task ValidateCoreAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (await reader.ReadNextSectionAsync(cancellationToken) is not null)
+                {
+                    throw new InstantQuoteValidationException("Additional multipart sections are not allowed.");
+                }
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                throw new InstantQuoteValidationException("Multipart request is invalid.");
+            }
+        }
+    }
+
+    private sealed class CompletionValidatingReadStream(
+        Stream source,
+        Func<CancellationToken, Task> validateCompletionAsync) : Stream
+    {
+        public override bool CanRead => source.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                await validateCompletionAsync(cancellationToken);
+            }
+            return read;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) source.Dispose(); base.Dispose(disposing); }
+        public override async ValueTask DisposeAsync() { await source.DisposeAsync(); GC.SuppressFinalize(this); }
     }
 
     private static string GetBoundary(string? contentType)

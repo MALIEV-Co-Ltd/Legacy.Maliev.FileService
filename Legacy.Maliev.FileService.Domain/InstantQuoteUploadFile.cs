@@ -142,4 +142,8 @@ public enum InstantQuoteWorkflowState
     Unknown,
     /// <summary>The pre-finalization file was explicitly removed.</summary>
     Removed,
+    /// <summary>The streamed request exceeded the byte limit.</summary>
+    PayloadTooLarge,
+    /// <summary>The streamed request failed terminal request validation.</summary>
+    InvalidRequest,
 }
