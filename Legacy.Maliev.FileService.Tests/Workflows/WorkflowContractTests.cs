@@ -27,8 +27,8 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_RejectsCommentedDependencySha()
     {
         AssertMutationRejected(
-            "ref: 085f24b8b6b19c5a8e932b229d93421b03bcd032",
-            "ref: main # 085f24b8b6b19c5a8e932b229d93421b03bcd032");
+            "ref: bcab875a7f703d1d9c2d535479e93653720eb62d",
+            "ref: main # bcab875a7f703d1d9c2d535479e93653720eb62d");
     }
 
     [Fact]
@@ -156,9 +156,9 @@ internal static partial class WorkflowContractValidator
         RejectDuplicatedValidationActionsAndCommands(jobs);
 
         var steps = RequireSequence(validateJob, "steps");
-        if (steps.Children.Count != 4)
+        if (steps.Children.Count != 3)
         {
-            throw new InvalidOperationException("Validate job must contain exactly four caller-owned steps.");
+            throw new InvalidOperationException("Validate job must contain exactly three caller-owned steps.");
         }
 
         ValidateStep(
@@ -173,23 +173,13 @@ internal static partial class WorkflowContractValidator
             CheckoutAction,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["repository"] = "MALIEV-Co-Ltd/Maliev.Aspire",
-                ["ref"] = "085f24b8b6b19c5a8e932b229d93421b03bcd032",
-                ["path"] = ".dependencies/Maliev.Aspire",
+                ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults",
+                ["ref"] = "bcab875a7f703d1d9c2d535479e93653720eb62d",
+                ["path"] = ".dependencies/Legacy.Maliev.ServiceDefaults",
                 ["persist-credentials"] = "false",
             });
         ValidateStep(
             steps.Children[2],
-            CheckoutAction,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["repository"] = "MALIEV-Co-Ltd/Maliev.MessagingContracts",
-                ["ref"] = "c533c12a8154f5cf7c4fbc9734e82a62705ac60f",
-                ["path"] = ".dependencies/Maliev.MessagingContracts",
-                ["persist-credentials"] = "false",
-            });
-        ValidateStep(
-            steps.Children[3],
             SharedValidationAction,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
