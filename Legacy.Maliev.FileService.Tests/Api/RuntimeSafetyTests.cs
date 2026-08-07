@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Reflection;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api;
 using Legacy.Maliev.FileService.Api.Controllers;
@@ -19,6 +20,29 @@ namespace Legacy.Maliev.FileService.Tests.Api;
 
 public sealed class RuntimeSafetyTests
 {
+    [Fact]
+    public void StreamingWrappers_OverrideArrayAsyncReadToAvoidSyncFallback()
+    {
+        var wrapperTypes = new[]
+        {
+            typeof(BoundedHashingReadStream),
+            typeof(InstantQuoteFileService).GetNestedType("PrefixCapturingReadStream", BindingFlags.NonPublic),
+            typeof(InstantQuoteTemporaryObjectCleanupService).GetNestedType("RecoveryPrefixStream", BindingFlags.NonPublic),
+            typeof(SingleFileMultipartReader).GetNestedType("CompletionValidatingReadStream", BindingFlags.NonPublic),
+            typeof(SingleFileMultipartReader).GetNestedType("MultipartSectionReadStream", BindingFlags.NonPublic),
+            typeof(InstantQuoteWholeStreamValidation).GetNestedType("GltfValidationReadStream", BindingFlags.NonPublic),
+        };
+
+        foreach (var wrapperType in wrapperTypes)
+        {
+            Assert.NotNull(wrapperType);
+            var arrayRead = wrapperType!.GetMethod(
+                nameof(Stream.ReadAsync),
+                [typeof(byte[]), typeof(int), typeof(int), typeof(CancellationToken)]);
+            Assert.Equal(wrapperType, arrayRead?.DeclaringType);
+        }
+    }
+
     [Fact]
     public void Options_DefaultsAreWriteDisabledAndBucketless()
     {

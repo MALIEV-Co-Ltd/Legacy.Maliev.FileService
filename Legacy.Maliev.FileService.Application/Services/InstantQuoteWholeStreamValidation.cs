@@ -37,6 +37,12 @@ public static class InstantQuoteWholeStreamValidation
             return read;
         }
 
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            var read = await ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
+            return read;
+        }
+
         public override async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)

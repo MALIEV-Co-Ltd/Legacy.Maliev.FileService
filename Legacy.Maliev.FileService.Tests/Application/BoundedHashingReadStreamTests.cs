@@ -88,6 +88,25 @@ public sealed class BoundedHashingReadStreamTests
         Assert.Equal(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), stream.Sha256);
     }
 
+    [Fact]
+    public async Task ReadAsync_ArrayOverload_UsesUnderlyingAsyncPath()
+    {
+        var source = new AsyncOnlyStream("async upload"u8.ToArray());
+        await using var stream = new BoundedHashingReadStream(source);
+        var buffer = new byte[64];
+
+        var arrayRead = typeof(BoundedHashingReadStream).GetMethod(
+            nameof(Stream.ReadAsync),
+            [typeof(byte[]), typeof(int), typeof(int), typeof(CancellationToken)]);
+        Assert.Equal(typeof(BoundedHashingReadStream), arrayRead?.DeclaringType);
+
+        var read = await stream.ReadAsync(buffer, 0, buffer.Length, CancellationToken.None);
+
+        Assert.Equal("async upload"u8.Length, read);
+        Assert.Equal(1, source.AsyncReadCount);
+        Assert.Equal(0, source.SyncReadCount);
+    }
+
     private static async Task DrainAsync(Stream stream, int bufferSize = 64 * 1024)
     {
         var buffer = new byte[bufferSize];
@@ -142,6 +161,40 @@ public sealed class BoundedHashingReadStreamTests
 
             _position += count;
             _remaining -= count;
+            return ValueTask.FromResult(count);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class AsyncOnlyStream(byte[] bytes) : Stream
+    {
+        private int position;
+
+        public int AsyncReadCount { get; private set; }
+        public int SyncReadCount { get; private set; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => bytes.Length;
+        public override long Position { get => position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            SyncReadCount++;
+            throw new InvalidOperationException("The synchronous read path must not be used.");
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AsyncReadCount++;
+            var count = Math.Min(buffer.Length, bytes.Length - position);
+            bytes.AsMemory(position, count).CopyTo(buffer);
+            position += count;
             return ValueTask.FromResult(count);
         }
 
