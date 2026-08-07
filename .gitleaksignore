@@ -1,2 +1,3 @@
-9bce1a548ac9d05da440cb9c6c5acf868b0e64e2:Legacy.Maliev.FileService.Tests/Application/InstantQuoteFilePolicyTests.cs:generic-api-key:80
-9bce1a548ac9d05da440cb9c6c5acf868b0e64e2:Legacy.Maliev.FileService.Tests/Application/InstantQuoteFilePolicyTests.cs:generic-api-key:81
+# Historical deterministic invalid-header fixtures; these are non-secret test values.
+afdbdc7e9efc4d671ea1d5af929813ded20ad7aa:Legacy.Maliev.FileService.Tests/Application/InstantQuoteFilePolicyTests.cs:generic-api-key:80
+afdbdc7e9efc4d671ea1d5af929813ded20ad7aa:Legacy.Maliev.FileService.Tests/Application/InstantQuoteFilePolicyTests.cs:generic-api-key:81
