@@ -40,27 +40,35 @@ public static class FileServiceRuntimeRegistration
             .Validate(options => options.TimeoutSeconds is >= 1 and <= 300, "Scanner timeout is invalid")
             .ValidateOnStart();
 
-        var legacyWritesEnabled = configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:Enabled") &&
+        var legacyStorageEnabled = configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:Enabled");
+        var legacyWritesEnabled = legacyStorageEnabled &&
             configuration.GetValue<bool>($"{FileStorageOptions.SectionName}:WritesEnabled");
         var instantQuoteEnabled = configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:Enabled") &&
             configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:WritesEnabled");
         var instantQuoteCleanupEnabled = instantQuoteEnabled &&
             configuration.GetValue<bool>($"{InstantQuoteFileOptions.SectionName}:CleanupEnabled");
 
-        if (legacyWritesEnabled || instantQuoteEnabled)
+        if (legacyStorageEnabled || instantQuoteEnabled)
         {
             services.TryAddSingleton(_ => StorageClient.Create());
         }
 
-        if (legacyWritesEnabled)
+        if (legacyStorageEnabled)
         {
             services.TryAddSingleton(provider => provider.GetRequiredService<StorageClient>().CreateUrlSigner());
             services.TryAddScoped<IObjectStorage, GoogleCloudObjectStorage>();
-            services.TryAddScoped<IFileSafetyScanner, ClamAvFileSafetyScanner>();
         }
         else
         {
             services.TryAddScoped<IObjectStorage, DisabledObjectStorage>();
+        }
+
+        if (legacyWritesEnabled)
+        {
+            services.TryAddScoped<IFileSafetyScanner, ClamAvFileSafetyScanner>();
+        }
+        else
+        {
             services.TryAddScoped<IFileSafetyScanner, DisabledFileSafetyScanner>();
         }
 

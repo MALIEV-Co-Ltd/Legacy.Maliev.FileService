@@ -6,6 +6,7 @@ using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
+using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Domain;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -132,6 +133,24 @@ public sealed class RuntimeSafetyTests
         Assert.Null(provider.GetService<StorageClient>());
         Assert.IsType<DisabledObjectStorage>(provider.GetRequiredService<IObjectStorage>());
         Assert.IsType<DisabledFileSafetyScanner>(provider.GetRequiredService<IFileSafetyScanner>());
+    }
+
+    [Fact]
+    public void AddFileServiceRuntime_LegacyStorageReadOnly_RegistersStorageButKeepsScannerDisabled()
+    {
+        var services = CreateServices(
+        [
+            new("FileStorage:Enabled", "true"),
+            new("FileStorage:WritesEnabled", "false"),
+            new("FileStorage:AllowedBuckets:0", "maliev.com"),
+        ], new RecordingInstantQuoteRepository());
+
+        var storage = Assert.Single(services,
+            descriptor => descriptor.ServiceType == typeof(IObjectStorage));
+        Assert.Equal(typeof(GoogleCloudObjectStorage), storage.ImplementationType);
+        var scanner = Assert.Single(services,
+            descriptor => descriptor.ServiceType == typeof(IFileSafetyScanner));
+        Assert.Equal(typeof(DisabledFileSafetyScanner), scanner.ImplementationType);
     }
 
     [Fact]

@@ -111,6 +111,31 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
+    public async Task GetSignedUrlAsync_ReadOnlyStorage_AllowsExistingObjectReadsWhileWritesRemainDisabled()
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        repository.Uploads.Add(new Upload
+        {
+            Bucket = "maliev.com",
+            Name = "uploads/existing.stl",
+            ContentType = "model/stl",
+            Size = 3,
+        });
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository, writesEnabled: false);
+
+        var result = await service.GetSignedUrlAsync("maliev.com", "uploads/existing.stl", CancellationToken.None);
+
+        Assert.Equal(new Uri("https://storage.test/uploads/existing.stl"), result);
+        Assert.Equal(("maliev.com", "uploads/existing.stl"), Assert.Single(storage.Signed));
+        await Assert.ThrowsAsync<MalwareScannerUnavailableException>(() => service.UploadAsync(
+            "maliev.com",
+            null,
+            [new MemoryUploadFile("part.stl", "model/stl", [1])],
+            CancellationToken.None));
+    }
+
+    [Fact]
     public async Task MetadataCommitResponseLoss_RetainsPromotedObjectForDeterministicReconciliation()
     {
         var storage = new RecordingStorage(); var repository = new RecordingRepository { ThrowAfterAdd = true };
@@ -134,12 +159,13 @@ public sealed class FileApplicationServiceTests
     private static FileApplicationService CreateService(
         RecordingStorage storage,
         IFileSafetyScanner scanner,
-        RecordingRepository repository)
+        RecordingRepository repository,
+        bool writesEnabled = true)
     {
         var options = Options.Create(new FileStorageOptions
         {
             Enabled = true,
-            WritesEnabled = true,
+            WritesEnabled = writesEnabled,
             AllowedBuckets = ["maliev.com"],
             QuarantinePrefix = "_quarantine",
             SignedUrlHours = 168,

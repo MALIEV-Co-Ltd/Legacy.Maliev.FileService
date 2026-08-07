@@ -6,6 +6,15 @@ namespace Legacy.Maliev.FileService.Application.Services;
 /// <summary>Enforces the independent runtime and write authorities for the legacy file workflow.</summary>
 public sealed class LegacyFileRuntimeGate(IOptions<FileStorageOptions> options)
 {
+    /// <summary>Fails closed unless this runtime explicitly enables legacy object-storage reads.</summary>
+    public void EnsureStorageEnabled()
+    {
+        if (!options.Value.Enabled)
+        {
+            throw new MalwareScannerUnavailableException("Legacy file storage is disabled.");
+        }
+    }
+
     /// <summary>Fails closed unless this runtime explicitly enables legacy storage writes.</summary>
     public void EnsureWritesEnabled()
     {

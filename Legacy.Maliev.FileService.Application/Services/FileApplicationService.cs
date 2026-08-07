@@ -172,7 +172,7 @@ public sealed class FileApplicationService(
     /// <inheritdoc />
     public async Task<Uri?> GetSignedUrlAsync(string bucket, string objectName, CancellationToken cancellationToken)
     {
-        runtimeGate.EnsureWritesEnabled();
+        runtimeGate.EnsureStorageEnabled();
         names.RequireBucket(bucket);
         objectName = names.RequireObjectName(objectName);
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken))
