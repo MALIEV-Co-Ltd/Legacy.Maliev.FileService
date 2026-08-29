@@ -100,9 +100,14 @@ public sealed class FileApplicationService(
 
             return new UploadResultResponse(result);
         }
-        catch
+        catch (Exception uploadFailure)
         {
-            await BestEffortCleanupAsync(metadataCommitAttempted ? quarantined : quarantined.Concat(promoted));
+            var cleanupFailures = await CleanupAsync(metadataCommitAttempted ? quarantined : quarantined.Concat(promoted));
+            if (cleanupFailures.Count != 0)
+            {
+                throw new UploadRollbackException(uploadFailure, cleanupFailures);
+            }
+
             throw;
         }
     }
@@ -203,8 +208,10 @@ public sealed class FileApplicationService(
         }
     }
 
-    private async Task BestEffortCleanupAsync(IEnumerable<(string Bucket, string ObjectName)> objects)
+    private async Task<IReadOnlyList<UploadCleanupFailure>> CleanupAsync(
+        IEnumerable<(string Bucket, string ObjectName)> objects)
     {
+        var failures = new List<UploadCleanupFailure>();
         using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         foreach (var item in objects)
         {
@@ -214,8 +221,11 @@ public sealed class FileApplicationService(
             }
             catch (Exception exception)
             {
+                failures.Add(new UploadCleanupFailure(item.Bucket, item.ObjectName, exception));
                 logger.LogWarning(exception, "Failed to clean up object {ObjectName} from bucket {Bucket}", item.ObjectName, item.Bucket);
             }
         }
+
+        return failures;
     }
 }

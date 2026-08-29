@@ -206,6 +206,109 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_SignedUrlAndRollbackFailure_RetainsBothCausesAndObjectCoordinates()
+    {
+        var signingFailure = new InvalidOperationException("signing unavailable");
+        var cleanupFailure = new IOException("storage delete unavailable");
+        var storage = new RecordingStorage
+        {
+            SignedUrlFailure = signingFailure,
+            SignedUrlFailureCall = 1,
+        };
+        storage.DeleteFailures["orders/42/part.step"] = cleanupFailure;
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var exception = await Assert.ThrowsAsync<UploadRollbackException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
+            CancellationToken.None));
+
+        Assert.Same(signingFailure, exception.UploadFailure);
+        var cleanup = Assert.Single(exception.CleanupFailures);
+        Assert.Equal("maliev.com", cleanup.Bucket);
+        Assert.Equal("orders/42/part.step", cleanup.ObjectName);
+        Assert.Same(cleanupFailure, cleanup.Cause);
+        Assert.Contains("maliev.com/orders/42/part.step", exception.Message, StringComparison.Ordinal);
+        var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
+        Assert.Same(signingFailure, aggregate.InnerExceptions[0]);
+        Assert.Same(cleanupFailure, aggregate.InnerExceptions[1]);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+    }
+
+    [Fact]
+    public async Task UploadAsync_MultipleRollbackFailures_AttemptsEveryObjectAndRetainsEveryFailure()
+    {
+        var signingFailure = new InvalidOperationException("signing unavailable");
+        var firstCleanupFailure = new IOException("first delete unavailable");
+        var thirdCleanupFailure = new TimeoutException("third delete timed out");
+        var storage = new RecordingStorage
+        {
+            SignedUrlFailure = signingFailure,
+            SignedUrlFailureCall = 3,
+        };
+        storage.DeleteFailures["orders/42/first.step"] = firstCleanupFailure;
+        storage.DeleteFailures["orders/42/third.step"] = thirdCleanupFailure;
+        var service = CreateService(
+            storage,
+            new StubScanner(new(FileSafetyVerdict.Clean)),
+            new RecordingRepository());
+
+        var exception = await Assert.ThrowsAsync<UploadRollbackException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [
+                new MemoryUploadFile("first.step", "application/step", [1]),
+                new MemoryUploadFile("second.step", "application/step", [2]),
+                new MemoryUploadFile("third.step", "application/step", [3]),
+            ],
+            CancellationToken.None));
+
+        Assert.Equal(3, storage.Deleted.Count);
+        Assert.Collection(
+            exception.CleanupFailures.OrderBy(failure => failure.ObjectName),
+            failure =>
+            {
+                Assert.Equal(("maliev.com", "orders/42/first.step"), (failure.Bucket, failure.ObjectName));
+                Assert.Same(firstCleanupFailure, failure.Cause);
+            },
+            failure =>
+            {
+                Assert.Equal(("maliev.com", "orders/42/third.step"), (failure.Bucket, failure.ObjectName));
+                Assert.Same(thirdCleanupFailure, failure.Cause);
+            });
+        var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
+        Assert.Equal(3, aggregate.InnerExceptions.Count);
+    }
+
+    [Fact]
+    public async Task UploadAsync_RollbackReportsObjectAlreadyAbsent_PreservesOriginalSigningFailure()
+    {
+        var signingFailure = new InvalidOperationException("signing unavailable");
+        var storage = new RecordingStorage
+        {
+            DeleteResult = false,
+            SignedUrlFailure = signingFailure,
+            SignedUrlFailureCall = 1,
+        };
+        var service = CreateService(
+            storage,
+            new StubScanner(new(FileSafetyVerdict.Clean)),
+            new RecordingRepository());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+            "maliev.com",
+            null,
+            [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
+            CancellationToken.None));
+
+        Assert.Same(signingFailure, exception);
+        Assert.Single(storage.Deleted);
+    }
+
+    [Fact]
     public void MultipartEnvelopeAllowance_PreservesExactAggregateFileLimit()
     {
         Assert.Equal(200L * 1024L * 1024L, FileApplicationService.MaximumUploadBytes);
@@ -261,6 +364,8 @@ public sealed class FileApplicationServiceTests
         public Exception? SignedUrlFailure { get; init; }
         public int SignedUrlFailureCall { get; init; }
         public CancellationTokenSource? RequestCancellation { get; init; }
+        public bool DeleteResult { get; init; } = true;
+        public Dictionary<string, Exception> DeleteFailures { get; } = [];
 
         public Task UploadAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken)
         {
@@ -280,8 +385,13 @@ public sealed class FileApplicationServiceTests
         {
             CleanupObservedCancellation |= cancellationToken.IsCancellationRequested;
             Deleted.Add((bucket, objectName));
+            if (DeleteFailures.TryGetValue(objectName, out var failure))
+            {
+                return Task.FromException<bool>(failure);
+            }
+
             sizes.Remove((bucket, objectName));
-            return Task.FromResult(true);
+            return Task.FromResult(DeleteResult);
         }
 
         public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>

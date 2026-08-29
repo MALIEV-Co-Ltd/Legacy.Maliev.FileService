@@ -139,6 +139,29 @@ public sealed class IdempotentUploadCoordinatorTests
         Task<UploadResultResponse> Run() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _) => { executions++; return Task.FromResult(Response()); }, (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
     }
 
+    [Fact]
+    public async Task RollbackFailure_MarksIdempotentUploadUnknownAndRetainsActionableFailure()
+    {
+        var store = new MemoryStore();
+        var coordinator = new IdempotentUploadCoordinator(store);
+        var rollbackFailure = new UploadRollbackException(
+            new InvalidOperationException("signing unavailable"),
+            [new UploadCleanupFailure("maliev.com", "orders/42/part.step", new IOException("delete unavailable"))]);
+
+        var exception = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => coordinator.ExecuteAsync(
+            "intranet-service",
+            "workflow-42",
+            "maliev.com",
+            "orders/42",
+            [new File("part.step", "application/step", [1])],
+            (_, _, _) => throw rollbackFailure,
+            (_, _, _) => Task.FromResult<UploadResultResponse?>(null),
+            CancellationToken.None));
+
+        Assert.Same(rollbackFailure, exception.InnerException);
+        Assert.Equal("unknown", store.State);
+    }
+
     private static UploadResultResponse Response() => new([new("maliev.com", "orders/part.stl", new Uri("https://storage.test/signed"))]);
     private sealed class File(string name, string type, byte[] bytes) : IUploadFile { public string FileName => name; public string ContentType => type; public long Length => bytes.Length; public Stream OpenReadStream() => new MemoryStream(bytes, false); }
 
