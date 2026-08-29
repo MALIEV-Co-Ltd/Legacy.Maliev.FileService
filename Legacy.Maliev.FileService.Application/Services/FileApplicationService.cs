@@ -87,8 +87,6 @@ public sealed class FileApplicationService(
                 });
             }
 
-            metadataCommitAttempted = true;
-            await repository.AddRangeAsync(uploads, cancellationToken);
             var duration = TimeSpan.FromHours(Math.Clamp(options.Value.SignedUrlHours, 1, 168));
             var result = new List<UploadObjectResponse>(uploads.Count);
             foreach (var upload in uploads)
@@ -96,6 +94,9 @@ public sealed class FileApplicationService(
                 var uri = await storage.CreateSignedReadUriAsync(upload.Bucket, upload.Name, duration, cancellationToken);
                 result.Add(new UploadObjectResponse(upload.Bucket, upload.Name, uri));
             }
+
+            metadataCommitAttempted = true;
+            await repository.AddRangeAsync(uploads, cancellationToken);
 
             return new UploadResultResponse(result);
         }

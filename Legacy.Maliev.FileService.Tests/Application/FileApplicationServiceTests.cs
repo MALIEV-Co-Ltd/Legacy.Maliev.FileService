@@ -150,6 +150,62 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_SignedUrlFailure_DeletesEveryPromotedObjectBeforeMetadataCommit()
+    {
+        var expected = new InvalidOperationException("signing unavailable");
+        var storage = new RecordingStorage
+        {
+            SignedUrlFailure = expected,
+            SignedUrlFailureCall = 2,
+        };
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [
+                new MemoryUploadFile("first.step", "application/step", [1, 2, 3]),
+                new MemoryUploadFile("second.step", "application/step", [4, 5, 6]),
+            ],
+            CancellationToken.None));
+
+        Assert.Same(expected, exception);
+        Assert.Equal(2, storage.Moved.Count);
+        Assert.Equal(
+            storage.Moved.Select(move => ("maliev.com", move.DestinationObjectName)).OrderBy(item => item.DestinationObjectName),
+            storage.Deleted.OrderBy(item => item.ObjectName));
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+    }
+
+    [Fact]
+    public async Task UploadAsync_SignedUrlFailure_UsesIndependentCleanupToken()
+    {
+        using var request = new CancellationTokenSource();
+        var storage = new RecordingStorage
+        {
+            SignedUrlFailure = new InvalidOperationException("signing unavailable"),
+            SignedUrlFailureCall = 1,
+            RequestCancellation = request,
+        };
+        var service = CreateService(
+            storage,
+            new StubScanner(new(FileSafetyVerdict.Clean)),
+            new RecordingRepository());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+            "maliev.com",
+            null,
+            [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
+            request.Token));
+
+        Assert.True(request.IsCancellationRequested);
+        Assert.False(storage.CleanupObservedCancellation);
+        Assert.Single(storage.Deleted);
+    }
+
+    [Fact]
     public void MultipartEnvelopeAllowance_PreservesExactAggregateFileLimit()
     {
         Assert.Equal(200L * 1024L * 1024L, FileApplicationService.MaximumUploadBytes);
@@ -202,6 +258,9 @@ public sealed class FileApplicationServiceTests
         public List<(string Bucket, string ObjectName)> Signed { get; } = [];
         private readonly Dictionary<(string Bucket, string ObjectName), long> sizes = [];
         public bool CleanupObservedCancellation { get; private set; }
+        public Exception? SignedUrlFailure { get; init; }
+        public int SignedUrlFailureCall { get; init; }
+        public CancellationTokenSource? RequestCancellation { get; init; }
 
         public Task UploadAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken)
         {
@@ -231,6 +290,12 @@ public sealed class FileApplicationServiceTests
         public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken)
         {
             Signed.Add((bucket, objectName));
+            if (SignedUrlFailure is not null && Signed.Count == SignedUrlFailureCall)
+            {
+                RequestCancellation?.Cancel();
+                return Task.FromException<Uri>(SignedUrlFailure);
+            }
+
             return Task.FromResult(new Uri($"https://storage.test/{objectName}"));
         }
     }
@@ -239,9 +304,11 @@ public sealed class FileApplicationServiceTests
     {
         public List<Upload> Uploads { get; } = [];
         public bool ThrowAfterAdd { get; set; }
+        public int AddRangeCallCount { get; private set; }
 
         public Task AddRangeAsync(IReadOnlyCollection<Upload> uploads, CancellationToken cancellationToken)
         {
+            AddRangeCallCount++;
             Uploads.AddRange(uploads);
             if (ThrowAfterAdd) throw new IOException("metadata response lost");
             return Task.CompletedTask;
