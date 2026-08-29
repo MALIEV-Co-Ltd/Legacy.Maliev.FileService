@@ -99,6 +99,33 @@ public sealed class FileControllerContractTests
     }
 
     [Fact]
+    public async Task UnkeyedUpload_RollbackFailure_ReturnsGenericUnavailableProblemWithoutObjectCoordinates()
+    {
+        var service = new Mock<IFileService>();
+        service.Setup(value => value.UploadAsync(
+                "maliev.com",
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyList<IUploadFile>>(),
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UploadRollbackException(
+                new InvalidOperationException("signing unavailable"),
+                [new UploadCleanupFailure("maliev.com", "orders/private/part.step", new IOException("delete unavailable"))]));
+        var controller = Controller(new StubStore(new(UploadAcquireState.Acquired)), service);
+
+        var result = await controller.UploadAsync("maliev.com", Files(), null, CancellationToken.None);
+
+        var unavailable = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(unavailable.Value);
+        Assert.Equal("Upload outcome unknown", problem.Title);
+        Assert.Equal("Upload outcome requires reconciliation.", problem.Detail);
+        Assert.DoesNotContain("maliev.com", problem.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("part.step", problem.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("delete unavailable", problem.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DeleteUploadAsync_DisabledDependency_ReturnsUnavailableProblem()
     {
         var service = new Mock<IFileService>();
