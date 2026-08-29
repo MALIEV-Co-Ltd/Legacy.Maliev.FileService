@@ -149,6 +149,15 @@ public sealed class UploadsController(
         {
             return Conflict(Problem(exception.Message, StatusCodes.Status409Conflict, "Upload in progress"));
         }
+        catch (UploadRollbackException)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                Problem(
+                    "Upload outcome requires reconciliation.",
+                    StatusCodes.Status503ServiceUnavailable,
+                    "Upload outcome unknown"));
+        }
         catch (UploadOutcomeUnknownException exception)
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, Problem(exception.Message, StatusCodes.Status503ServiceUnavailable, "Upload outcome unknown"));

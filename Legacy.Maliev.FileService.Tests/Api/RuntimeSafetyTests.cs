@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Reflection;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api;
 using Legacy.Maliev.FileService.Api.Controllers;
@@ -6,6 +7,7 @@ using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
+using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Domain;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -18,6 +20,29 @@ namespace Legacy.Maliev.FileService.Tests.Api;
 
 public sealed class RuntimeSafetyTests
 {
+    [Fact]
+    public void StreamingWrappers_OverrideArrayAsyncReadToAvoidSyncFallback()
+    {
+        var wrapperTypes = new[]
+        {
+            typeof(BoundedHashingReadStream),
+            typeof(InstantQuoteFileService).GetNestedType("PrefixCapturingReadStream", BindingFlags.NonPublic),
+            typeof(InstantQuoteTemporaryObjectCleanupService).GetNestedType("RecoveryPrefixStream", BindingFlags.NonPublic),
+            typeof(SingleFileMultipartReader).GetNestedType("CompletionValidatingReadStream", BindingFlags.NonPublic),
+            typeof(SingleFileMultipartReader).GetNestedType("MultipartSectionReadStream", BindingFlags.NonPublic),
+            typeof(InstantQuoteWholeStreamValidation).GetNestedType("GltfValidationReadStream", BindingFlags.NonPublic),
+        };
+
+        foreach (var wrapperType in wrapperTypes)
+        {
+            Assert.NotNull(wrapperType);
+            var arrayRead = wrapperType!.GetMethod(
+                nameof(Stream.ReadAsync),
+                [typeof(byte[]), typeof(int), typeof(int), typeof(CancellationToken)]);
+            Assert.Equal(wrapperType, arrayRead?.DeclaringType);
+        }
+    }
+
     [Fact]
     public void Options_DefaultsAreWriteDisabledAndBucketless()
     {
@@ -132,6 +157,24 @@ public sealed class RuntimeSafetyTests
         Assert.Null(provider.GetService<StorageClient>());
         Assert.IsType<DisabledObjectStorage>(provider.GetRequiredService<IObjectStorage>());
         Assert.IsType<DisabledFileSafetyScanner>(provider.GetRequiredService<IFileSafetyScanner>());
+    }
+
+    [Fact]
+    public void AddFileServiceRuntime_LegacyStorageReadOnly_RegistersStorageButKeepsScannerDisabled()
+    {
+        var services = CreateServices(
+        [
+            new("FileStorage:Enabled", "true"),
+            new("FileStorage:WritesEnabled", "false"),
+            new("FileStorage:AllowedBuckets:0", "maliev.com"),
+        ], new RecordingInstantQuoteRepository());
+
+        var storage = Assert.Single(services,
+            descriptor => descriptor.ServiceType == typeof(IObjectStorage));
+        Assert.Equal(typeof(GoogleCloudObjectStorage), storage.ImplementationType);
+        var scanner = Assert.Single(services,
+            descriptor => descriptor.ServiceType == typeof(IFileSafetyScanner));
+        Assert.Equal(typeof(DisabledFileSafetyScanner), scanner.ImplementationType);
     }
 
     [Fact]

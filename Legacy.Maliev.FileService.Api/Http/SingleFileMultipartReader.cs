@@ -115,6 +115,8 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
         public override void Flush() => throw new NotSupportedException();
         public override int Read(byte[] buffer, int offset, int count) =>
             ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             var read = await source.ReadAsync(buffer, cancellationToken);
@@ -163,6 +165,18 @@ public sealed class SingleFileMultipartReader : IInstantQuoteMultipartReader
             try
             {
                 return source.Read(buffer, offset, count);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                throw new InstantQuoteValidationException("Multipart request is invalid.");
+            }
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
             }
             catch (Exception exception) when (exception is InvalidDataException or IOException)
             {

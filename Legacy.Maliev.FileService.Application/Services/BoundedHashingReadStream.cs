@@ -65,6 +65,10 @@ public sealed class BoundedHashingReadStream : Stream
         ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
     /// <inheritdoc />
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+    /// <inheritdoc />
     public override int Read(Span<byte> buffer)
     {
         if (buffer.IsEmpty)
