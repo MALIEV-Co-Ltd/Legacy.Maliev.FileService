@@ -43,7 +43,7 @@ public sealed class WorkflowContractTests
     }
 
     [Fact]
-    public void DependabotConfiguration_DefersSharedRuntimeAndRedisMajorUpdates()
+    public void DependabotConfiguration_AllowsCoordinatedEfUpdatesAndDefersSharedRuntimeAndRedisMajorUpdates()
     {
         var source = File.ReadAllText(FindRepositoryFile(".github", "dependabot.yml"));
         var yaml = new YamlStream();
@@ -61,11 +61,6 @@ public sealed class WorkflowContractTests
             [
                 "Legacy.Maliev.ServiceDefaults",
                 "Legacy.Maliev.CompatibilityContracts",
-                "Microsoft.EntityFrameworkCore",
-                "Microsoft.EntityFrameworkCore.Abstractions",
-                "Microsoft.EntityFrameworkCore.Design",
-                "Microsoft.EntityFrameworkCore.Relational",
-                "Npgsql.EntityFrameworkCore.PostgreSQL",
                 "StackExchange.Redis",
             ],
             rules.Select(rule => ReadScalar(rule, "dependency-name")));

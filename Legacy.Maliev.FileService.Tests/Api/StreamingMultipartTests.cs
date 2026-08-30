@@ -278,7 +278,11 @@ public sealed class StreamingMultipartTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
-        builder.Services.AddApiVersioning();
+        builder.Services.AddApiVersioning(options =>
+        {
+            options.AssumeDefaultVersionWhenUnspecified = true;
+            options.ApiVersionReader = new Asp.Versioning.UrlSegmentApiVersionReader();
+        }).AddMvc();
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton<IAuthorizationPolicyProvider, AllowAllPolicyProvider>();
         builder.Services.AddSingleton<IPolicyEvaluator, AllowAllPolicyEvaluator>();

@@ -183,12 +183,18 @@ public sealed class InstantQuoteOpenApiContractTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Services.AddApiVersioning()
+        builder.Services.AddApiVersioning(options =>
+            {
+                options.AssumeDefaultVersionWhenUnspecified = true;
+                options.ApiVersionReader = new Asp.Versioning.UrlSegmentApiVersionReader();
+            })
+            .AddMvc()
             .AddApiExplorer(options =>
             {
                 options.GroupNameFormat = "'v'V";
                 options.SubstituteApiVersionInUrl = true;
-            });
+            })
+            .AddOpenApi();
         builder.Services.AddControllers().AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
         builder.Services.AddSingleton<IInstantQuoteFileService, UnusedInstantQuoteFileService>();
         builder.Services.AddOpenApi("v1", options =>
@@ -198,7 +204,7 @@ public sealed class InstantQuoteOpenApiContractTests
         });
         var app = builder.Build();
         app.MapControllers();
-        app.MapOpenApi();
+        app.MapOpenApi().WithDocumentPerVersion();
         await app.StartAsync();
         return app;
     }
