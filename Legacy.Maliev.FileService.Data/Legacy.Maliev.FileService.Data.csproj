@@ -10,13 +10,13 @@
     <!-- Keep the storage adapter's auth assembly aligned with AuthService's
          Google identity verifier when the AppHost migration runner loads both. -->
     <PackageReference Include="Google.Apis.Auth" Version="1.76.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageReference Include="StackExchange.Redis" Version="2.13.17" />
   </ItemGroup>
 
