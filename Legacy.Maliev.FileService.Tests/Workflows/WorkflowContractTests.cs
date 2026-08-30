@@ -18,6 +18,25 @@ public sealed class WorkflowContractTests
     }
 
     [Fact]
+    public void DependabotConfiguration_ExcludesStandaloneManifestsThatRequireUnpublishedSharedPackages()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(".github", "dependabot.yml"));
+        var yaml = new YamlStream();
+        yaml.Load(new StringReader(source));
+
+        var root = Assert.IsType<YamlMappingNode>(Assert.Single(yaml.Documents).RootNode);
+        var updates = Assert.IsType<YamlSequenceNode>(ReadNode(root, "updates"));
+        var nuget = updates.Children
+            .Select(Assert.IsType<YamlMappingNode>)
+            .Single(update => ReadScalar(update, "package-ecosystem") == "nuget");
+        var exclusions = Assert.IsType<YamlSequenceNode>(ReadNode(nuget, "exclude-paths"));
+
+        Assert.Equal(
+            ["Legacy.Maliev.FileService.slnx", "Legacy.Maliev.FileService.Api/**"],
+            exclusions.Children.Select(Assert.IsType<YamlScalarNode>).Select(node => node.Value));
+    }
+
+    [Fact]
     public void BuildAndTest_RejectsSharedActionMainWithPinnedShaComment()
     {
         AssertMutationRejected(
@@ -97,6 +116,17 @@ public sealed class WorkflowContractTests
         var mutated = Workflow.Replace(original, replacement, StringComparison.Ordinal);
 
         Assert.Throws<InvalidOperationException>(() => WorkflowContractValidator.Validate(mutated));
+    }
+
+    private static YamlNode ReadNode(YamlMappingNode mapping, string key)
+    {
+        return mapping.Children[new YamlScalarNode(key)];
+    }
+
+    private static string ReadScalar(YamlMappingNode mapping, string key)
+    {
+        return Assert.IsType<YamlScalarNode>(ReadNode(mapping, key)).Value
+            ?? throw new InvalidOperationException($"Expected '{key}' to have a scalar value.");
     }
 
     private static string FindRepositoryFile(params string[] segments)
