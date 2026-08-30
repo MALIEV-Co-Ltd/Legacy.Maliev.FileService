@@ -43,6 +43,40 @@ public sealed class WorkflowContractTests
     }
 
     [Fact]
+    public void DependabotConfiguration_DefersSharedRuntimeAndRedisMajorUpdates()
+    {
+        var source = File.ReadAllText(FindRepositoryFile(".github", "dependabot.yml"));
+        var yaml = new YamlStream();
+        yaml.Load(new StringReader(source));
+
+        var root = Assert.IsType<YamlMappingNode>(Assert.Single(yaml.Documents).RootNode);
+        var updates = Assert.IsType<YamlSequenceNode>(ReadNode(root, "updates"));
+        var nuget = updates.Children
+            .Select(Assert.IsType<YamlMappingNode>)
+            .Single(update => ReadScalar(update, "package-ecosystem") == "nuget");
+        var ignored = Assert.IsType<YamlSequenceNode>(ReadNode(nuget, "ignore"));
+        var rules = ignored.Children.Select(Assert.IsType<YamlMappingNode>).ToArray();
+
+        Assert.Equal(
+            [
+                "Legacy.Maliev.ServiceDefaults",
+                "Legacy.Maliev.CompatibilityContracts",
+                "Microsoft.EntityFrameworkCore",
+                "Microsoft.EntityFrameworkCore.Abstractions",
+                "Microsoft.EntityFrameworkCore.Design",
+                "Microsoft.EntityFrameworkCore.Relational",
+                "Npgsql.EntityFrameworkCore.PostgreSQL",
+                "StackExchange.Redis",
+            ],
+            rules.Select(rule => ReadScalar(rule, "dependency-name")));
+        var redis = rules.Single(rule => ReadScalar(rule, "dependency-name") == "StackExchange.Redis");
+        var updateTypes = Assert.IsType<YamlSequenceNode>(ReadNode(redis, "update-types"));
+        Assert.Equal(
+            ["version-update:semver-major"],
+            updateTypes.Children.Select(Assert.IsType<YamlScalarNode>).Select(node => node.Value));
+    }
+
+    [Fact]
     public void BuildAndTest_RejectsSharedActionMainWithPinnedShaComment()
     {
         AssertMutationRejected(
