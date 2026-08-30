@@ -10,6 +10,8 @@ public sealed class WorkflowContractTests
     private static readonly string Workflow = File.ReadAllText(FindRepositoryFile(".github", "workflows", "_build-and-test.yml"));
     private static readonly string ApiProject = File.ReadAllText(
         FindRepositoryFile("Legacy.Maliev.FileService.Api", "Legacy.Maliev.FileService.Api.csproj"));
+    private static readonly string DataProject = File.ReadAllText(
+        FindRepositoryFile("Legacy.Maliev.FileService.Data", "Legacy.Maliev.FileService.Data.csproj"));
 
     [Fact]
     public void BuildAndTest_SatisfiesStructuralContract()
@@ -93,6 +95,13 @@ public sealed class WorkflowContractTests
         Assert.Contains("Legacy.Maliev.ServiceDefaults", ApiProject, StringComparison.Ordinal);
         Assert.DoesNotContain("Maliev.Aspire\\Maliev.Aspire.ServiceDefaults", ApiProject, StringComparison.Ordinal);
         Assert.DoesNotContain("Include=\"Maliev.Aspire.ServiceDefaults\"", ApiProject, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EfDesignDependency_IsOwnedByDataProjectOnly()
+    {
+        Assert.DoesNotContain("Microsoft.EntityFrameworkCore.Design", ApiProject, StringComparison.Ordinal);
+        Assert.Contains("Microsoft.EntityFrameworkCore.Design", DataProject, StringComparison.Ordinal);
     }
 
     [Fact]
