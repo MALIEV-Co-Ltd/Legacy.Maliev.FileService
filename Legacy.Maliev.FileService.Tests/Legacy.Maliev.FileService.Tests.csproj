@@ -6,6 +6,11 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The contract-only OpenAPI test intentionally layers FileService-specific
+         transformers over ServiceDefaults' versioned registration. Suppress only
+         that duplicate-registration diagnostic in this test assembly; production
+         projects retain the analyzer without suppression. -->
+    <NoWarn>$(NoWarn);AV0029</NoWarn>
     <InterceptorsNamespaces>$(InterceptorsNamespaces);Microsoft.AspNetCore.OpenApi.Generated</InterceptorsNamespaces>
   </PropertyGroup>
 

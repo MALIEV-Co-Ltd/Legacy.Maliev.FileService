@@ -357,7 +357,11 @@ public sealed class InstantQuotationFilesContractTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Services.AddApiVersioning();
+        builder.Services.AddApiVersioning(options =>
+        {
+            options.AssumeDefaultVersionWhenUnspecified = true;
+            options.ApiVersionReader = new Asp.Versioning.UrlSegmentApiVersionReader();
+        }).AddMvc();
         builder.Services.AddControllers()
             .AddApplicationPart(typeof(InstantQuotationFilesController).Assembly);
         builder.Services.AddAuthorization();

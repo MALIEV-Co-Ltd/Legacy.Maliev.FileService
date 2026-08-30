@@ -12,13 +12,6 @@ updates:
     ignore:
       - dependency-name: Legacy.Maliev.ServiceDefaults
       - dependency-name: Legacy.Maliev.CompatibilityContracts
-      # EF/Npgsql must move with the pinned shared ServiceDefaults runtime graph.
-      # Tracking: MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults#30.
-      - dependency-name: Microsoft.EntityFrameworkCore
-      - dependency-name: Microsoft.EntityFrameworkCore.Abstractions
-      - dependency-name: Microsoft.EntityFrameworkCore.Design
-      - dependency-name: Microsoft.EntityFrameworkCore.Relational
-      - dependency-name: Npgsql.EntityFrameworkCore.PostgreSQL
       # Redis 3.x emits server-8.4-specific guidance; retain compatible 2.x updates.
       - dependency-name: StackExchange.Redis
         update-types: ["version-update:semver-major"]
