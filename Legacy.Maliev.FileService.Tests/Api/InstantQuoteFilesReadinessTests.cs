@@ -160,13 +160,24 @@ public sealed class InstantQuoteFilesReadinessTests
         services.AddSingleton<IInstantQuoteScannerReadinessProbe>(scanner);
         services.AddFileServiceRuntime(BuildConfiguration(EnabledConfiguration));
         await using var provider = services.BuildServiceProvider();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        using var cancellation = new CancellationTokenSource();
 
-        var report = await provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(
+        var check = provider.GetRequiredService<HealthCheckService>().CheckHealthAsync(
             registration => registration.Tags.Contains("ready"),
             cancellation.Token);
+        await scanner.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
 
-        Assert.Equal(HealthStatus.Unhealthy, report.Entries["instant_quote_files"].Status);
+        // HealthCheckService may propagate the caller's cancellation even when this check
+        // catches its own dependency cancellation. Both outcomes must complete promptly.
+        try
+        {
+            var report = await check.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HealthStatus.Unhealthy, report.Entries["instant_quote_files"].Status);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
         Assert.True(scanner.CancellationObserved);
         Assert.Equal(1, scanner.Calls);
     }
@@ -187,6 +198,8 @@ public sealed class InstantQuoteFilesReadinessTests
     private sealed class RecordingScannerReadinessProbe(bool unavailable = false, bool hang = false)
         : IInstantQuoteScannerReadinessProbe
     {
+        private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Started => started.Task;
         public int Calls { get; private set; }
         public bool CancellationObserved { get; private set; }
 
@@ -200,6 +213,7 @@ public sealed class InstantQuoteFilesReadinessTests
 
             if (hang)
             {
+                started.TrySetResult();
                 try
                 {
                     await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);

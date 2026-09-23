@@ -58,6 +58,22 @@ public sealed class InstantQuoteAuthorizationContractTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false, HttpStatusCode.Unauthorized)]
+    [InlineData(true, false, HttpStatusCode.Forbidden)]
+    public async Task ProtectedRead_RejectsMissingIdentityOrPermissionBeforeService(
+        bool authenticated, bool authorized, HttpStatusCode expectedStatus)
+    {
+        await using var app = await StartAsync(authenticated, authorized);
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            "/file/v1/instant-quotation/sessions/11111111-1111-1111-1111-111111111111/files/22222222-2222-2222-2222-222222222222/content");
+        request.Headers.Add("X-Quote-Session-Token", "opaque-token");
+        using var response = await app.GetTestClient().SendAsync(request);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
     [Fact]
     public async Task LegacyEndpoint_UsesDefaultAuthorizationResponse()
     {
@@ -129,5 +145,6 @@ public sealed class InstantQuoteAuthorizationContractTests
         public Task<Models.InstantQuoteFileResponse> UploadAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, string idempotencyKey, string expectedSha256, Stream body, Models.InstantQuoteUploadMetadata metadata, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<Models.FinalizeInstantQuoteFilesResponse> FinalizeAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, string idempotencyKey, Models.FinalizeInstantQuoteFilesRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task RemoveAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, Guid fileId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<InstantQuoteReadableFile> ReadCleanAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, Guid fileId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

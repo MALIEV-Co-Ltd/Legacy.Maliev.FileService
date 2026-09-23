@@ -352,6 +352,111 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         }
     }
 
+    /// <inheritdoc />
+    public async Task<InstantQuoteReadableFile> ReadCleanAsync(
+        Guid sessionId,
+        InstantQuoteOwner owner,
+        string token,
+        Guid fileId,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled)
+        {
+            throw new InstantQuoteDependencyUnavailableException("Instant quotation files are unavailable.");
+        }
+        if (sessionId == Guid.Empty || fileId == Guid.Empty || !owner.IsAuthenticated ||
+            string.IsNullOrWhiteSpace(owner.PrincipalId))
+        {
+            throw new InstantQuoteOwnershipException("The file could not be authorized.");
+        }
+
+        using var timeout = new CancellationTokenSource(_options.OperationTimeout, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        var activeToken = linked.Token;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(token) || token.Length > 512)
+            {
+                throw new InstantQuoteOwnershipException("The file could not be authorized.");
+            }
+            var tokenBytes = DecodeBase64Url(token);
+            if (tokenBytes.Length != 32)
+            {
+                throw new InstantQuoteOwnershipException("The file could not be authorized.");
+            }
+            var tokenHash = SHA256.HashData(tokenBytes);
+            var session = await ExecuteDurableStateAsync(() => _repository.VerifySessionAsync(
+                sessionId, tokenHash, owner.PrincipalId, owner.IsAuthenticated, _timeProvider.GetUtcNow(), activeToken));
+            if (session is null)
+            {
+                throw new InstantQuoteOwnershipException("The file could not be authorized.");
+            }
+
+            var records = await ExecuteDurableStateAsync(() => _repository.GetSessionFilesAsync(sessionId, [fileId], activeToken));
+            if (records.Count != 1 || !IsReadable(records[0].Upload, sessionId, fileId))
+            {
+                throw new InstantQuoteOwnershipException("The file could not be authorized.");
+            }
+            var record = records[0];
+            var upload = record.Upload;
+            var path = Path.Combine(Path.GetTempPath(), $"instant-quote-read-{Guid.NewGuid():N}.tmp");
+            var content = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
+                81920, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+            try
+            {
+                using (var bounded = new BoundedDownloadWriteStream(content, upload.ActualSizeBytes!.Value))
+                {
+                    await ExecuteDependencyReadAsync(async () =>
+                    {
+                        await _storage.DownloadGenerationAsync(upload.TemporaryBucket, upload.TemporaryObjectName,
+                            upload.GcsGeneration!.Value, bounded, activeToken);
+                        return true;
+                    });
+                }
+                if (content.Length != upload.ActualSizeBytes.Value)
+                {
+                    throw new InstantQuoteDependencyUnavailableException("The stored file failed integrity validation.");
+                }
+                content.Position = 0;
+                var digest = Convert.ToHexString(await SHA256.HashDataAsync(content, activeToken)).ToLowerInvariant();
+                if (!FixedTimeHexEquals(digest, upload.ActualSha256!) ||
+                    !FixedTimeHexEquals(digest, upload.ExpectedSha256))
+                {
+                    throw new InstantQuoteDependencyUnavailableException("The stored file failed integrity validation.");
+                }
+                var currentSession = await ExecuteDurableStateAsync(() => _repository.VerifySessionAsync(
+                    sessionId, tokenHash, owner.PrincipalId, owner.IsAuthenticated, _timeProvider.GetUtcNow(), activeToken));
+                var current = await ExecuteDurableStateAsync(() => _repository.GetSessionFilesAsync(sessionId, [fileId], activeToken));
+                if (currentSession is null || current.Count != 1 || current[0].Version != record.Version ||
+                    !IsReadable(current[0].Upload, sessionId, fileId) ||
+                    current[0].Upload.GcsGeneration != upload.GcsGeneration ||
+                    current[0].Upload.ActualSizeBytes != upload.ActualSizeBytes ||
+                    !FixedTimeHexEquals(current[0].Upload.ActualSha256!, upload.ActualSha256!))
+                {
+                    throw new InstantQuoteOwnershipException("The file could not be authorized.");
+                }
+                content.Position = 0;
+                return new InstantQuoteReadableFile(content, upload.ValidatedContentType,
+                    upload.ActualSizeBytes.Value, digest);
+            }
+            catch
+            {
+                await content.DisposeAsync();
+                throw;
+            }
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new InstantQuoteDependencyUnavailableException("The file read timed out.", exception);
+        }
+    }
+
+    private static bool IsReadable(InstantQuoteUploadFile upload, Guid sessionId, Guid fileId) =>
+        upload.SessionId == sessionId && upload.Id == fileId && upload.State == InstantQuoteWorkflowState.Clean &&
+        upload.GcsGeneration is > 0 && upload.ActualSizeBytes is > 0 and <= InstantQuoteFileContract.MaximumUploadBytes &&
+        !string.IsNullOrWhiteSpace(upload.TemporaryBucket) && !string.IsNullOrWhiteSpace(upload.TemporaryObjectName) &&
+        upload.ActualSha256 is not null && FixedTimeHexEquals(upload.ActualSha256, upload.ExpectedSha256);
+
     private async Task<FinalizeInstantQuoteFilesResponse> FinalizeCoreAsync(
         Guid sessionId,
         InstantQuoteOwner owner,

@@ -8,9 +8,9 @@ All JSON property names are camelCase. Customer filenames are metadata only and 
 
 Browsers do not call FileService and never receive a FileService JWT, service credential, Google credential, bucket, or object name. The browser calls the same-origin Web BFF using the Web application's anonymous or member session and normal request-forgery protections.
 
-- For both anonymous and member workflows, the BFF calls FileService with the Web service's short-lived platform JWT. Session creation, upload, and finalization require `legacy-file.uploads.create`; removal requires `legacy-file.uploads.delete`. The current Web integration does not delegate the member subject to FileService.
+- For both anonymous and member workflows, the BFF calls FileService with the Web service's short-lived platform JWT. Session creation, upload, and finalization require `legacy-file.uploads.create`; removal requires `legacy-file.uploads.delete`; a protected content read requires `legacy-file.uploads.read`. The current Web integration does not delegate the member subject to FileService.
 - FileService binds the upload session to that Web service identity and the opaque quote-session capability. The BFF separately retains and binds the capability in server-side session state for the correct anonymous or member Web session.
-- The BFF proxies upload, removal, and finalization. It binds the FileService session to the same Web quote session and does not place `X-Quote-Session-Token` in browser storage or URLs.
+- The BFF proxies upload, removal, finalization, and any protected content read. It binds the FileService session to the same Web quote session and does not place `X-Quote-Session-Token` in browser storage or URLs.
 - Google Cloud Storage uses ADC/Workload Identity only inside FileService. Neither Web nor a browser supplies Google credentials.
 
 ## Create a session
@@ -92,6 +92,16 @@ The declared part media type must match this matrix. `application/octet-stream` 
 | `.iges`, `.igs` | `model/iges`, `application/iges`, `application/octet-stream` |
 | `.glb` | `model/gltf-binary`, `application/octet-stream` |
 | `.gltf` | `model/gltf+json`, `application/octet-stream` |
+
+## Read an admitted clean upload
+
+`GET /file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}/content`
+
+This server-to-server endpoint requires the Web service's authenticated platform JWT with `legacy-file.uploads.read` and the same `X-Quote-Session-Token` capability used for upload. It does not accept a bucket, object name, generation, customer filename, or signed URL from the caller. The BFF must separately bind its own browser session to this FileService session before invoking it; browsers never call this route or receive its platform JWT or quote-session capability.
+
+Only an unexpired, owner-matched session and an exact session-owned `clean` file may be read. FileService downloads only the recorded private object generation, bounds the download by its persisted size and the 200 MiB contract limit, verifies exact length and SHA-256, and rechecks session and PostgreSQL file state before returning bytes. Finalized, removed, pending, and missing files are not readable through this route. A concurrent state/version change rejects the read. This is a byte-access contract only: it does not authorize geometry, simulation, DFM, or pricing decisions.
+
+Success is `200 OK` with the previously validated media type, binary content, `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. The BFF should close the stream promptly and must not cache or publish the bytes. Authentication, permission, capability, and dependency failures use the same stable problem contract as the other routes; a missing file is indistinguishable from a foreign file.
 
 ## Finalize selected files
 
