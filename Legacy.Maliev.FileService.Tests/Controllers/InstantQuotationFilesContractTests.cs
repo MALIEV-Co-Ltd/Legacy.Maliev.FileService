@@ -38,6 +38,7 @@ public sealed class InstantQuotationFilesContractTests
         AssertMethod(nameof(InstantQuotationFilesController.UploadAsync), "sessions/{sessionId}/files", "legacy-file.uploads.create");
         AssertMethod(nameof(InstantQuotationFilesController.FinalizeAsync), "sessions/{sessionId}/finalizations", "legacy-file.uploads.create");
         AssertMethod(nameof(InstantQuotationFilesController.RemoveAsync), "sessions/{sessionId}/files/{fileId}", "legacy-file.uploads.delete");
+        AssertMethod(nameof(InstantQuotationFilesController.ReadCleanAsync), "sessions/{sessionId}/files/{fileId}/content", "legacy-file.uploads.read");
     }
 
     [Fact]
@@ -99,6 +100,8 @@ public sealed class InstantQuotationFilesContractTests
         var documentation = await File.ReadAllTextAsync(path);
 
         Assert.Contains("DELETE /file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}", documentation, StringComparison.Ordinal);
+        Assert.Contains("GET /file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}/content", documentation, StringComparison.Ordinal);
+        Assert.Contains("exact length and SHA-256", documentation, StringComparison.Ordinal);
         foreach (var value in new[] { "401", "403", "409", "413", "415", "422", "503" })
         {
             Assert.Contains(value, documentation, StringComparison.Ordinal);
@@ -279,6 +282,27 @@ public sealed class InstantQuotationFilesContractTests
             parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "X-Quote-Session-Token");
     }
 
+    [Fact]
+    public async Task ReadClean_ReturnsPrivateBytesWithNoStoreAndOwnerBoundToken()
+    {
+        var service = new StubService();
+        var controller = Controller(service);
+        controller.ControllerContext.HttpContext.User = Principal(
+            new Claim("sub", "customer-42", ClaimValueTypes.String, "https://issuer.example"));
+
+        var result = await controller.ReadCleanAsync(SessionId, FileId, "opaque-token", default);
+
+        var file = Assert.IsType<FileStreamResult>(result);
+        Assert.Equal("model/stl", file.ContentType);
+        Assert.Equal("no-store", controller.Response.Headers.CacheControl);
+        Assert.Equal("nosniff", controller.Response.Headers.XContentTypeOptions);
+        Assert.Equal(3, controller.Response.ContentLength);
+        Assert.Equal("https://issuer.example|customer-42", service.ReadOwner?.PrincipalId);
+        Assert.Equal("opaque-token", service.ReadToken);
+        Assert.Equal(FileId, service.ReadFileId);
+        await file.FileStream.DisposeAsync();
+    }
+
     [Theory]
     [InlineData(typeof(InstantQuoteValidationException), StatusCodes.Status400BadRequest, "validation_error")]
     [InlineData(typeof(InstantQuoteOwnershipException), StatusCodes.Status403Forbidden, "session_forbidden")]
@@ -410,6 +434,9 @@ public sealed class InstantQuotationFilesContractTests
         public FinalizeInstantQuoteFilesRequest? FinalizeRequest { get; private set; }
         public Guid? RemovedFileId { get; private set; }
         public InstantQuoteOwner? RemoveOwner { get; private set; }
+        public InstantQuoteOwner? ReadOwner { get; private set; }
+        public string? ReadToken { get; private set; }
+        public Guid? ReadFileId { get; private set; }
 
         public Task<CreateInstantQuoteSessionResponse> CreateInstantQuoteSessionAsync(
             InstantQuoteOwner owner,
@@ -470,6 +497,16 @@ public sealed class InstantQuotationFilesContractTests
             RemovedFileId = fileId;
             RemoveOwner = owner;
             return Task.CompletedTask;
+        }
+
+        public Task<InstantQuoteReadableFile> ReadCleanAsync(Guid sessionId, InstantQuoteOwner owner,
+            string token, Guid fileId, CancellationToken cancellationToken)
+        {
+            ReadOwner = owner;
+            ReadToken = token;
+            ReadFileId = fileId;
+            return Task.FromResult(new InstantQuoteReadableFile(new MemoryStream([1, 2, 3]), "model/stl", 3,
+                new string('a', 64)));
         }
     }
 

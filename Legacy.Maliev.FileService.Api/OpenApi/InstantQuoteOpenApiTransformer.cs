@@ -71,6 +71,9 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
             case nameof(Controllers.InstantQuotationFilesController.RemoveAsync):
                 ConfigureRemove(operation);
                 break;
+            case nameof(Controllers.InstantQuotationFilesController.ReadCleanAsync):
+                ConfigureReadClean(operation);
+                break;
         }
 
         return Task.CompletedTask;
@@ -182,6 +185,25 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         AddProblemResponse(operation, "403", "session_forbidden", append: true);
         AddProblemResponse(operation, "409", "upload_in_progress");
         AddProblemResponse(operation, "503", "dependency_unavailable", "outcome_unknown");
+    }
+
+    private static void ConfigureReadClean(OpenApiOperation operation)
+    {
+        AddHeader(operation, "X-Quote-Session-Token", "Opaque upload-session capability.", 32, 512);
+        operation.Responses!["200"] = new OpenApiResponse
+        {
+            Description = "Exact verified clean upload bytes; Cache-Control: no-store.",
+            Content = new Dictionary<string, OpenApiMediaType>
+            {
+                ["application/octet-stream"] = new()
+                {
+                    Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "binary" },
+                },
+            },
+        };
+        AddProblemResponse(operation, "400", "validation_error");
+        AddProblemResponse(operation, "403", "session_forbidden", append: true);
+        AddProblemResponse(operation, "503", "dependency_unavailable");
     }
 
     private static void AddAuthenticationResponses(OpenApiOperation operation)

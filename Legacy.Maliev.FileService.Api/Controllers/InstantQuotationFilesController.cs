@@ -103,6 +103,30 @@ public sealed class InstantQuotationFilesController(
         }
     }
 
+    /// <summary>Reads one clean upload bound to the authenticated owner and exact session capability.</summary>
+    [HttpGet("sessions/{sessionId}/files/{fileId}/content")]
+    [RequirePermission(FilePermissions.Read)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReadCleanAsync(
+        [FromRoute] Guid sessionId,
+        [FromRoute] Guid fileId,
+        [FromHeader(Name = "X-Quote-Session-Token"), Required] string token,
+        CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers.XContentTypeOptions = "nosniff";
+        try
+        {
+            var file = await service.ReadCleanAsync(sessionId, ResolveOwner(), token, fileId, cancellationToken);
+            Response.ContentLength = file.Length;
+            return File(file.Content, file.ContentType);
+        }
+        catch (InstantQuoteContractException exception)
+        {
+            return InstantQuoteProblem.Create(exception);
+        }
+    }
+
     private InstantQuoteOwner ResolveOwner()
     {
         var subject = User.FindFirst("sub")

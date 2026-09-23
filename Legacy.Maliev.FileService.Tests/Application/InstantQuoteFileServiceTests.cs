@@ -16,6 +16,138 @@ public sealed class InstantQuoteFileServiceTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-18T12:00:00Z");
 
     [Fact]
+    public async Task ReadCleanUpload_ReturnsOnlyExactOwnedGenerationAfterDigestVerification()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        var storage = new FakeStorage();
+        storage.Seed(BinaryStl());
+
+        var result = await CreateService(repository, storage).ReadCleanAsync(
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+            new string('t', 43), upload.Id, CancellationToken.None);
+        await using var content = result.Content;
+        using var copy = new MemoryStream();
+        await content.CopyToAsync(copy);
+
+        Assert.Equal(BinaryStl(), copy.ToArray());
+        Assert.Equal("model/stl", result.ContentType);
+        Assert.Equal(upload.ActualSha256, result.Sha256);
+        Assert.Equal(1, storage.DownloadCount);
+        Assert.Equal(upload.GcsGeneration, storage.DownloadedGeneration);
+        Assert.Equal(2, repository.SessionFileReadCount);
+    }
+
+    [Theory]
+    [InlineData(InstantQuoteWorkflowState.Removed)]
+    [InlineData(InstantQuoteWorkflowState.Finalized)]
+    [InlineData(InstantQuoteWorkflowState.Pending)]
+    public async Task ReadCleanUpload_RejectsNonCleanStateBeforeStorageAccess(InstantQuoteWorkflowState state)
+    {
+        var upload = CreateStoredUpload(state);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        var storage = new FakeStorage();
+
+        await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
+            .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43), upload.Id, CancellationToken.None));
+        Assert.Equal(0, storage.DownloadCount);
+    }
+
+    [Fact]
+    public async Task ReadCleanUpload_RejectsMissingSessionCapabilityBeforeStorageAccess()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository { SessionFiles = [new InstantQuoteStoredUpload(upload, 23)] };
+        var storage = new FakeStorage();
+
+        await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
+            .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43), upload.Id, CancellationToken.None));
+        Assert.Equal(0, storage.DownloadCount);
+    }
+
+    [Fact]
+    public async Task ReadCleanUpload_RejectsCorruptedGenerationWithoutReturningBytes()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        var storage = new FakeStorage();
+        storage.Seed([1, 2, 3]);
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage)
+            .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43), upload.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadCleanUpload_RejectsGenerationLargerThanRecordedSize()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        var storage = new FakeStorage();
+        storage.Seed(new byte[85]);
+
+        await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage)
+            .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43), upload.Id, CancellationToken.None));
+        Assert.Equal(1, storage.DownloadCount);
+    }
+
+    [Fact]
+    public async Task ReadCleanUpload_RejectsMalformedCapabilityBeforeRepositoryOrStorage()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        var storage = new FakeStorage();
+
+        await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
+            .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                "invalid!", upload.Id, CancellationToken.None));
+        Assert.Equal(0, repository.SessionFileReadCount);
+        Assert.Equal(0, storage.DownloadCount);
+    }
+
+    [Fact]
+    public async Task ReadCleanUpload_RejectsConcurrentStateChangeAfterDownload()
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+            ReloadedSessionFiles = [new InstantQuoteStoredUpload(upload, 24)],
+        };
+        var storage = new FakeStorage();
+        storage.Seed(BinaryStl());
+
+        await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
+            .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                new string('t', 43), upload.Id, CancellationToken.None));
+        Assert.Equal(1, storage.DownloadCount);
+    }
+
+    [Fact]
     public async Task CreateSession_PersistsHashOnlyAndReturnsConfiguredCapability()
     {
         var repository = new FakeRepository();
@@ -1569,6 +1701,7 @@ public sealed class InstantQuoteFileServiceTests
         public byte[] UploadedBytes => storedBytes;
         public int UploadCount { get; private set; }
         public int DownloadCount { get; private set; }
+        public long? DownloadedGeneration { get; private set; }
         public long? PromotedGeneration { get; private set; }
         public int DeleteCount { get; private set; }
         public string? DeletedBucket { get; private set; }
@@ -1631,6 +1764,7 @@ public sealed class InstantQuoteFileServiceTests
             CancellationToken cancellationToken)
         {
             DownloadCount++;
+            DownloadedGeneration = generation;
             if (DownloadException is not null)
             {
                 throw DownloadException;

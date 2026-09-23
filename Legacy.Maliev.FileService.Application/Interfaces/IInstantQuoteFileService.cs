@@ -37,7 +37,18 @@ public interface IInstantQuoteFileService
         string token,
         Guid fileId,
         CancellationToken cancellationToken);
+
+    /// <summary>Reads a clean, exact-generation upload after verifying session ownership and content integrity.</summary>
+    Task<InstantQuoteReadableFile> ReadCleanAsync(
+        Guid sessionId,
+        InstantQuoteOwner owner,
+        string token,
+        Guid fileId,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>A verified private upload whose stream is owned by the caller.</summary>
+public sealed record InstantQuoteReadableFile(Stream Content, string ContentType, long Length, string Sha256);
 
 /// <summary>Base type for failures that have a stable public HTTP representation.</summary>
 public abstract class InstantQuoteContractException(string message, Exception? innerException = null)

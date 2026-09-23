@@ -40,6 +40,7 @@ public sealed class InstantQuoteOpenApiContractTests
                 "/file/v1/instant-quotation/sessions",
                 "/file/v1/instant-quotation/sessions/{sessionId}/files",
                 "/file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}",
+                "/file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}/content",
                 "/file/v1/instant-quotation/sessions/{sessionId}/finalizations",
             },
             instantQuotePaths);
@@ -133,6 +134,16 @@ public sealed class InstantQuoteOpenApiContractTests
         AssertProblem(remove, "403", "permission_forbidden", "session_forbidden");
         AssertProblem(remove, "409", "upload_in_progress");
         AssertProblem(remove, "503", "dependency_unavailable", "outcome_unknown");
+
+        var read = paths.GetProperty("/file/v1/instant-quotation/sessions/{sessionId}/files/{fileId}/content").GetProperty("get");
+        AssertBearerSecurity(read);
+        AssertHeader(read, "X-Quote-Session-Token", 32, 512, null);
+        var bytes = read.GetProperty("responses").GetProperty("200").GetProperty("content")
+            .GetProperty("application/octet-stream").GetProperty("schema");
+        Assert.Equal("binary", bytes.GetProperty("format").GetString());
+        AssertProblem(read, "401", "platform_authentication_required");
+        AssertProblem(read, "403", "permission_forbidden", "session_forbidden");
+        AssertProblem(read, "503", "dependency_unavailable");
     }
 
     private static void AssertBearerSecurity(JsonElement operation)
@@ -215,5 +226,6 @@ public sealed class InstantQuoteOpenApiContractTests
         public Task<Models.InstantQuoteFileResponse> UploadAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, string idempotencyKey, string expectedSha256, Stream body, Models.InstantQuoteUploadMetadata metadata, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<Models.FinalizeInstantQuoteFilesResponse> FinalizeAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, string idempotencyKey, Models.FinalizeInstantQuoteFilesRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task RemoveAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, Guid fileId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<InstantQuoteReadableFile> ReadCleanAsync(Guid sessionId, Models.InstantQuoteOwner owner, string token, Guid fileId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }
