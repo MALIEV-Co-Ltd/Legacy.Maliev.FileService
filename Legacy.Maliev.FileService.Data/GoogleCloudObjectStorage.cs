@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using Google;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -84,13 +85,38 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         TimeSpan duration,
         CancellationToken cancellationToken)
     {
-        var url = await signer.SignAsync(
-            bucket,
-            objectName,
-            duration,
-            HttpMethod.Get,
-            SigningVersion.V4,
-            cancellationToken);
+        var request = CreateReadRequestTemplate(bucket, objectName);
+        var options = UrlSigner.Options.FromDuration(duration).WithSigningVersion(SigningVersion.V4);
+        var url = await signer.SignAsync(request, options, cancellationToken);
         return new Uri(url, UriKind.Absolute);
+    }
+
+    internal static UrlSigner.RequestTemplate CreateReadRequestTemplate(string bucket, string objectName)
+    {
+        var fileName = objectName.Replace('\\', '/').Split('/').Last();
+        if (string.IsNullOrEmpty(fileName))
+        {
+            throw new ArgumentException("An object filename is required.", nameof(objectName));
+        }
+
+        // The object name is storage-controlled, but must never become an unescaped response header.
+        fileName = new string(fileName.Select(character =>
+            character is '"' or '\\' || char.IsControl(character) ? '_' : character).ToArray());
+        var asciiFileName = new string(fileName.Select(character => character <= 0x7e ? character : '_').ToArray());
+        var disposition = new ContentDispositionHeaderValue("attachment")
+        {
+            FileName = asciiFileName,
+            FileNameStar = fileName,
+        };
+
+        var parameters = new Dictionary<string, IEnumerable<string>>
+        {
+            ["response-content-disposition"] = [disposition.ToString()],
+        };
+
+        return UrlSigner.RequestTemplate.FromBucket(bucket)
+            .WithObjectName(objectName)
+            .WithHttpMethod(HttpMethod.Get)
+            .WithQueryParameters(parameters);
     }
 }
