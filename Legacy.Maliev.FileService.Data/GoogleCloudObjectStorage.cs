@@ -86,10 +86,14 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         CancellationToken cancellationToken)
     {
         var request = CreateReadRequestTemplate(bucket, objectName);
-        var options = UrlSigner.Options.FromDuration(duration).WithSigningVersion(SigningVersion.V4);
+        var options = CreateReadOptions(duration);
         var url = await signer.SignAsync(request, options, cancellationToken);
         return new Uri(url, UriKind.Absolute);
     }
+
+    internal static UrlSigner.Options CreateReadOptions(TimeSpan duration) =>
+        UrlSigner.Options.FromDuration(duration > TimeSpan.FromDays(7) ? TimeSpan.FromDays(7) : duration)
+            .WithSigningVersion(SigningVersion.V4);
 
     internal static UrlSigner.RequestTemplate CreateReadRequestTemplate(string bucket, string objectName)
     {
