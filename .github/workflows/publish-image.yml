@@ -33,3 +33,5 @@ jobs:
       environment: legacy-production
       workload-identity-provider: ${{ vars.LEGACY_WORKLOAD_IDENTITY_PROVIDER }}
       service-account: ${{ vars.LEGACY_FILE_PUBLISHER_SERVICE_ACCOUNT }}
+      legacy-service-defaults-ref: 5c5f9479313710fa576f83d3b396442997a2fcf4
+      compatibility-contracts-ref: 78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7
