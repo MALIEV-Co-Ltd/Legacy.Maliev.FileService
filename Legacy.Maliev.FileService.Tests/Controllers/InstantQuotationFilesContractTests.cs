@@ -72,7 +72,7 @@ public sealed class InstantQuotationFilesContractTests
         Assert.Contains("\"sessionId\"", json, StringComparison.Ordinal);
         Assert.Contains("\"sessionToken\"", json, StringComparison.Ordinal);
         Assert.Contains("\"expiresAt\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"maxUploadBytes\":209715200", json, StringComparison.Ordinal);
+        Assert.Contains("\"maxUploadBytes\":104857600", json, StringComparison.Ordinal);
         Assert.Contains("\"supportedExtensions\":[\".stl\",\".obj\",\".3mf\",\".step\",\".stp\",\".iges\",\".igs\",\".glb\",\".gltf\"]", json, StringComparison.Ordinal);
         Assert.DoesNotContain("\"SessionId\"", json, StringComparison.Ordinal);
 
@@ -89,7 +89,8 @@ public sealed class InstantQuotationFilesContractTests
         Assert.Equal(
             [".stl", ".obj", ".3mf", ".step", ".stp", ".iges", ".igs", ".glb", ".gltf"],
             InstantQuoteFileContract.SupportedExtensions);
-        Assert.Equal(200L * 1024 * 1024, InstantQuoteFileContract.MaximumUploadBytes);
+        Assert.Equal(100L * 1024 * 1024, InstantQuoteFileContract.MaximumUploadBytes);
+        Assert.Equal(200L * 1024 * 1024, InstantQuoteFileContract.MaximumLegacyStoredBytes);
     }
 
     [Fact]

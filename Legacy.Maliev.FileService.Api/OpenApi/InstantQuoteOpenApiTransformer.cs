@@ -89,7 +89,7 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
               "sessionId":"11111111-1111-1111-1111-111111111111",
               "sessionToken":"opaque-session-capability-32-chars",
               "expiresAt":"2026-07-18T12:00:00Z",
-              "maxUploadBytes":209715200,
+              "maxUploadBytes":104857600,
               "maxFilesPerSession":100,
               "supportedExtensions":[".stl",".obj",".3mf",".step",".stp",".iges",".igs",".glb",".gltf"]
             }
@@ -102,7 +102,7 @@ public sealed class InstantQuoteOpenApiTransformer : IOpenApiOperationTransforme
         operation.RequestBody = new OpenApiRequestBody
         {
             Required = true,
-            Description = "Exactly one streamed CAD file part named files; actual file bytes may not exceed 209715200 bytes.",
+            Description = "Exactly one streamed CAD file part named files; actual file bytes may not exceed 104857600 bytes.",
             Content = new Dictionary<string, OpenApiMediaType>
             {
                 ["multipart/form-data"] = new()

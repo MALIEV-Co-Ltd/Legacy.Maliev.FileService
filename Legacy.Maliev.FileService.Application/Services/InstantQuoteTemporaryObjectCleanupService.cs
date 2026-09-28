@@ -163,7 +163,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
             }
 
             upload.GcsGeneration = metadata.Generation;
-            if (metadata.SizeBytes <= 0 || metadata.SizeBytes > InstantQuoteFileContract.MaximumUploadBytes)
+            if (metadata.SizeBytes <= 0 || metadata.SizeBytes > InstantQuoteFileContract.MaximumLegacyStoredBytes)
             {
                 upload.State = InstantQuoteWorkflowState.Failed;
                 upload.ModifiedAt = timeProvider.GetUtcNow();
@@ -239,7 +239,7 @@ public sealed class InstantQuoteTemporaryObjectCleanupService(
         var pipe = new Pipe();
         await using var reader = pipe.Reader.AsStream(leaveOpen: true);
         await using var writer = pipe.Writer.AsStream(leaveOpen: true);
-        await using var hashing = new BoundedHashingReadStream(reader);
+        await using var hashing = new BoundedHashingReadStream(reader, InstantQuoteFileContract.MaximumLegacyStoredBytes);
         await using var prefix = new RecoveryPrefixStream(hashing, 4096);
         await using var validated = InstantQuoteWholeStreamValidation.Wrap(validatedExtension, prefix);
         var download = DownloadAsync();

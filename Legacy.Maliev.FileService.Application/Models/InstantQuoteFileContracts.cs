@@ -6,7 +6,10 @@ namespace Legacy.Maliev.FileService.Application.Models;
 public static class InstantQuoteFileContract
 {
     /// <summary>Maximum number of uploaded file bytes accepted by the workflow.</summary>
-    public const long MaximumUploadBytes = 200L * 1024 * 1024;
+    public const long MaximumUploadBytes = 100L * 1024 * 1024;
+
+    /// <summary>Upper bound for reading and reconciling files accepted before the edge limit changed.</summary>
+    public const long MaximumLegacyStoredBytes = 200L * 1024 * 1024;
 
     /// <summary>Maximum number of file reservations accepted by one upload session.</summary>
     public const int MaximumFilesPerSession = 100;
