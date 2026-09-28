@@ -24,7 +24,7 @@ Success: `201 Created`
   "sessionId": "11111111-1111-1111-1111-111111111111",
   "sessionToken": "opaque-session-capability",
   "expiresAt": "2026-07-18T12:00:00+00:00",
-  "maxUploadBytes": 209715200,
+  "maxUploadBytes": 104857600,
   "maxFilesPerSession": 100,
   "supportedExtensions": [".stl", ".obj", ".3mf", ".step", ".stp", ".iges", ".igs", ".glb", ".gltf"]
 }
@@ -79,7 +79,7 @@ Success: `201 Created`
 }
 ```
 
-The actual streamed bytes may not exceed 209,715,200 bytes (200 MiB). Supported extensions, matched case-insensitively, are exactly `.stl`, `.obj`, `.3mf`, `.step`, `.stp`, `.iges`, `.igs`, `.glb`, and `.gltf`.
+New uploads may not exceed 104,857,600 bytes (100 MiB). Files accepted before this limit changed remain readable and recoverable up to their original 200 MiB ceiling. Supported extensions, matched case-insensitively, are exactly `.stl`, `.obj`, `.3mf`, `.step`, `.stp`, `.iges`, `.igs`, `.glb`, and `.gltf`.
 
 The declared part media type must match this matrix. `application/octet-stream` is also accepted for every listed extension because browsers do not consistently identify CAD formats.
 
@@ -99,7 +99,7 @@ The declared part media type must match this matrix. `application/octet-stream` 
 
 This server-to-server endpoint requires the Web service's authenticated platform JWT with `legacy-file.uploads.read` and the same `X-Quote-Session-Token` capability used for upload. It does not accept a bucket, object name, generation, customer filename, or signed URL from the caller. The BFF must separately bind its own browser session to this FileService session before invoking it; browsers never call this route or receive its platform JWT or quote-session capability.
 
-Only an unexpired, owner-matched session and an exact session-owned `clean` file may be read. FileService downloads only the recorded private object generation, bounds the download by its persisted size and the 200 MiB contract limit, verifies exact length and SHA-256, and rechecks session and PostgreSQL file state before returning bytes. Finalized, removed, pending, and missing files are not readable through this route. A concurrent state/version change rejects the read. This is a byte-access contract only: it does not authorize geometry, simulation, DFM, or pricing decisions.
+Only an unexpired, owner-matched session and an exact session-owned `clean` file may be read. FileService downloads only the recorded private object generation, bounds the download by its persisted size and the 200 MiB historical stored-file limit, verifies exact length and SHA-256, and rechecks session and PostgreSQL file state before returning bytes. New uploads are capped at 100 MiB. Finalized, removed, pending, and missing files are not readable through this route. A concurrent state/version change rejects the read. This is a byte-access contract only: it does not authorize geometry, simulation, DFM, or pricing decisions.
 
 Success is `200 OK` with the previously validated media type, binary content, `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. The BFF should close the stream promptly and must not cache or publish the bytes. Authentication, permission, capability, and dependency failures use the same stable problem contract as the other routes; a missing file is indistinguishable from a foreign file.
 
@@ -179,7 +179,7 @@ Errors use `application/problem+json` and RFC ProblemDetails with a stable `code
 | 403 | `session_forbidden` | The session token cannot authorize the requested session. |
 | 409 | `idempotency_conflict` | The same idempotency key was already bound to a different request fingerprint. |
 | 409 | `upload_in_progress` | An identical upload or finalization reservation is still pending. |
-| 413 | `payload_too_large` | Actual streamed file bytes exceed 200 MiB. |
+| 413 | `payload_too_large` | Actual streamed file bytes exceed 100 MiB. |
 | 415 | `unsupported_media_type` | The declared media type is invalid, unsupported, or mismatched with the extension. |
 | 422 | `unsafe_content` | The file signature, digest, or malware scan made the upload unsafe to accept. |
 | 503 | `dependency_unavailable` | Required storage, scanning, or durable state is temporarily unavailable. |

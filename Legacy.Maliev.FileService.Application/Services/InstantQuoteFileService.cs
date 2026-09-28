@@ -453,7 +453,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
 
     private static bool IsReadable(InstantQuoteUploadFile upload, Guid sessionId, Guid fileId) =>
         upload.SessionId == sessionId && upload.Id == fileId && upload.State == InstantQuoteWorkflowState.Clean &&
-        upload.GcsGeneration is > 0 && upload.ActualSizeBytes is > 0 and <= InstantQuoteFileContract.MaximumUploadBytes &&
+        upload.GcsGeneration is > 0 && upload.ActualSizeBytes is > 0 and <= InstantQuoteFileContract.MaximumLegacyStoredBytes &&
         !string.IsNullOrWhiteSpace(upload.TemporaryBucket) && !string.IsNullOrWhiteSpace(upload.TemporaryObjectName) &&
         upload.ActualSha256 is not null && FixedTimeHexEquals(upload.ActualSha256, upload.ExpectedSha256);
 
@@ -799,7 +799,7 @@ public sealed class InstantQuoteFileService : IInstantQuoteFileService
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         await using var reader = pipe.Reader.AsStream(leaveOpen: true);
         await using var writer = pipe.Writer.AsStream(leaveOpen: true);
-        await using var hashing = new BoundedHashingReadStream(reader);
+        await using var hashing = new BoundedHashingReadStream(reader, InstantQuoteFileContract.MaximumLegacyStoredBytes);
         await using var captured = new PrefixCapturingReadStream(hashing, 4096);
         await using var validated = InstantQuoteWholeStreamValidation.Wrap(validatedExtension, captured);
         var producerCompleted = false;

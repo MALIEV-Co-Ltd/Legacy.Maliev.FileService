@@ -43,6 +43,38 @@ public sealed class InstantQuoteFileServiceTests
     }
 
     [Theory]
+    [InlineData(150L * 1024 * 1024, 1)]
+    [InlineData(201L * 1024 * 1024, 0)]
+    public async Task ReadCleanUpload_BoundsPreviouslyAcceptedFilesWithoutRejectingLegacyMetadata(
+        long recordedBytes, int expectedDownloads)
+    {
+        var upload = CreateStoredUpload(InstantQuoteWorkflowState.Clean);
+        upload.ActualSizeBytes = recordedBytes;
+        var repository = new FakeRepository
+        {
+            VerifySessionResult = CreateSessionRecord(),
+            SessionFiles = [new InstantQuoteStoredUpload(upload, 23)],
+        };
+        var storage = new FakeStorage();
+        storage.Seed(BinaryStl());
+
+        if (expectedDownloads == 0)
+        {
+            await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
+                .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                    new string('t', 43), upload.Id, CancellationToken.None));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage)
+                .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
+                    new string('t', 43), upload.Id, CancellationToken.None));
+        }
+
+        Assert.Equal(expectedDownloads, storage.DownloadCount);
+    }
+
+    [Theory]
     [InlineData(InstantQuoteWorkflowState.Removed)]
     [InlineData(InstantQuoteWorkflowState.Finalized)]
     [InlineData(InstantQuoteWorkflowState.Pending)]
