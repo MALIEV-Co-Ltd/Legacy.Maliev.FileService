@@ -41,6 +41,10 @@ public sealed class WorkflowContractTests
         var publish = Assert.IsType<YamlMappingNode>(ReadNode(publicationJobs, "publish"));
         var inputs = Assert.IsType<YamlMappingNode>(ReadNode(publish, "with"));
 
+        Assert.Equal(
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@28d3458675cfd743a0f1bc758ff8f79d757e0868",
+            ReadScalar(publish, "uses"));
+
         Assert.Matches("^[0-9a-f]{40}$", serviceDefaultsRef);
         Assert.Matches("^[0-9a-f]{40}$", compatibilityRef);
         Assert.Equal(serviceDefaultsRef, ReadScalar(inputs, "legacy-service-defaults-ref"));
