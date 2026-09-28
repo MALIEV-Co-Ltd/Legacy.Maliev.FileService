@@ -20,6 +20,34 @@ public sealed class WorkflowContractTests
     }
 
     [Fact]
+    public void GatedImagePublish_UsesTheValidatedImmutableDependencyCommits()
+    {
+        var validation = new YamlStream();
+        validation.Load(new StringReader(Workflow));
+        var validationRoot = Assert.IsType<YamlMappingNode>(Assert.Single(validation.Documents).RootNode);
+        var validationJobs = Assert.IsType<YamlMappingNode>(ReadNode(validationRoot, "jobs"));
+        var validate = Assert.IsType<YamlMappingNode>(ReadNode(validationJobs, "validate"));
+        var steps = Assert.IsType<YamlSequenceNode>(ReadNode(validate, "steps"));
+        var serviceDefaultsCheckout = Assert.IsType<YamlMappingNode>(steps.Children[1]);
+        var compatibilityCheckout = Assert.IsType<YamlMappingNode>(steps.Children[2]);
+        var serviceDefaultsRef = ReadScalar(Assert.IsType<YamlMappingNode>(ReadNode(serviceDefaultsCheckout, "with")), "ref");
+        var compatibilityRef = ReadScalar(Assert.IsType<YamlMappingNode>(ReadNode(compatibilityCheckout, "with")), "ref");
+
+        var source = File.ReadAllText(FindRepositoryFile(".github", "workflows", "publish-image.yml"));
+        var publication = new YamlStream();
+        publication.Load(new StringReader(source));
+        var publicationRoot = Assert.IsType<YamlMappingNode>(Assert.Single(publication.Documents).RootNode);
+        var publicationJobs = Assert.IsType<YamlMappingNode>(ReadNode(publicationRoot, "jobs"));
+        var publish = Assert.IsType<YamlMappingNode>(ReadNode(publicationJobs, "publish"));
+        var inputs = Assert.IsType<YamlMappingNode>(ReadNode(publish, "with"));
+
+        Assert.Matches("^[0-9a-f]{40}$", serviceDefaultsRef);
+        Assert.Matches("^[0-9a-f]{40}$", compatibilityRef);
+        Assert.Equal(serviceDefaultsRef, ReadScalar(inputs, "legacy-service-defaults-ref"));
+        Assert.Equal(compatibilityRef, ReadScalar(inputs, "compatibility-contracts-ref"));
+    }
+
+    [Fact]
     public void DependabotConfiguration_ScansOnlyIndependentlyResolvableProjectDirectories()
     {
         var source = File.ReadAllText(FindRepositoryFile(".github", "dependabot.yml"));
@@ -85,8 +113,8 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_RejectsCommentedDependencySha()
     {
         AssertMutationRejected(
-            "ref: 9c4ac9d44a08bcd0aa2088348790ab863814669c",
-            "ref: main # 9c4ac9d44a08bcd0aa2088348790ab863814669c");
+            "ref: 5c5f9479313710fa576f83d3b396442997a2fcf4",
+            "ref: main # 5c5f9479313710fa576f83d3b396442997a2fcf4");
     }
 
     [Fact]
@@ -258,7 +286,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults",
-                ["ref"] = "9c4ac9d44a08bcd0aa2088348790ab863814669c",
+                ["ref"] = "5c5f9479313710fa576f83d3b396442997a2fcf4",
                 ["path"] = ".dependencies/Legacy.Maliev.ServiceDefaults",
                 ["persist-credentials"] = "false",
             });
