@@ -25,7 +25,7 @@ jobs:
       contents: read
       id-token: write
     if: vars.LEGACY_DEPLOY_ENABLED == 'true'
-    uses: MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@28d3458675cfd743a0f1bc758ff8f79d757e0868
+    uses: MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@73dd7304ffe85ec504389fd7664cc39070b9f148
     with:
       image: ${{ vars.LEGACY_ARTIFACT_REGISTRY }}/legacy-maliev-file-service
       dockerfile: Legacy.Maliev.FileService.Api/Dockerfile
@@ -33,5 +33,5 @@ jobs:
       environment: legacy-production
       workload-identity-provider: ${{ vars.LEGACY_WORKLOAD_IDENTITY_PROVIDER }}
       service-account: ${{ vars.LEGACY_FILE_PUBLISHER_SERVICE_ACCOUNT }}
-      legacy-service-defaults-ref: 5c5f9479313710fa576f83d3b396442997a2fcf4
+      legacy-service-defaults-ref: 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3
       compatibility-contracts-ref: 78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7
