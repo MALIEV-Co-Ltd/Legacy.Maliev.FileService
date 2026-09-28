@@ -16,8 +16,8 @@ public sealed class FileApplicationService(
     LegacyFileRuntimeGate runtimeGate,
     ILogger<FileApplicationService> logger) : IFileService
 {
-    /// <summary>Maximum aggregate size preserved from the legacy controller.</summary>
-    public const long MaximumUploadBytes = 200L * 1024L * 1024L;
+    /// <summary>Maximum aggregate size accepted by the edge-facing upload workflow.</summary>
+    public const long MaximumUploadBytes = 100L * 1024L * 1024L;
     /// <summary>Bounded multipart envelope allowance above the aggregate file limit.</summary>
     public const long MaximumRequestBytes = MaximumUploadBytes + (1L * 1024L * 1024L);
 
@@ -204,7 +204,7 @@ public sealed class FileApplicationService(
 
         if (files.Sum(file => file.Length) > MaximumUploadBytes)
         {
-            throw new FileUploadValidationException("Total upload size cannot exceed 200 MB");
+            throw new FileUploadValidationException("Total upload size cannot exceed 100 MB");
         }
     }
 
