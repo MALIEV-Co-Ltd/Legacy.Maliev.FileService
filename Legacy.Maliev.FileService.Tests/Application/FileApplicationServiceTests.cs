@@ -311,8 +311,24 @@ public sealed class FileApplicationServiceTests
     [Fact]
     public void MultipartEnvelopeAllowance_PreservesExactAggregateFileLimit()
     {
-        Assert.Equal(200L * 1024L * 1024L, FileApplicationService.MaximumUploadBytes);
+        Assert.Equal(100L * 1024L * 1024L, FileApplicationService.MaximumUploadBytes);
         Assert.InRange(FileApplicationService.MaximumRequestBytes - FileApplicationService.MaximumUploadBytes, 1, 1024L * 1024L);
+    }
+
+    [Fact]
+    public async Task UploadAsync_OverEdgeAggregateLimit_RejectsBeforeStorageAndScanning()
+    {
+        var storage = new RecordingStorage();
+        var scanner = new StubScanner(new FileSafetyResult(FileSafetyVerdict.Clean));
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, scanner, repository);
+
+        var exception = await Assert.ThrowsAsync<FileUploadValidationException>(() => service.UploadAsync(
+            "maliev.com", null, [new ReportedLengthUploadFile(100L * 1024 * 1024 + 1)], CancellationToken.None));
+
+        Assert.Equal("Total upload size cannot exceed 100 MB", exception.Message);
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(repository.Uploads);
     }
 
     private static FileApplicationService CreateService(
@@ -346,6 +362,14 @@ public sealed class FileApplicationServiceTests
         public string ContentType => contentType;
         public long Length => bytes.LongLength;
         public Stream OpenReadStream() => new MemoryStream(bytes, writable: false);
+    }
+
+    private sealed class ReportedLengthUploadFile(long length) : IUploadFile
+    {
+        public string FileName => "part.step";
+        public string ContentType => "application/step";
+        public long Length => length;
+        public Stream OpenReadStream() => throw new InvalidOperationException("Oversized input must not be opened.");
     }
 
     private sealed class StubScanner(FileSafetyResult result) : IFileSafetyScanner
