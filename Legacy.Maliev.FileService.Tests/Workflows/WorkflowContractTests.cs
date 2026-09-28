@@ -42,7 +42,7 @@ public sealed class WorkflowContractTests
         var inputs = Assert.IsType<YamlMappingNode>(ReadNode(publish, "with"));
 
         Assert.Equal(
-            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@28d3458675cfd743a0f1bc758ff8f79d757e0868",
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@73dd7304ffe85ec504389fd7664cc39070b9f148",
             ReadScalar(publish, "uses"));
 
         Assert.Matches("^[0-9a-f]{40}$", serviceDefaultsRef);
@@ -109,16 +109,16 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_RejectsSharedActionMainWithPinnedShaComment()
     {
         AssertMutationRejected(
-            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@6017816fa67f369d785ed30794f002cfd6299af7",
-            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@main # 6017816fa67f369d785ed30794f002cfd6299af7");
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@73dd7304ffe85ec504389fd7664cc39070b9f148",
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@main # 73dd7304ffe85ec504389fd7664cc39070b9f148");
     }
 
     [Fact]
     public void BuildAndTest_RejectsCommentedDependencySha()
     {
         AssertMutationRejected(
-            "ref: 5c5f9479313710fa576f83d3b396442997a2fcf4",
-            "ref: main # 5c5f9479313710fa576f83d3b396442997a2fcf4");
+            "ref: 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3",
+            "ref: main # 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3");
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public sealed class WorkflowContractTests
 internal static partial class WorkflowContractValidator
 {
     private const string CheckoutAction = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
-    private const string SharedValidationAction = "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@6017816fa67f369d785ed30794f002cfd6299af7";
+    private const string SharedValidationAction = "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@73dd7304ffe85ec504389fd7664cc39070b9f148";
 
     public static void Validate(string workflow)
     {
@@ -290,7 +290,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults",
-                ["ref"] = "5c5f9479313710fa576f83d3b396442997a2fcf4",
+                ["ref"] = "8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3",
                 ["path"] = ".dependencies/Legacy.Maliev.ServiceDefaults",
                 ["persist-credentials"] = "false",
             });
