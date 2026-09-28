@@ -1,10 +1,24 @@
 using System.Net.Http.Headers;
+using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Data;
 
 namespace Legacy.Maliev.FileService.Tests.Data;
 
 public sealed class GoogleCloudObjectStorageSignedUrlTests
 {
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(168, 168)]
+    [InlineData(169, 168)]
+    [InlineData(720, 168)]
+    public void ReadOptions_UseV4AndNeverExceedSevenDays(int requestedHours, int expectedHours)
+    {
+        var options = GoogleCloudObjectStorage.CreateReadOptions(TimeSpan.FromHours(requestedHours));
+
+        Assert.Equal(TimeSpan.FromHours(expectedHours), options.Duration);
+        Assert.Equal(SigningVersion.V4, options.SigningVersion);
+    }
+
     [Theory]
     [InlineData("orders/123/part.stl", "part.stl")]
     [InlineData(@"orders\123\part.stl", "part.stl")]
