@@ -100,6 +100,13 @@ public sealed class FileApplicationService(
 
             return new UploadResultResponse(result);
         }
+        catch (UploadOutcomeUnknownException)
+        {
+            // The move may have committed on either side of an interrupted GCS response.
+            // Keep quarantine and any copied object available for explicit reconciliation.
+            logger.LogWarning("Upload storage outcome requires reconciliation for operation {OperationId}", operationId);
+            throw;
+        }
         catch (Exception uploadFailure)
         {
             var cleanupFailures = await CleanupAsync(metadataCommitAttempted ? quarantined : quarantined.Concat(promoted));

@@ -75,6 +75,15 @@ public sealed class UploadsController(
         {
             return LegacyFileProblem.Unavailable();
         }
+        catch (Exception exception) when (exception is UploadOutcomeUnknownException or UploadRollbackException)
+        {
+            return StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                Problem(
+                    "Move outcome requires reconciliation.",
+                    StatusCodes.Status503ServiceUnavailable,
+                    "Move outcome unknown"));
+        }
     }
 
     /// <summary>Uploads files through private quarantine and malware scanning.</summary>
