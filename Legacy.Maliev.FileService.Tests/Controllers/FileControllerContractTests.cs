@@ -152,6 +152,44 @@ public sealed class FileControllerContractTests
     }
 
     [Fact]
+    public async Task MoveUploadAsync_UnknownStorageOutcome_ReturnsRedactedUnavailableProblem()
+    {
+        var service = new Mock<IFileService>();
+        service.Setup(value => value.MoveAsync("source", "private/part.stl", "destination", "private/part.stl", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UploadOutcomeUnknownException("Storage response for private/part.stl was lost."));
+        var controller = Controller(new StubStore(new(UploadAcquireState.Acquired)), service);
+
+        var result = await controller.MoveUploadAsync("source", "private/part.stl", "destination", "private/part.stl", default);
+
+        var unavailable = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(unavailable.Value);
+        Assert.Equal("Move outcome unknown", problem.Title);
+        Assert.Equal("Move outcome requires reconciliation.", problem.Detail);
+        Assert.DoesNotContain("part.stl", problem.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MoveUploadAsync_RollbackFailure_ReturnsRedactedUnavailableProblem()
+    {
+        var service = new Mock<IFileService>();
+        service.Setup(value => value.MoveAsync("source", "private/part.stl", "destination", "private/part.stl", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UploadRollbackException(
+                new IOException("source delete unavailable"),
+                [new UploadCleanupFailure("destination", "private/part.stl", new IOException("rollback unavailable"))]));
+        var controller = Controller(new StubStore(new(UploadAcquireState.Acquired)), service);
+
+        var result = await controller.MoveUploadAsync("source", "private/part.stl", "destination", "private/part.stl", default);
+
+        var unavailable = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(unavailable.Value);
+        Assert.Equal("Move outcome unknown", problem.Title);
+        Assert.Equal("Move outcome requires reconciliation.", problem.Detail);
+        Assert.DoesNotContain("part.stl", problem.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetSignedUrlAsync_DisabledDependency_ReturnsUnavailableProblem()
     {
         var service = new Mock<IFileService>();

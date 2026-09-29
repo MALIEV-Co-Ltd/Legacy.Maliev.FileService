@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using Google;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Application.Services;
 
 namespace Legacy.Maliev.FileService.Data;
 
@@ -33,22 +34,131 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         string destinationObjectName,
         CancellationToken cancellationToken)
     {
+        long sourceGeneration;
         try
         {
-            await client.CopyObjectAsync(
-                sourceBucket,
-                sourceObjectName,
-                destinationBucket,
-                destinationObjectName,
-                cancellationToken: cancellationToken);
-            await client.DeleteObjectAsync(sourceBucket, sourceObjectName, cancellationToken: cancellationToken);
-            return true;
+            var source = await client.GetObjectAsync(sourceBucket, sourceObjectName, cancellationToken: cancellationToken);
+            sourceGeneration = source.Generation is long sourceVersion && sourceVersion > 0
+                ? sourceVersion
+                : throw new InvalidDataException("Cloud storage did not identify the source object generation.");
         }
         catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
         {
             return false;
         }
+
+        Google.Apis.Storage.v1.Data.Object copied;
+        try
+        {
+            copied = await client.CopyObjectAsync(
+                sourceBucket,
+                sourceObjectName,
+                destinationBucket,
+                destinationObjectName,
+                new CopyObjectOptions
+                {
+                    SourceGeneration = sourceGeneration,
+                    IfSourceGenerationMatch = sourceGeneration,
+                    IfGenerationMatch = 0,
+                },
+                cancellationToken: cancellationToken);
+        }
+        catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
+        {
+            // The observed source generation disappeared after the read; a newer live source may exist.
+            throw new UploadOutcomeUnknownException("Storage source generation requires reconciliation.", exception);
+        }
+        catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.PreconditionFailed)
+        {
+            // Either the source changed or the destination already exists; never clean up by name.
+            throw new UploadOutcomeUnknownException("Storage move precondition requires reconciliation.", exception);
+        }
+        catch (GoogleApiException exception) when (IsDefiniteClientRejection(exception.HttpStatusCode))
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // The copy may have committed before its response was lost. Preserve both coordinates.
+            throw new UploadOutcomeUnknownException("Storage copy outcome requires reconciliation.", exception);
+        }
+
+        if (copied.Generation is not long generation || generation <= 0)
+        {
+            throw new UploadOutcomeUnknownException(
+                "Storage copy outcome requires reconciliation.",
+                new InvalidDataException("Cloud storage did not identify the copied object generation."));
+        }
+
+        try
+        {
+            await client.DeleteObjectAsync(
+                sourceBucket,
+                sourceObjectName,
+                new DeleteObjectOptions { IfGenerationMatch = sourceGeneration },
+                cancellationToken);
+            return true;
+        }
+        catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
+        {
+            // The copy is complete and the quarantine object is already absent.
+            return true;
+        }
+        catch (GoogleApiException sourceDeleteFailure) when (sourceDeleteFailure.HttpStatusCode == HttpStatusCode.PreconditionFailed)
+        {
+            var rollbackFailure = await TryRollbackCopyAsync(destinationBucket, destinationObjectName, generation);
+            Exception cause = rollbackFailure is null
+                ? sourceDeleteFailure
+                : new UploadRollbackException(sourceDeleteFailure, [rollbackFailure]);
+            // The live source is no longer the scanned generation. The upload layer must not delete it.
+            throw new UploadOutcomeUnknownException("Storage source generation requires reconciliation.", cause);
+        }
+        catch (GoogleApiException sourceDeleteFailure) when (IsDefiniteClientRejection(sourceDeleteFailure.HttpStatusCode))
+        {
+            var rollbackFailure = await TryRollbackCopyAsync(destinationBucket, destinationObjectName, generation);
+            if (rollbackFailure is not null)
+            {
+                throw new UploadRollbackException(sourceDeleteFailure, [rollbackFailure]);
+            }
+
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // A timeout or cancellation can follow a committed delete. Never remove the only remaining copy.
+            throw new UploadOutcomeUnknownException("Storage source deletion outcome requires reconciliation.", exception);
+        }
     }
+
+    private async Task<UploadCleanupFailure?> TryRollbackCopyAsync(
+        string bucket,
+        string objectName,
+        long generation)
+    {
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await client.DeleteObjectAsync(
+                bucket,
+                objectName,
+                new DeleteObjectOptions { Generation = generation, IfGenerationMatch = generation },
+                cleanup.Token);
+            return null;
+        }
+        catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
+        {
+            // The exact copied generation was already removed.
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return new UploadCleanupFailure(bucket, objectName, exception);
+        }
+    }
+
+    private static bool IsDefiniteClientRejection(HttpStatusCode statusCode) =>
+        (int)statusCode is >= 400 and < 500
+        && statusCode is not HttpStatusCode.RequestTimeout and not HttpStatusCode.TooManyRequests;
 
     /// <inheritdoc />
     public async Task<bool> DeleteAsync(string bucket, string objectName, CancellationToken cancellationToken)

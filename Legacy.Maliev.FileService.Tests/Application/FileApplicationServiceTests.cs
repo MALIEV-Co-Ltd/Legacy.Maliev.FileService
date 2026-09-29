@@ -79,6 +79,25 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_MoveOutcomeUnknown_PreservesQuarantineAndDoesNotPersistMetadata()
+    {
+        var uncertain = new UploadOutcomeUnknownException("Storage move outcome requires reconciliation.");
+        var storage = new RecordingStorage { MoveFailure = uncertain };
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
+            "maliev.com", null, [new MemoryUploadFile("part.step", "application/step", [1])],
+            CancellationToken.None));
+
+        Assert.Same(uncertain, failure);
+        Assert.Single(storage.Uploaded);
+        Assert.Single(storage.Moved);
+        Assert.Empty(storage.Deleted);
+        Assert.Empty(repository.Uploads);
+    }
+
+    [Fact]
     public async Task UploadAsync_KnownFailureUsesIndependentCleanupToken()
     {
         var storage = new RecordingStorage();
@@ -389,6 +408,7 @@ public sealed class FileApplicationServiceTests
         public int SignedUrlFailureCall { get; init; }
         public CancellationTokenSource? RequestCancellation { get; init; }
         public bool DeleteResult { get; init; } = true;
+        public Exception? MoveFailure { get; init; }
         public Dictionary<string, Exception> DeleteFailures { get; } = [];
 
         public Task UploadAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken)
@@ -401,6 +421,7 @@ public sealed class FileApplicationServiceTests
         public Task<bool> MoveAsync(string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
         {
             Moved.Add((sourceObjectName, destinationObjectName));
+            if (MoveFailure is not null) return Task.FromException<bool>(MoveFailure);
             if (sizes.Remove((sourceBucket, sourceObjectName), out var size)) sizes[(destinationBucket, destinationObjectName)] = size;
             return Task.FromResult(true);
         }
