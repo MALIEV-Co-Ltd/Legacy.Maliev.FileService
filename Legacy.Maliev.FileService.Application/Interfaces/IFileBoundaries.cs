@@ -22,17 +22,48 @@ public interface IFileService
     Task<Uri?> GetSignedUrlAsync(string bucket, string objectName, CancellationToken cancellationToken);
 }
 
+/// <summary>Durable checkpoint for a private object move; coordinates are never logged.</summary>
+public interface IStorageMoveJournal
+{
+    /// <summary>Reads the exact durable evidence for an operation.</summary>
+    Task<StorageMoveEvidence?> FindAsync(Guid operationId, CancellationToken cancellationToken);
+    /// <summary>Records the observed source generation before any copy; false means the operation already exists.</summary>
+    Task<bool> BeginAsync(Guid operationId, bool scanClean, string sourceBucket, string sourceObjectName, long sourceGeneration, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken);
+    /// <summary>Records the exact copied destination generation.</summary>
+    Task CopiedAsync(Guid operationId, long destinationGeneration, CancellationToken cancellationToken);
+    /// <summary>Records a confirmed source deletion.</summary>
+    Task SourceDeletedAsync(Guid operationId, CancellationToken cancellationToken);
+    /// <summary>Records a committed clean metadata mutation.</summary>
+    Task MetadataCommittedAsync(Guid operationId, CancellationToken cancellationToken);
+    /// <summary>Marks an operation needing bounded reconciliation without deleting objects.</summary>
+    Task UnknownAsync(Guid operationId, CancellationToken cancellationToken);
+}
+
+/// <summary>Read-only generation-bound move evidence used by replay reconciliation.</summary>
+public sealed record StorageMoveEvidence(bool ScanClean, string SourceBucket, string SourceObjectName,
+    long SourceGeneration, string DestinationBucket, string DestinationObjectName,
+    long? DestinationGeneration, string State);
+
+/// <summary>Read-only live GCS generation and size.</summary>
+public sealed record StorageObjectEvidence(long Generation, long Size);
+
 /// <summary>Private object-storage boundary.</summary>
 public interface IObjectStorage
 {
     /// <summary>Uploads an object into private quarantine.</summary>
     Task UploadAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken);
+    /// <summary>Uploads quarantine bytes and returns the immutable object generation used for scanning.</summary>
+    Task<long> UploadGenerationAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken);
     /// <summary>Moves an object between private locations.</summary>
     Task<bool> MoveAsync(string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken);
+    /// <summary>Moves an object with a durable, generation-bound operation checkpoint.</summary>
+    Task<bool> MoveJournaledAsync(Guid operationId, long? expectedSourceGeneration, bool scanClean, string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken);
     /// <summary>Deletes an object.</summary>
     Task<bool> DeleteAsync(string bucket, string objectName, CancellationToken cancellationToken);
     /// <summary>Reads the current object size for reconciliation without downloading content.</summary>
     Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken);
+    /// <summary>Reads the live generation and size without downloading bytes.</summary>
+    Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken);
     /// <summary>Creates a time-limited signed read URL.</summary>
     Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken);
 }

@@ -161,7 +161,9 @@ public sealed class FileApplicationServiceTests
         var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
         var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
         var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
-        await Assert.ThrowsAsync<IOException>(() => service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+        Assert.IsType<IOException>(failure.InnerException);
         Assert.Empty(storage.Deleted);
         repository.ThrowAfterAdd = false;
         var reconciled = await service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default);
@@ -169,7 +171,41 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
-    public async Task UploadAsync_SignedUrlFailure_DeletesEveryPromotedObjectBeforeMetadataCommit()
+    public async Task ReconcileUploadAsync_SameSizeReplacementGeneration_DoesNotIssueSignedUrl()
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.NewGuid();
+        var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+        storage.LiveGeneration = 32;
+
+        Assert.Null(await service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default));
+        Assert.Single(storage.Signed);
+    }
+
+    [Fact]
+    public async Task MoveAsync_MetadataCommitResponseLost_ReportsUnknownWithJournalEvidence()
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterMove = true };
+        repository.Uploads.Add(new Upload { Bucket = "maliev.com", Name = "orders/source.step", ContentType = "application/step", Size = 3 });
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            service.MoveAsync("maliev.com", "orders/source.step", "maliev.com", "orders/destination.step", default));
+
+        Assert.IsType<IOException>(failure.InnerException);
+        Assert.Single(storage.Moved);
+        Assert.Empty(storage.Deleted);
+        Assert.Contains(storage.Journal!.Evidence.Values, evidence => evidence.State == "Unknown"
+            && evidence.DestinationGeneration == 31);
+    }
+
+    [Fact]
+    public async Task UploadAsync_SignedUrlFailure_PreservesPromotedGenerationsForReconciliation()
     {
         var expected = new InvalidOperationException("signing unavailable");
         var storage = new RecordingStorage
@@ -180,7 +216,7 @@ public sealed class FileApplicationServiceTests
         var repository = new RecordingRepository();
         var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+        var exception = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
             "maliev.com",
             "orders/42",
             [
@@ -189,17 +225,15 @@ public sealed class FileApplicationServiceTests
             ],
             CancellationToken.None));
 
-        Assert.Same(expected, exception);
+        Assert.Same(expected, exception.InnerException);
         Assert.Equal(2, storage.Moved.Count);
-        Assert.Equal(
-            storage.Moved.Select(move => ("maliev.com", move.DestinationObjectName)).OrderBy(item => item.DestinationObjectName),
-            storage.Deleted.OrderBy(item => item.ObjectName));
+        Assert.Empty(storage.Deleted);
         Assert.Empty(repository.Uploads);
         Assert.Equal(0, repository.AddRangeCallCount);
     }
 
     [Fact]
-    public async Task UploadAsync_SignedUrlFailure_UsesIndependentCleanupToken()
+    public async Task UploadAsync_SignedUrlFailure_DoesNotDeleteOnCancellation()
     {
         using var request = new CancellationTokenSource();
         var storage = new RecordingStorage
@@ -213,7 +247,7 @@ public sealed class FileApplicationServiceTests
             new StubScanner(new(FileSafetyVerdict.Clean)),
             new RecordingRepository());
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
             "maliev.com",
             null,
             [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
@@ -221,11 +255,11 @@ public sealed class FileApplicationServiceTests
 
         Assert.True(request.IsCancellationRequested);
         Assert.False(storage.CleanupObservedCancellation);
-        Assert.Single(storage.Deleted);
+        Assert.Empty(storage.Deleted);
     }
 
     [Fact]
-    public async Task UploadAsync_SignedUrlAndRollbackFailure_RetainsBothCausesAndObjectCoordinates()
+    public async Task UploadAsync_SignedUrlFailure_DoesNotAttemptNameOnlyRollback()
     {
         var signingFailure = new InvalidOperationException("signing unavailable");
         var cleanupFailure = new IOException("storage delete unavailable");
@@ -238,27 +272,20 @@ public sealed class FileApplicationServiceTests
         var repository = new RecordingRepository();
         var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
 
-        var exception = await Assert.ThrowsAsync<UploadRollbackException>(() => service.UploadAsync(
+        var exception = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
             "maliev.com",
             "orders/42",
             [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
             CancellationToken.None));
 
-        Assert.Same(signingFailure, exception.UploadFailure);
-        var cleanup = Assert.Single(exception.CleanupFailures);
-        Assert.Equal("maliev.com", cleanup.Bucket);
-        Assert.Equal("orders/42/part.step", cleanup.ObjectName);
-        Assert.Same(cleanupFailure, cleanup.Cause);
-        Assert.Contains("maliev.com/orders/42/part.step", exception.Message, StringComparison.Ordinal);
-        var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
-        Assert.Same(signingFailure, aggregate.InnerExceptions[0]);
-        Assert.Same(cleanupFailure, aggregate.InnerExceptions[1]);
+        Assert.Same(signingFailure, exception.InnerException);
+        Assert.Empty(storage.Deleted);
         Assert.Empty(repository.Uploads);
         Assert.Equal(0, repository.AddRangeCallCount);
     }
 
     [Fact]
-    public async Task UploadAsync_MultipleRollbackFailures_AttemptsEveryObjectAndRetainsEveryFailure()
+    public async Task UploadAsync_MultiplePromotions_PreservesEveryObjectOnSigningFailure()
     {
         var signingFailure = new InvalidOperationException("signing unavailable");
         var firstCleanupFailure = new IOException("first delete unavailable");
@@ -275,7 +302,7 @@ public sealed class FileApplicationServiceTests
             new StubScanner(new(FileSafetyVerdict.Clean)),
             new RecordingRepository());
 
-        var exception = await Assert.ThrowsAsync<UploadRollbackException>(() => service.UploadAsync(
+        var exception = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
             "maliev.com",
             "orders/42",
             [
@@ -285,25 +312,13 @@ public sealed class FileApplicationServiceTests
             ],
             CancellationToken.None));
 
-        Assert.Equal(3, storage.Deleted.Count);
-        Assert.Collection(
-            exception.CleanupFailures.OrderBy(failure => failure.ObjectName),
-            failure =>
-            {
-                Assert.Equal(("maliev.com", "orders/42/first.step"), (failure.Bucket, failure.ObjectName));
-                Assert.Same(firstCleanupFailure, failure.Cause);
-            },
-            failure =>
-            {
-                Assert.Equal(("maliev.com", "orders/42/third.step"), (failure.Bucket, failure.ObjectName));
-                Assert.Same(thirdCleanupFailure, failure.Cause);
-            });
-        var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
-        Assert.Equal(3, aggregate.InnerExceptions.Count);
+        Assert.Same(signingFailure, exception.InnerException);
+        Assert.Equal(3, storage.Moved.Count);
+        Assert.Empty(storage.Deleted);
     }
 
     [Fact]
-    public async Task UploadAsync_RollbackReportsObjectAlreadyAbsent_PreservesOriginalSigningFailure()
+    public async Task UploadAsync_SigningFailure_PreservesOriginalCauseWithoutDelete()
     {
         var signingFailure = new InvalidOperationException("signing unavailable");
         var storage = new RecordingStorage
@@ -317,14 +332,14 @@ public sealed class FileApplicationServiceTests
             new StubScanner(new(FileSafetyVerdict.Clean)),
             new RecordingRepository());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+        var exception = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
             "maliev.com",
             null,
             [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
             CancellationToken.None));
 
-        Assert.Same(signingFailure, exception);
-        Assert.Single(storage.Deleted);
+        Assert.Same(signingFailure, exception.InnerException);
+        Assert.Empty(storage.Deleted);
     }
 
     [Fact]
@@ -365,10 +380,13 @@ public sealed class FileApplicationServiceTests
             SignedUrlHours = 168,
         });
         var time = new FakeTimeProvider(Now);
+        var moveJournal = new RecordingMoveJournal();
+        storage.Journal = moveJournal;
         return new FileApplicationService(
             storage,
             scanner,
             repository,
+            moveJournal,
             new ObjectNamePolicy(options, time),
             options,
             new LegacyFileRuntimeGate(options),
@@ -396,8 +414,32 @@ public sealed class FileApplicationServiceTests
         public Task<FileSafetyResult> ScanAsync(IUploadFile file, CancellationToken cancellationToken) => Task.FromResult(result);
     }
 
+    private sealed class RecordingMoveJournal : IStorageMoveJournal
+    {
+        public Dictionary<Guid, StorageMoveEvidence> Evidence { get; } = [];
+        public Task<StorageMoveEvidence?> FindAsync(Guid operationId, CancellationToken cancellationToken) =>
+            Task.FromResult(Evidence.GetValueOrDefault(operationId));
+        public Task<bool> BeginAsync(Guid operationId, bool scanClean, string sourceBucket, string sourceObjectName,
+            long sourceGeneration, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>
+            Task.FromResult(true);
+        public Task CopiedAsync(Guid operationId, long destinationGeneration, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task SourceDeletedAsync(Guid operationId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task MetadataCommittedAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            if (Evidence.TryGetValue(operationId, out var evidence)) Evidence[operationId] = evidence with { State = "MetadataCommitted" };
+            return Task.CompletedTask;
+        }
+        public Task UnknownAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            if (Evidence.TryGetValue(operationId, out var evidence)) Evidence[operationId] = evidence with { State = "Unknown" };
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class RecordingStorage : IObjectStorage
     {
+        public RecordingMoveJournal? Journal { get; set; }
+        public long LiveGeneration { get; set; } = 31;
         public List<(string Bucket, string ObjectName)> Uploaded { get; } = [];
         public List<(string SourceObjectName, string DestinationObjectName)> Moved { get; } = [];
         public List<(string Bucket, string ObjectName)> Deleted { get; } = [];
@@ -418,12 +460,29 @@ public sealed class FileApplicationServiceTests
             return Task.CompletedTask;
         }
 
+        public async Task<long> UploadGenerationAsync(string bucket, string objectName, string contentType,
+            Stream content, CancellationToken cancellationToken)
+        {
+            await UploadAsync(bucket, objectName, contentType, content, cancellationToken);
+            return 17;
+        }
+
         public Task<bool> MoveAsync(string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
         {
             Moved.Add((sourceObjectName, destinationObjectName));
             if (MoveFailure is not null) return Task.FromException<bool>(MoveFailure);
             if (sizes.Remove((sourceBucket, sourceObjectName), out var size)) sizes[(destinationBucket, destinationObjectName)] = size;
             return Task.FromResult(true);
+        }
+
+        public async Task<bool> MoveJournaledAsync(Guid operationId, long? expectedSourceGeneration, bool scanClean, string sourceBucket, string sourceObjectName,
+            string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
+        {
+            var moved = await MoveAsync(sourceBucket, sourceObjectName, destinationBucket, destinationObjectName, cancellationToken);
+            if (moved && Journal is not null)
+                Journal.Evidence[operationId] = new StorageMoveEvidence(scanClean, sourceBucket, sourceObjectName,
+                    expectedSourceGeneration ?? 17, destinationBucket, destinationObjectName, 31, "SourceDeleted");
+            return moved;
         }
 
         public Task<bool> DeleteAsync(string bucket, string objectName, CancellationToken cancellationToken)
@@ -442,6 +501,10 @@ public sealed class FileApplicationServiceTests
         public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
             Task.FromResult(sizes.TryGetValue((bucket, objectName), out var size) ? (long?)size : null);
 
+        public Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
+            Task.FromResult(sizes.TryGetValue((bucket, objectName), out var size)
+                ? new StorageObjectEvidence(LiveGeneration, size) : null);
+
         public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken)
         {
             Signed.Add((bucket, objectName));
@@ -459,6 +522,7 @@ public sealed class FileApplicationServiceTests
     {
         public List<Upload> Uploads { get; } = [];
         public bool ThrowAfterAdd { get; set; }
+        public bool ThrowAfterMove { get; set; }
         public int AddRangeCallCount { get; private set; }
 
         public Task AddRangeAsync(IReadOnlyCollection<Upload> uploads, CancellationToken cancellationToken)
@@ -483,6 +547,7 @@ public sealed class FileApplicationServiceTests
             var upload = Uploads.Single(item => item.Bucket == sourceBucket && item.Name == sourceObjectName);
             upload.Bucket = destinationBucket;
             upload.Name = destinationObjectName;
+            if (ThrowAfterMove) throw new IOException("metadata response lost");
             return Task.CompletedTask;
         }
     }

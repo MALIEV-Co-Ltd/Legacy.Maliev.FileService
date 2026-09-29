@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Domain;
@@ -11,6 +13,7 @@ public sealed class FileApplicationService(
     IObjectStorage storage,
     IFileSafetyScanner scanner,
     IUploadRepository repository,
+    IStorageMoveJournal moveJournal,
     ObjectNamePolicy names,
     IOptions<FileStorageOptions> options,
     LegacyFileRuntimeGate runtimeGate,
@@ -41,10 +44,9 @@ public sealed class FileApplicationService(
         names.RequireBucket(bucket);
         ValidateFiles(files);
 
-        var promoted = new List<(string Bucket, string ObjectName)>();
+        var promoted = new List<(string Bucket, string ObjectName, Guid MoveId)>();
         var quarantined = new List<(string Bucket, string ObjectName)>();
         var uploads = new List<Upload>(files.Count);
-        var metadataCommitAttempted = false;
 
         try
         {
@@ -52,9 +54,10 @@ public sealed class FileApplicationService(
             {
                 var finalName = names.BuildFinalObjectName(path, file.FileName, operationId);
                 var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);
+                long quarantineGeneration;
                 await using (var content = file.OpenReadStream())
                 {
-                    await storage.UploadAsync(bucket, quarantineName, file.ContentType, content, cancellationToken);
+                    quarantineGeneration = await storage.UploadGenerationAsync(bucket, quarantineName, file.ContentType, content, cancellationToken);
                 }
 
                 quarantined.Add((bucket, quarantineName));
@@ -71,13 +74,14 @@ public sealed class FileApplicationService(
                     throw new MalwareScannerUnavailableException("Malware scanning is unavailable");
                 }
 
-                if (!await storage.MoveAsync(bucket, quarantineName, bucket, finalName, cancellationToken))
+                var moveId = MoveId(operationId, finalName);
+                if (!await storage.MoveJournaledAsync(moveId, quarantineGeneration, true, bucket, quarantineName, bucket, finalName, cancellationToken))
                 {
                     throw new InvalidOperationException("Could not promote the scanned file");
                 }
 
                 quarantined.Remove((bucket, quarantineName));
-                promoted.Add((bucket, finalName));
+                promoted.Add((bucket, finalName, moveId));
                 uploads.Add(new Upload
                 {
                     Bucket = bucket,
@@ -95,8 +99,15 @@ public sealed class FileApplicationService(
                 result.Add(new UploadObjectResponse(upload.Bucket, upload.Name, uri));
             }
 
-            metadataCommitAttempted = true;
             await repository.AddRangeAsync(uploads, cancellationToken);
+            foreach (var move in promoted)
+            {
+                try { await moveJournal.MetadataCommittedAsync(move.MoveId, cancellationToken); }
+                catch (Exception exception)
+                {
+                    throw new UploadOutcomeUnknownException("Committed metadata checkpoint requires reconciliation.", exception);
+                }
+            }
 
             return new UploadResultResponse(result);
         }
@@ -109,7 +120,14 @@ public sealed class FileApplicationService(
         }
         catch (Exception uploadFailure)
         {
-            var cleanupFailures = await CleanupAsync(metadataCommitAttempted ? quarantined : quarantined.Concat(promoted));
+            if (promoted.Count != 0)
+            {
+                foreach (var move in promoted) await MarkMoveUnknownAsync(move.MoveId);
+                logger.LogWarning("Upload storage outcome requires reconciliation for operation {OperationId}", operationId);
+                throw new UploadOutcomeUnknownException("Upload promotion requires reconciliation.", uploadFailure);
+            }
+
+            var cleanupFailures = await CleanupAsync(quarantined);
             if (cleanupFailures.Count != 0)
             {
                 throw new UploadRollbackException(uploadFailure, cleanupFailures);
@@ -135,8 +153,16 @@ public sealed class FileApplicationService(
         foreach (var file in files)
         {
             var objectName = names.BuildFinalObjectName(path, file.FileName, operationId);
-            if (!await repository.ExistsAsync(bucket, objectName, cancellationToken)
-                || await storage.GetSizeAsync(bucket, objectName, cancellationToken) != file.Length) return null;
+            var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);
+            if (move is null || !move.ScanClean || move.State is not ("SourceDeleted" or "MetadataCommitted" or "Unknown")
+                || move.SourceBucket != bucket
+                || move.SourceObjectName != names.BuildQuarantineObjectName(operationId, objectName)
+                || move.SourceGeneration <= 0
+                || move.DestinationBucket != bucket || move.DestinationObjectName != objectName
+                || move.DestinationGeneration is not long destinationGeneration
+                || !await repository.ExistsAsync(bucket, objectName, cancellationToken)) return null;
+            var live = await storage.GetEvidenceAsync(bucket, objectName, cancellationToken);
+            if (live is null || live.Generation != destinationGeneration || live.Size != file.Length) return null;
             var uri = await storage.CreateSignedReadUriAsync(bucket, objectName, duration, cancellationToken);
             result.Add(new UploadObjectResponse(bucket, objectName, uri));
         }
@@ -172,13 +198,25 @@ public sealed class FileApplicationService(
         names.RequireBucket(destinationBucket);
         sourceObjectName = names.RequireObjectName(sourceObjectName);
         destinationObjectName = names.RequireObjectName(destinationObjectName);
+        var moveId = Guid.NewGuid();
         if (!await repository.ExistsAsync(sourceBucket, sourceObjectName, cancellationToken) ||
-            !await storage.MoveAsync(sourceBucket, sourceObjectName, destinationBucket, destinationObjectName, cancellationToken))
+            !await storage.MoveJournaledAsync(moveId, null, true, sourceBucket, sourceObjectName, destinationBucket, destinationObjectName, cancellationToken))
         {
             return false;
         }
 
-        await repository.MoveAsync(sourceBucket, sourceObjectName, destinationBucket, destinationObjectName, cancellationToken);
+        try { await repository.MoveAsync(sourceBucket, sourceObjectName, destinationBucket, destinationObjectName, cancellationToken); }
+        catch (Exception exception)
+        {
+            await MarkMoveUnknownAsync(moveId);
+            logger.LogWarning("Storage move metadata outcome requires reconciliation for operation {OperationId}", moveId);
+            throw new UploadOutcomeUnknownException("Storage move metadata requires reconciliation.", exception);
+        }
+        try { await moveJournal.MetadataCommittedAsync(moveId, cancellationToken); }
+        catch (Exception exception)
+        {
+            throw new UploadOutcomeUnknownException("Committed metadata checkpoint requires reconciliation.", exception);
+        }
         return true;
     }
 
@@ -213,6 +251,19 @@ public sealed class FileApplicationService(
         {
             throw new FileUploadValidationException("Total upload size cannot exceed 100 MB");
         }
+    }
+
+    private static Guid MoveId(Guid operationId, string destinationName)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{operationId:N}\n{destinationName}"));
+        return new Guid(bytes.AsSpan(0, 16));
+    }
+
+    private async Task MarkMoveUnknownAsync(Guid moveId)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { await moveJournal.UnknownAsync(moveId, timeout.Token); }
+        catch { /* The persisted last confirmed stage remains available to operators. */ }
     }
 
     private async Task<IReadOnlyList<UploadCleanupFailure>> CleanupAsync(

@@ -33,6 +33,7 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
 {
     private const string InitialMigration = "20260715033302_InitialPostgresCompatibility";
     private const string InstantQuoteMigration = "20260719033405_AddInstantQuoteUploadWorkflow";
+    private const string StorageMoveMigration = "20260929015203_AddStorageMoveJournal";
 
     [Fact]
     public async Task InitialMigration_FreshPostgreSql_CreatesLegacyUploadTableWithoutCustomXmin()
@@ -90,7 +91,7 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
         using var context = fixture.CreateContext();
         var migrations = context.GetService<IMigrationsAssembly>().Migrations.Keys.ToArray();
 
-        Assert.Equal([InitialMigration, InstantQuoteMigration], migrations);
+        Assert.Equal([InitialMigration, InstantQuoteMigration, StorageMoveMigration], migrations);
     }
 
     [Fact]
@@ -130,6 +131,7 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
             Assert.True(await TableExistsAsync(context, "InstantQuoteUploadSession"));
             Assert.True(await TableExistsAsync(context, "InstantQuoteUploadFile"));
             Assert.True(await TableExistsAsync(context, "InstantQuoteFinalization"));
+            Assert.True(await TableExistsAsync(context, "StorageMoveJournal"));
             Assert.False(context.Database.HasPendingModelChanges());
         }
         finally

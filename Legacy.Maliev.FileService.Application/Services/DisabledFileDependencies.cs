@@ -4,6 +4,28 @@ using Legacy.Maliev.FileService.Domain;
 
 namespace Legacy.Maliev.FileService.Application.Services;
 
+/// <summary>Fail-closed move journal for write-disabled runtimes.</summary>
+public sealed class DisabledStorageMoveJournal : IStorageMoveJournal
+{
+    private static Exception Unavailable() => new MalwareScannerUnavailableException("Legacy file writes are disabled.");
+
+    /// <inheritdoc />
+    public Task<StorageMoveEvidence?> FindAsync(Guid operationId, CancellationToken cancellationToken) =>
+        Task.FromException<StorageMoveEvidence?>(Unavailable());
+    /// <inheritdoc />
+    public Task<bool> BeginAsync(Guid operationId, bool scanClean, string sourceBucket, string sourceObjectName,
+        long sourceGeneration, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>
+        Task.FromException<bool>(Unavailable());
+    /// <inheritdoc />
+    public Task CopiedAsync(Guid operationId, long destinationGeneration, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+    /// <inheritdoc />
+    public Task SourceDeletedAsync(Guid operationId, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+    /// <inheritdoc />
+    public Task MetadataCommittedAsync(Guid operationId, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+    /// <inheritdoc />
+    public Task UnknownAsync(Guid operationId, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+}
+
 /// <summary>Fail-closed legacy storage boundary used by write-disabled runtimes.</summary>
 public sealed class DisabledObjectStorage : IObjectStorage
 {
@@ -15,7 +37,16 @@ public sealed class DisabledObjectStorage : IObjectStorage
         Task.FromException(Unavailable());
 
     /// <inheritdoc />
+    public Task<long> UploadGenerationAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken) =>
+        Task.FromException<long>(Unavailable());
+
+    /// <inheritdoc />
     public Task<bool> MoveAsync(string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>
+        Task.FromException<bool>(Unavailable());
+
+    /// <inheritdoc />
+    public Task<bool> MoveJournaledAsync(Guid operationId, long? expectedSourceGeneration, bool scanClean, string sourceBucket, string sourceObjectName,
+        string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>
         Task.FromException<bool>(Unavailable());
 
     /// <inheritdoc />
@@ -25,6 +56,10 @@ public sealed class DisabledObjectStorage : IObjectStorage
     /// <inheritdoc />
     public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
         Task.FromException<long?>(Unavailable());
+
+    /// <inheritdoc />
+    public Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
+        Task.FromException<StorageObjectEvidence?>(Unavailable());
 
     /// <inheritdoc />
     public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken) =>

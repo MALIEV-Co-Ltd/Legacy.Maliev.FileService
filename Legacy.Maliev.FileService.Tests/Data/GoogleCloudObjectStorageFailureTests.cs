@@ -1,6 +1,7 @@
 using System.Net;
 using Google;
 using Google.Cloud.Storage.V1;
+using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Data;
 using Moq;
@@ -10,6 +11,157 @@ namespace Legacy.Maliev.FileService.Tests.Data;
 
 public sealed class GoogleCloudObjectStorageFailureTests
 {
+    [Fact]
+    public async Task UploadGenerationAsync_QuarantineWrite_RequiresAbsentDestinationAndReturnsGeneration()
+    {
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        client.Setup(value => value.UploadObjectAsync(
+                It.Is<StorageObject>(item => item.Bucket == "private" && item.Name == "quarantine/file"),
+                It.IsAny<Stream>(), It.Is<UploadObjectOptions>(options => options.IfGenerationMatch == 0),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StorageObject { Generation = 17 });
+        var storage = new GoogleCloudObjectStorage(client.Object, null!);
+
+        Assert.Equal(17, await storage.UploadGenerationAsync("private", "quarantine/file", "application/octet-stream",
+            new MemoryStream([1, 2, 3]), default));
+    }
+
+    [Fact]
+    public async Task MoveJournaledAsync_QuarantineGenerationReplaced_DoesNotClaimCleanOrCopy()
+    {
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 18,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        journal.Setup(value => value.UnknownAsync(id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            storage.MoveJournaledAsync(id, 18, true, "private", "quarantine/file", "private", "clean/file", default));
+
+        journal.Verify(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(value => value.CopyObjectAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MoveJournaledAsync_CopySuccess_RecordsSourceBeforeCopyAndExactDestinationBeforeDelete()
+    {
+        var order = new List<string>();
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+                "private", "clean/file", It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("begin")).ReturnsAsync(true);
+        journal.Setup(value => value.CopiedAsync(id, 31, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("copied")).Returns(Task.CompletedTask);
+        journal.Setup(value => value.SourceDeletedAsync(id, It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("deleted")).Returns(Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+        client.Setup(value => value.CopyObjectAsync("private", "quarantine/file", "private", "clean/file",
+                It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("copy")).ReturnsAsync(new StorageObject { Generation = 31 });
+        client.Setup(value => value.DeleteObjectAsync("private", "quarantine/file",
+                It.IsAny<DeleteObjectOptions>(), It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("delete")).Returns(Task.CompletedTask);
+
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+        Assert.True(await storage.MoveJournaledAsync(id, 17, true, "private", "quarantine/file", "private", "clean/file", default));
+        Assert.Equal(["begin", "copy", "copied", "delete", "deleted"], order);
+    }
+
+    [Fact]
+    public async Task MoveJournaledAsync_LostCopyResponse_RetainsSourceEvidenceWithoutDeletion()
+    {
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        journal.Setup(value => value.UnknownAsync(id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+        client.Setup(value => value.CopyObjectAsync("private", "quarantine/file", "private", "clean/file",
+            It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>())).ThrowsAsync(new TimeoutException());
+
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            storage.MoveJournaledAsync(id, 17, true, "private", "quarantine/file", "private", "clean/file", default));
+        journal.Verify(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(value => value.DeleteObjectAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<DeleteObjectOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MoveJournaledAsync_ReplayedOperation_DoesNotCopyOrDelete()
+    {
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            storage.MoveJournaledAsync(id, 17, true, "private", "quarantine/file", "private", "clean/file", default));
+        client.Verify(value => value.CopyObjectAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MoveJournaledAsync_CopyForbidden_LeavesDurableUnknownWithoutDeleting()
+    {
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        journal.Setup(value => value.UnknownAsync(id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+        client.Setup(value => value.CopyObjectAsync("private", "quarantine/file", "private", "clean/file",
+            It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>())).ThrowsAsync(ApiException(HttpStatusCode.Forbidden));
+
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            storage.MoveJournaledAsync(id, 17, true, "private", "quarantine/file", "private", "clean/file", default));
+        Assert.IsType<GoogleApiException>(failure.InnerException);
+        journal.Verify(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(value => value.DeleteObjectAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<DeleteObjectOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MoveJournaledAsync_RollbackForbidden_PreservesBothExactGenerations()
+    {
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        journal.Setup(value => value.CopiedAsync(id, 31, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        journal.Setup(value => value.UnknownAsync(id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+        client.Setup(value => value.CopyObjectAsync("private", "quarantine/file", "private", "clean/file",
+            It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StorageObject { Generation = 31 });
+        client.Setup(value => value.DeleteObjectAsync("private", "quarantine/file",
+            It.Is<DeleteObjectOptions>(options => options.IfGenerationMatch == 17), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(ApiException(HttpStatusCode.Forbidden));
+        client.Setup(value => value.DeleteObjectAsync("private", "clean/file",
+            It.Is<DeleteObjectOptions>(options => options.Generation == 31 && options.IfGenerationMatch == 31),
+            It.IsAny<CancellationToken>())).ThrowsAsync(ApiException(HttpStatusCode.Forbidden));
+
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            storage.MoveJournaledAsync(id, 17, true, "private", "quarantine/file", "private", "clean/file", default));
+
+        Assert.IsType<UploadRollbackException>(failure.InnerException);
+        journal.Verify(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     [Fact]
     public async Task MoveAsync_SourceAbsentBeforeCopy_ReturnsFalseWithoutMutation()
     {

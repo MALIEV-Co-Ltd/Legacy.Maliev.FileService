@@ -95,6 +95,8 @@ public static class FileServiceRuntimeRegistration
         }
 
         services.TryAddScoped<IUploadRepository, UploadRepository>();
+        if (legacyWritesEnabled) services.TryAddScoped<IStorageMoveJournal, StorageMoveJournalRepository>();
+        else services.TryAddScoped<IStorageMoveJournal, DisabledStorageMoveJournal>();
         services.TryAddScoped<IUploadIdempotencyStore, RedisUploadIdempotencyStore>();
         services.TryAddScoped<IInstantQuoteFileRepository, InstantQuoteFileRepository>();
         services.TryAddScoped<IInstantQuoteCleanupRepository, InstantQuoteFileRepository>();
