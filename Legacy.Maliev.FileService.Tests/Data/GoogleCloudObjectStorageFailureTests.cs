@@ -12,6 +12,29 @@ namespace Legacy.Maliev.FileService.Tests.Data;
 public sealed class GoogleCloudObjectStorageFailureTests
 {
     [Fact]
+    public async Task MoveJournaledAsync_KnownQuarantineGenerationMissing_JournalsUnknownWithoutMutation()
+    {
+        var id = Guid.NewGuid();
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        journal.Setup(value => value.UnknownAsync(id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        client.Setup(value => value.GetObjectAsync("private", "quarantine/file", It.IsAny<GetObjectOptions>(),
+            It.IsAny<CancellationToken>())).ThrowsAsync(ApiException(HttpStatusCode.NotFound));
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            storage.MoveJournaledAsync(id, 17, true, "private", "quarantine/file", "private", "clean/file", default));
+
+        journal.Verify(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(value => value.CopyObjectAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+        client.Verify(value => value.DeleteObjectAsync(It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<DeleteObjectOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task UploadGenerationAsync_QuarantineWrite_RequiresAbsentDestinationAndReturnsGeneration()
     {
         var client = new Mock<StorageClient>(MockBehavior.Strict);
@@ -415,6 +438,26 @@ public sealed class GoogleCloudObjectStorageFailureTests
         var storage = new GoogleCloudObjectStorage(client.Object, null!);
 
         Assert.False(await storage.DeleteAsync("private", "clean/file", default));
+    }
+
+    [Fact]
+    public async Task DeleteGenerationAsync_ReplacedQuarantine_DoesNotDeleteNewGenerationByName()
+    {
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        client.Setup(storage => storage.DeleteObjectAsync(
+                "private", "quarantine/file",
+                It.Is<DeleteObjectOptions>(options => options.Generation == 17 && options.IfGenerationMatch == 17),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(ApiException(HttpStatusCode.PreconditionFailed));
+        var storage = new GoogleCloudObjectStorage(client.Object, null!);
+
+        var failure = await Assert.ThrowsAsync<GoogleApiException>(() =>
+            storage.DeleteGenerationAsync("private", "quarantine/file", 17, default));
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, failure.HttpStatusCode);
+        client.Verify(storage => storage.DeleteObjectAsync(
+            "private", "quarantine/file", It.Is<DeleteObjectOptions>(options => options.Generation == null),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

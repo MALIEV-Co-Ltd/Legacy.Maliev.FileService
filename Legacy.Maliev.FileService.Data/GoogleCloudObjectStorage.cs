@@ -58,6 +58,18 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
     private async Task<bool> MoveCoreAsync(Guid? operationId, long? expectedSourceGeneration, bool scanClean, string sourceBucket, string sourceObjectName,
         string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
     {
+        var journalStarted = false;
+        if (operationId is Guid knownId && expectedSourceGeneration is long knownGeneration)
+        {
+            if (journal is null) throw new InvalidOperationException("Storage move journal is unavailable.");
+            if (!await journal.BeginAsync(knownId, scanClean, sourceBucket, sourceObjectName, knownGeneration,
+                destinationBucket, destinationObjectName, cancellationToken))
+            {
+                throw new UploadOutcomeUnknownException("Storage move already has a durable checkpoint.");
+            }
+            journalStarted = true;
+        }
+
         long sourceGeneration;
         try
         {
@@ -68,22 +80,26 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         }
         catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
         {
+            if (journalStarted)
+            {
+                await MarkUnknownAsync(operationId);
+                throw new UploadOutcomeUnknownException("Scanned quarantine generation requires reconciliation.", exception);
+            }
             return false;
+        }
+        catch (Exception exception) when (journalStarted)
+        {
+            await MarkUnknownAsync(operationId);
+            throw new UploadOutcomeUnknownException("Scanned quarantine read requires reconciliation.", exception);
         }
 
         if (expectedSourceGeneration is long expected && sourceGeneration != expected)
         {
-            if (operationId is Guid driftId)
-            {
-                if (journal is null) throw new InvalidOperationException("Storage move journal is unavailable.");
-                _ = await journal.BeginAsync(driftId, scanClean, sourceBucket, sourceObjectName, expected,
-                    destinationBucket, destinationObjectName, cancellationToken);
-                await MarkUnknownAsync(operationId);
-            }
+            await MarkUnknownAsync(operationId);
             throw new UploadOutcomeUnknownException("Quarantine generation changed after scanning.");
         }
 
-        if (operationId is Guid id)
+        if (operationId is Guid id && !journalStarted)
         {
             if (journal is null) throw new InvalidOperationException("Storage move journal is unavailable.");
             if (!await journal.BeginAsync(id, scanClean, sourceBucket, sourceObjectName, sourceGeneration,
@@ -247,6 +263,22 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         try
         {
             await client.DeleteObjectAsync(bucket, objectName, cancellationToken: cancellationToken);
+            return true;
+        }
+        catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken)
+    {
+        if (generation <= 0) throw new ArgumentOutOfRangeException(nameof(generation));
+        try
+        {
+            await client.DeleteObjectAsync(bucket, objectName,
+                new DeleteObjectOptions { Generation = generation, IfGenerationMatch = generation }, cancellationToken);
             return true;
         }
         catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)

@@ -56,6 +56,7 @@ public sealed class FileApplicationServiceTests
 
         Assert.Empty(storage.Moved);
         Assert.Single(storage.Deleted);
+        Assert.Equal(17, Assert.Single(storage.DeletedGenerations));
         Assert.Empty(repository.Uploads);
     }
 
@@ -76,6 +77,7 @@ public sealed class FileApplicationServiceTests
 
         Assert.Empty(storage.Moved);
         Assert.Single(storage.Deleted);
+        Assert.Equal(17, Assert.Single(storage.DeletedGenerations));
     }
 
     [Fact]
@@ -94,6 +96,22 @@ public sealed class FileApplicationServiceTests
         Assert.Single(storage.Uploaded);
         Assert.Single(storage.Moved);
         Assert.Empty(storage.Deleted);
+        Assert.Empty(repository.Uploads);
+    }
+
+    [Fact]
+    public async Task UploadAsync_JournaledMoveReturnsFalse_PreservesQuarantineWithoutNameCleanup()
+    {
+        var storage = new RecordingStorage { MoveResult = false };
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
+            "maliev.com", null, [new MemoryUploadFile("part.step", "application/step", [1])], default));
+
+        Assert.Single(storage.Uploaded);
+        Assert.Empty(storage.Deleted);
+        Assert.Empty(storage.DeletedGenerations);
         Assert.Empty(repository.Uploads);
     }
 
@@ -443,6 +461,7 @@ public sealed class FileApplicationServiceTests
         public List<(string Bucket, string ObjectName)> Uploaded { get; } = [];
         public List<(string SourceObjectName, string DestinationObjectName)> Moved { get; } = [];
         public List<(string Bucket, string ObjectName)> Deleted { get; } = [];
+        public List<long> DeletedGenerations { get; } = [];
         public List<(string Bucket, string ObjectName)> Signed { get; } = [];
         private readonly Dictionary<(string Bucket, string ObjectName), long> sizes = [];
         public bool CleanupObservedCancellation { get; private set; }
@@ -451,6 +470,7 @@ public sealed class FileApplicationServiceTests
         public CancellationTokenSource? RequestCancellation { get; init; }
         public bool DeleteResult { get; init; } = true;
         public Exception? MoveFailure { get; init; }
+        public bool MoveResult { get; init; } = true;
         public Dictionary<string, Exception> DeleteFailures { get; } = [];
 
         public Task UploadAsync(string bucket, string objectName, string contentType, Stream content, CancellationToken cancellationToken)
@@ -478,6 +498,7 @@ public sealed class FileApplicationServiceTests
         public async Task<bool> MoveJournaledAsync(Guid operationId, long? expectedSourceGeneration, bool scanClean, string sourceBucket, string sourceObjectName,
             string destinationBucket, string destinationObjectName, CancellationToken cancellationToken)
         {
+            if (!MoveResult) return false;
             var moved = await MoveAsync(sourceBucket, sourceObjectName, destinationBucket, destinationObjectName, cancellationToken);
             if (moved && Journal is not null)
                 Journal.Evidence[operationId] = new StorageMoveEvidence(scanClean, sourceBucket, sourceObjectName,
@@ -496,6 +517,12 @@ public sealed class FileApplicationServiceTests
 
             sizes.Remove((bucket, objectName));
             return Task.FromResult(DeleteResult);
+        }
+
+        public Task<bool> DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken)
+        {
+            DeletedGenerations.Add(generation);
+            return DeleteAsync(bucket, objectName, cancellationToken);
         }
 
         public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>

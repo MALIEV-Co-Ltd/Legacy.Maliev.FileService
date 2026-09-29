@@ -60,6 +60,8 @@ public interface IObjectStorage
     Task<bool> MoveJournaledAsync(Guid operationId, long? expectedSourceGeneration, bool scanClean, string sourceBucket, string sourceObjectName, string destinationBucket, string destinationObjectName, CancellationToken cancellationToken);
     /// <summary>Deletes an object.</summary>
     Task<bool> DeleteAsync(string bucket, string objectName, CancellationToken cancellationToken);
+    /// <summary>Deletes only an exact quarantine generation during failed upload cleanup.</summary>
+    Task<bool> DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken);
     /// <summary>Reads the current object size for reconciliation without downloading content.</summary>
     Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken);
     /// <summary>Reads the live generation and size without downloading bytes.</summary>

@@ -45,7 +45,7 @@ public sealed class FileApplicationService(
         ValidateFiles(files);
 
         var promoted = new List<(string Bucket, string ObjectName, Guid MoveId)>();
-        var quarantined = new List<(string Bucket, string ObjectName)>();
+        var quarantined = new List<(string Bucket, string ObjectName, long Generation)>();
         var uploads = new List<Upload>(files.Count);
 
         try
@@ -60,7 +60,7 @@ public sealed class FileApplicationService(
                     quarantineGeneration = await storage.UploadGenerationAsync(bucket, quarantineName, file.ContentType, content, cancellationToken);
                 }
 
-                quarantined.Add((bucket, quarantineName));
+                quarantined.Add((bucket, quarantineName, quarantineGeneration));
                 var scan = await scanner.ScanAsync(file, cancellationToken);
                 if (scan.Verdict == FileSafetyVerdict.Infected)
                 {
@@ -77,10 +77,10 @@ public sealed class FileApplicationService(
                 var moveId = MoveId(operationId, finalName);
                 if (!await storage.MoveJournaledAsync(moveId, quarantineGeneration, true, bucket, quarantineName, bucket, finalName, cancellationToken))
                 {
-                    throw new InvalidOperationException("Could not promote the scanned file");
+                    throw new UploadOutcomeUnknownException("Scanned quarantine promotion requires reconciliation.");
                 }
 
-                quarantined.Remove((bucket, quarantineName));
+                quarantined.Remove((bucket, quarantineName, quarantineGeneration));
                 promoted.Add((bucket, finalName, moveId));
                 uploads.Add(new Upload
                 {
@@ -127,7 +127,7 @@ public sealed class FileApplicationService(
                 throw new UploadOutcomeUnknownException("Upload promotion requires reconciliation.", uploadFailure);
             }
 
-            var cleanupFailures = await CleanupAsync(quarantined);
+            var cleanupFailures = await CleanupAsync(quarantined, operationId);
             if (cleanupFailures.Count != 0)
             {
                 throw new UploadRollbackException(uploadFailure, cleanupFailures);
@@ -267,7 +267,8 @@ public sealed class FileApplicationService(
     }
 
     private async Task<IReadOnlyList<UploadCleanupFailure>> CleanupAsync(
-        IEnumerable<(string Bucket, string ObjectName)> objects)
+        IEnumerable<(string Bucket, string ObjectName, long Generation)> objects,
+        Guid operationId)
     {
         var failures = new List<UploadCleanupFailure>();
         using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -275,12 +276,12 @@ public sealed class FileApplicationService(
         {
             try
             {
-                await storage.DeleteAsync(item.Bucket, item.ObjectName, cleanup.Token);
+                await storage.DeleteGenerationAsync(item.Bucket, item.ObjectName, item.Generation, cleanup.Token);
             }
             catch (Exception exception)
             {
                 failures.Add(new UploadCleanupFailure(item.Bucket, item.ObjectName, exception));
-                logger.LogWarning(exception, "Failed to clean up object {ObjectName} from bucket {Bucket}", item.ObjectName, item.Bucket);
+                logger.LogWarning("Failed to clean up private quarantine generation for operation {OperationId}", operationId);
             }
         }
 

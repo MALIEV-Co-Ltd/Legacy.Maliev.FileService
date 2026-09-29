@@ -54,6 +54,10 @@ public sealed class DisabledObjectStorage : IObjectStorage
         Task.FromException<bool>(Unavailable());
 
     /// <inheritdoc />
+    public Task<bool> DeleteGenerationAsync(string bucket, string objectName, long generation, CancellationToken cancellationToken) =>
+        Task.FromException<bool>(Unavailable());
+
+    /// <inheritdoc />
     public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
         Task.FromException<long?>(Unavailable());
 
