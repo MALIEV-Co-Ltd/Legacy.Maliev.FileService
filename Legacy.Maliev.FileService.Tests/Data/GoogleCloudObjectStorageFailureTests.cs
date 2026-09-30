@@ -11,6 +11,51 @@ namespace Legacy.Maliev.FileService.Tests.Data;
 
 public sealed class GoogleCloudObjectStorageFailureTests
 {
+    [Theory(Timeout = 10000)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task MoveJournaledAsync_SourceAlreadyAbsentCheckpointFails_PreservesCopyAndReportsUnknown(
+        bool canceled, bool unknownCheckpointFails)
+    {
+        var id = Guid.NewGuid();
+        using var request = new CancellationTokenSource();
+        Exception checkpointFailure = canceled ? new OperationCanceledException(request.Token) : new IOException("checkpoint unavailable");
+        var journal = new Mock<IStorageMoveJournal>(MockBehavior.Strict);
+        journal.Setup(value => value.BeginAsync(id, true, "private", "quarantine/file", 17,
+            "private", "clean/file", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        journal.Setup(value => value.CopiedAsync(id, 31, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        journal.Setup(value => value.SourceDeletedAsync(id, It.IsAny<CancellationToken>()))
+            .Callback(() => { if (canceled) request.Cancel(); }).ThrowsAsync(checkpointFailure);
+        CancellationToken unknownToken = default;
+        journal.Setup(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()))
+            .Callback<Guid, CancellationToken>((_, token) => unknownToken = token)
+            .Returns(() => unknownCheckpointFails ? Task.Delay(Timeout.Infinite, unknownToken) : Task.CompletedTask);
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        SetupSource(client);
+        client.Setup(value => value.CopyObjectAsync("private", "quarantine/file", "private", "clean/file",
+            It.Is<CopyObjectOptions>(options => options.SourceGeneration == 17 && options.IfSourceGenerationMatch == 17 && options.IfGenerationMatch == 0),
+            It.IsAny<CancellationToken>())).ReturnsAsync(new StorageObject { Generation = 31 });
+        client.Setup(value => value.DeleteObjectAsync("private", "quarantine/file",
+            It.Is<DeleteObjectOptions>(options => options.IfGenerationMatch == 17), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(ApiException(HttpStatusCode.NotFound));
+        var storage = new GoogleCloudObjectStorage(client.Object, null!, journal.Object);
+
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => storage.MoveJournaledAsync(
+            id, 17, true, "private", "quarantine/file", "private", "clean/file", request.Token));
+
+        Assert.Same(checkpointFailure, failure.InnerException);
+        Assert.True(unknownToken.CanBeCanceled);
+        Assert.NotEqual(request.Token, unknownToken);
+        if (unknownCheckpointFails) Assert.True(unknownToken.IsCancellationRequested);
+        journal.Verify(value => value.UnknownAsync(id, It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(value => value.DeleteObjectAsync("private", "quarantine/file", It.IsAny<DeleteObjectOptions>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(value => value.DeleteObjectAsync("private", "clean/file", It.IsAny<DeleteObjectOptions>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task MoveJournaledAsync_KnownQuarantineGenerationMissing_JournalsUnknownWithoutMutation()
     {

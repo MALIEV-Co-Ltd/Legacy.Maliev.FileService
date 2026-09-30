@@ -181,7 +181,15 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         }
         catch (GoogleApiException exception) when (exception.HttpStatusCode == HttpStatusCode.NotFound)
         {
-            if (operationId is Guid deletedId) await journal!.SourceDeletedAsync(deletedId, cancellationToken);
+            try
+            {
+                if (operationId is Guid deletedId) await journal!.SourceDeletedAsync(deletedId, cancellationToken);
+            }
+            catch (Exception checkpointFailure)
+            {
+                await MarkUnknownAsync(operationId);
+                throw new UploadOutcomeUnknownException("Storage source deletion checkpoint requires reconciliation.", checkpointFailure);
+            }
             // The copy is complete and the quarantine object is already absent.
             return true;
         }

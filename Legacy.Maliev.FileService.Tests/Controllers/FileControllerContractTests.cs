@@ -11,6 +11,15 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Moq;
 using System.Security.Claims;
+using System.Net;
+using Google;
+using Google.Cloud.Storage.V1;
+using Legacy.Maliev.FileService.Data;
+using Legacy.Maliev.FileService.Domain;
+using Legacy.Maliev.FileService.Tests.Integration;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using StorageObject = Google.Apis.Storage.v1.Data.Object;
 
 namespace Legacy.Maliev.FileService.Tests.Controllers;
 
@@ -246,5 +255,159 @@ public sealed class FileControllerContractTests
         Assert.NotNull(method.GetCustomAttributes().SingleOrDefault(attribute => attribute.GetType() == methodAttribute));
         var permissionAttribute = Assert.Single(method.GetCustomAttributes<RequirePermissionAttribute>());
         Assert.Equal(permission, permissionAttribute.Permission);
+    }
+}
+
+[Collection(PostgreSqlCollection.Name)]
+public sealed class FileControllerMoveCheckpointTests(PostgreSqlFixture fixture)
+{
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public async Task Uploads_SourceAbsentCheckpointFails_ReturnsUnknownWithoutSigningOrMetadata(
+        bool publicMove, bool canceled, bool unknownCheckpointFails)
+    {
+        await using var context = fixture.CreateContext();
+        await context.Database.MigrateAsync();
+        var prefix = $"checkpoint/{Guid.NewGuid():N}";
+        var sourceName = $"{prefix}/source.stl";
+        var destinationName = $"{prefix}/part.stl";
+        var created = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        if (publicMove)
+        {
+            context.Uploads.Add(new Upload
+            {
+                Bucket = "private",
+                Name = sourceName,
+                Size = 1,
+                ContentType = "model/stl",
+                CreatedDate = created,
+                ModifiedDate = created
+            });
+            await context.SaveChangesAsync();
+        }
+
+        using var request = new CancellationTokenSource();
+        var journal = new FailingDeletionCheckpoint(new StorageMoveJournalRepository(context, TimeProvider.System), request, canceled, unknownCheckpointFails);
+        var objects = new Dictionary<string, long>();
+        if (publicMove) objects[sourceName] = 17;
+        var deleteCalls = new List<string>();
+        var client = new Mock<StorageClient>(MockBehavior.Strict);
+        client.Setup(value => value.UploadObjectAsync(It.IsAny<StorageObject>(), It.IsAny<Stream>(),
+                It.Is<UploadObjectOptions>(options => options.IfGenerationMatch == 0), It.IsAny<CancellationToken>()))
+            .Returns(new InvocationFunc(invocation =>
+            {
+                var item = (StorageObject)invocation.Arguments[0];
+                Assert.Equal("private", item.Bucket);
+                Assert.StartsWith("_quarantine/", item.Name, StringComparison.Ordinal);
+                Assert.True(objects.TryAdd(item.Name, 17));
+                return Task.FromResult(new StorageObject { Generation = 17, Size = 1 });
+            }));
+        client.Setup(value => value.GetObjectAsync("private", It.IsAny<string>(), It.IsAny<GetObjectOptions>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, GetObjectOptions, CancellationToken>((_, name, _, _) =>
+                Task.FromResult(new StorageObject { Generation = objects[name], Size = 1 }));
+        client.Setup(value => value.CopyObjectAsync("private", It.IsAny<string>(), "private", destinationName,
+                It.Is<CopyObjectOptions>(options => options.SourceGeneration == 17 && options.IfSourceGenerationMatch == 17 && options.IfGenerationMatch == 0),
+                It.IsAny<CancellationToken>()))
+            .Returns<string, string, string, string, CopyObjectOptions, CancellationToken>((_, source, _, destination, _, _) =>
+            {
+                Assert.Equal(17, objects[source]);
+                Assert.True(objects.TryAdd(destination, 31));
+                // Another actor already deleted the observed source after the copy committed.
+                Assert.True(objects.Remove(source));
+                return Task.FromResult(new StorageObject { Generation = 31, Size = 1 });
+            });
+        client.Setup(value => value.DeleteObjectAsync("private", It.IsAny<string>(),
+                It.Is<DeleteObjectOptions>(options => options.IfGenerationMatch == 17), It.IsAny<CancellationToken>()))
+            .Returns<string, string, DeleteObjectOptions, CancellationToken>((_, name, _, _) =>
+            {
+                deleteCalls.Add(name);
+                Assert.False(objects.ContainsKey(name));
+                return Task.FromException(new GoogleApiException("storage", "source absent") { HttpStatusCode = HttpStatusCode.NotFound });
+            });
+        var scanner = new Mock<IFileSafetyScanner>(MockBehavior.Strict);
+        scanner.Setup(value => value.ScanAsync(It.IsAny<IUploadFile>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FileSafetyResult(FileSafetyVerdict.Clean));
+        var options = Options.Create(new FileStorageOptions { Enabled = true, WritesEnabled = true, AllowedBuckets = ["private"] });
+        var gate = new LegacyFileRuntimeGate(options);
+        var signingCalls = 0;
+        var blobSigner = new Mock<UrlSigner.IBlobSigner>(MockBehavior.Strict);
+        blobSigner.SetupGet(value => value.Id).Returns("controlled@example.invalid");
+        blobSigner.SetupGet(value => value.Algorithm).Returns("GOOG4-RSA-SHA256");
+        blobSigner.Setup(value => value.CreateSignatureAsync(It.IsAny<byte[]>(), It.IsAny<UrlSigner.BlobSignerParameters>(), It.IsAny<CancellationToken>()))
+            .Callback(() => signingCalls++).ReturnsAsync("AQ==");
+        var service = new FileApplicationService(new GoogleCloudObjectStorage(client.Object, UrlSigner.FromBlobSigner(blobSigner.Object), journal), scanner.Object,
+            new UploadRepository(context, TimeProvider.System), journal, new ObjectNamePolicy(options, TimeProvider.System),
+            options, gate, NullLogger<FileApplicationService>.Instance);
+        var controller = new UploadsController(service, new IdempotentUploadCoordinator(new Mock<IUploadIdempotencyStore>(MockBehavior.Strict).Object), gate)
+        { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
+
+        IActionResult? result;
+        if (publicMove)
+            result = await controller.MoveUploadAsync("private", sourceName, "private", destinationName, request.Token);
+        else
+        {
+            var file = new FormFile(new MemoryStream([1]), 0, 1, "files", "part.stl")
+            { Headers = new HeaderDictionary(), ContentType = "model/stl" };
+            result = (await controller.UploadAsync("private", [file], prefix, request.Token)).Result;
+        }
+
+        var unavailable = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(unavailable.Value);
+        Assert.Equal(publicMove ? "Move outcome unknown" : "Upload outcome unknown", problem.Title);
+        Assert.Contains("requires reconciliation", problem.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(prefix, problem.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("checkpoint unavailable", problem.Detail, StringComparison.Ordinal);
+        Assert.Equal(0, signingCalls);
+        Assert.Single(deleteCalls);
+        Assert.NotEqual(destinationName, deleteCalls[0]);
+        Assert.Equal(31, Assert.Single(objects).Value);
+        Assert.Equal(destinationName, Assert.Single(objects).Key);
+        await using var readback = fixture.CreateContext();
+        var evidence = await readback.StorageMoveJournals.AsNoTracking().SingleAsync(value => value.DestinationObjectName == destinationName);
+        Assert.True(evidence.ScanClean);
+        Assert.Equal(17, evidence.SourceGeneration);
+        Assert.Equal(31, evidence.DestinationGeneration);
+        Assert.Equal(unknownCheckpointFails ? "Copied" : "Unknown", evidence.State);
+        Assert.Equal(deleteCalls[0], evidence.SourceObjectName);
+        Assert.False(await readback.Uploads.AnyAsync(value => value.Name == destinationName));
+        if (publicMove)
+        {
+            var upload = await readback.Uploads.SingleAsync(value => value.Name == sourceName);
+            Assert.Equal(created, upload.CreatedDate);
+            Assert.Equal(created, upload.ModifiedDate);
+        }
+    }
+
+    private sealed class FailingDeletionCheckpoint(
+        IStorageMoveJournal inner, CancellationTokenSource request, bool canceled, bool unknownCheckpointFails) : IStorageMoveJournal
+    {
+        public Task<StorageMoveEvidence?> FindAsync(Guid operationId, CancellationToken cancellationToken) => inner.FindAsync(operationId, cancellationToken);
+        public Task<bool> BeginAsync(Guid operationId, bool scanClean, string sourceBucket, string sourceObjectName, long sourceGeneration,
+            string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>
+            inner.BeginAsync(operationId, scanClean, sourceBucket, sourceObjectName, sourceGeneration, destinationBucket, destinationObjectName, cancellationToken);
+        public Task CopiedAsync(Guid operationId, long destinationGeneration, CancellationToken cancellationToken) => inner.CopiedAsync(operationId, destinationGeneration, cancellationToken);
+        public Task SourceDeletedAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            if (canceled) request.Cancel();
+            return Task.FromException(canceled ? new OperationCanceledException(request.Token) : new IOException("checkpoint unavailable"));
+        }
+        public Task MetadataCommittedAsync(Guid operationId, CancellationToken cancellationToken) => inner.MetadataCommittedAsync(operationId, cancellationToken);
+        public Task UnknownAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            Assert.True(cancellationToken.CanBeCanceled);
+            Assert.False(cancellationToken.IsCancellationRequested);
+            Assert.NotEqual(request.Token, cancellationToken);
+            return unknownCheckpointFails
+                ? Task.FromException(new IOException("unknown checkpoint unavailable"))
+                : inner.UnknownAsync(operationId, cancellationToken);
+        }
     }
 }
