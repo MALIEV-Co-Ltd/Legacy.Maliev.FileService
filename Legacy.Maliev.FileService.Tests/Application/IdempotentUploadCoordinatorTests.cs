@@ -11,51 +11,51 @@ public sealed class IdempotentUploadCoordinatorTests
     [Fact]
     public async Task ResponseLossRetry_ReplaysExactSignedResponseWithoutSecondExecution()
     {
-        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store); var executions = 0;
+        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); var executions = 0;
         var first = await Run(bytes: [1, 2, 3]);
         var replay = await Run(bytes: [1, 2, 3]);
         Assert.Equal(1, executions);
         Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(replay));
 
-        Task<UploadResultResponse> Run(byte[] bytes) => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", "orders/42", [new File("part.stl", "model/stl", bytes)], (_, _, _) =>
-        { executions++; return Task.FromResult(Response()); }, (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
+        Task<UploadResultResponse> Run(byte[] bytes) => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", "orders/42", [new File("part.stl", "model/stl", bytes)], (_, _, _, _) =>
+        { executions++; return Task.FromResult(Response()); }, (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
     }
 
     [Fact]
     public async Task SameWorkflowWithDifferentBytes_ConflictsWithoutExecution()
     {
-        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store); var executions = 0;
+        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); var executions = 0;
         await coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], Execute, Reconcile, default);
         await Assert.ThrowsAsync<UploadIdempotencyConflictException>(() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [2])], Execute, Reconcile, default));
         Assert.Equal(1, executions);
-        Task<UploadResultResponse> Execute(Guid _, string? __, CancellationToken ___) { executions++; return Task.FromResult(Response()); }
-        static Task<UploadResultResponse?> Reconcile(Guid _, string? __, CancellationToken ___) => Task.FromResult<UploadResultResponse?>(null);
+        Task<UploadResultResponse> Execute(Guid _, string? __, IReadOnlyList<IUploadFile> captured, CancellationToken ___) { executions++; return Task.FromResult(Response()); }
+        static Task<UploadResultResponse?> Reconcile(Guid _, string? __, IReadOnlyList<IUploadFile> captured, CancellationToken ___) => Task.FromResult<UploadResultResponse?>(null);
     }
 
     [Fact]
     public async Task SameWorkflowKey_IsIsolatedAcrossSignedPrincipals()
     {
-        var store = new MultiIdentityMemoryStore(); var coordinator = new IdempotentUploadCoordinator(store); var executions = 0;
+        var store = new MultiIdentityMemoryStore(); var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); var executions = 0;
         foreach (var principal in new[] { "intranet-service-a", "intranet-service-b" })
-            await coordinator.ExecuteAsync(principal, "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _) => { executions++; return Task.FromResult(Response()); }, (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
+            await coordinator.ExecuteAsync(principal, "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _, _) => { executions++; return Task.FromResult(Response()); }, (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
         Assert.Equal(2, executions);
     }
 
     [Fact]
     public async Task ConcurrentReplay_HasOneExecutorAndExplicitInProgressResult()
     {
-        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store); var gate = new TaskCompletionSource<UploadResultResponse>();
-        var first = coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _) => gate.Task, (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
+        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); var gate = new TaskCompletionSource<UploadResultResponse>();
+        var first = coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, captured, _) => { ((UploadSnapshotBatch)captured).Dispose(); return gate.Task; }, (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
         await store.Acquired.Task;
-        await Assert.ThrowsAsync<UploadIdempotencyInProgressException>(() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _) => throw new InvalidOperationException(), (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
+        await Assert.ThrowsAsync<UploadIdempotencyInProgressException>(() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _, _) => throw new InvalidOperationException(), (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
         gate.SetResult(Response()); await first;
     }
 
     [Fact]
     public async Task LeaseLoss_FailsClosedBeforeExecutorAndRetainsUnknownState()
     {
-        var store = new MemoryStore { LoseRenewal = true }; var coordinator = new IdempotentUploadCoordinator(store); var executed = false;
-        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _) => { executed = true; return Task.FromResult(Response()); }, (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
+        var store = new MemoryStore { LoseRenewal = true }; var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); var executed = false;
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _, _) => { executed = true; return Task.FromResult(Response()); }, (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
         Assert.False(executed); Assert.Equal("unknown", store.State);
     }
 
@@ -63,13 +63,13 @@ public sealed class IdempotentUploadCoordinatorTests
     public async Task InitialRenewalFailure_ReleasesReservationAndReportsUnavailable()
     {
         var store = new MemoryStore { ThrowRenewal = true };
-        var coordinator = new IdempotentUploadCoordinator(store);
+        var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture());
         var executed = false;
 
         await Assert.ThrowsAsync<UploadIdempotencyUnavailableException>(() => coordinator.ExecuteAsync(
             "intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])],
-            (_, _, _) => { executed = true; return Task.FromResult(Response()); },
-            (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
+            (_, _, _, _) => { executed = true; return Task.FromResult(Response()); },
+            (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
 
         Assert.False(executed);
         Assert.Equal(1, store.ReleaseCount);
@@ -80,26 +80,26 @@ public sealed class IdempotentUploadCoordinatorTests
     public async Task MidExecutionLeaseLoss_CancelsExecutorAndRetainsUnknownState()
     {
         var store = new MemoryStore { RenewalsBeforeLoss = 1 };
-        var coordinator = new IdempotentUploadCoordinator(store) { RenewalInterval = TimeSpan.FromMilliseconds(10) };
+        var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()) { RenewalInterval = TimeSpan.FromMilliseconds(10) };
         await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => coordinator.ExecuteAsync(
             "intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])],
-            async (_, _, token) => { await Task.Delay(Timeout.InfiniteTimeSpan, token); return Response(); },
-            (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
+            async (_, _, _, token) => { await Task.Delay(Timeout.InfiniteTimeSpan, token); return Response(); },
+            (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
         Assert.Equal("unknown", store.State);
     }
 
     [Fact]
     public async Task UnknownRetry_ReconcilesWithSameDeterministicGeneration()
     {
-        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store); Guid firstGeneration = default; Guid reconciledGeneration = default;
+        var store = new MemoryStore(); var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); Guid firstGeneration = default; Guid reconciledGeneration = default;
         await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => coordinator.ExecuteAsync(
             "intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])],
-            (generation, _, _) => { firstGeneration = generation; throw new IOException("response lost"); },
-            (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
+            (generation, _, _, _) => { firstGeneration = generation; throw new IOException("response lost"); },
+            (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
         var recovered = await coordinator.ExecuteAsync(
             "intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])],
-            (_, _, _) => throw new InvalidOperationException("must not execute twice"),
-            (generation, _, _) => { reconciledGeneration = generation; return Task.FromResult<UploadResultResponse?>(Response()); }, default);
+            (_, _, _, _) => throw new InvalidOperationException("must not execute twice"),
+            (generation, _, _, _) => { reconciledGeneration = generation; return Task.FromResult<UploadResultResponse?>(Response()); }, default);
         Assert.Equal(firstGeneration, reconciledGeneration);
         Assert.Equal(JsonSerializer.Serialize(Response()), JsonSerializer.Serialize(recovered));
     }
@@ -109,20 +109,20 @@ public sealed class IdempotentUploadCoordinatorTests
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 7, 17, 23, 59, 0, TimeSpan.Zero));
         var store = new MemoryStore();
-        var coordinator = new IdempotentUploadCoordinator(store) { Clock = clock };
+        var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()) { Clock = clock };
         string? executionPath = null;
         string? reconciliationPath = null;
 
         await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => coordinator.ExecuteAsync(
             "intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])],
-            (_, path, _) => { executionPath = path; throw new IOException("response lost"); },
-            (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
+            (_, path, _, _) => { executionPath = path; throw new IOException("response lost"); },
+            (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default));
 
         clock.Advance(TimeSpan.FromDays(1));
         await coordinator.ExecuteAsync(
             "intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])],
-            (_, _, _) => throw new InvalidOperationException("must not execute twice"),
-            (_, path, _) => { reconciliationPath = path; return Task.FromResult<UploadResultResponse?>(Response()); }, default);
+            (_, _, _, _) => throw new InvalidOperationException("must not execute twice"),
+            (_, path, _, _) => { reconciliationPath = path; return Task.FromResult<UploadResultResponse?>(Response()); }, default);
 
         Assert.Equal(executionPath, reconciliationPath);
         Assert.StartsWith("uploads/2026-7-17/", executionPath, StringComparison.Ordinal);
@@ -131,19 +131,19 @@ public sealed class IdempotentUploadCoordinatorTests
     [Fact]
     public async Task CompletionCancellation_RetainsExactResponseAndRetryResolvesWithoutExecution()
     {
-        var store = new MemoryStore { ThrowCompletionOnce = true }; var coordinator = new IdempotentUploadCoordinator(store); var executions = 0;
+        var store = new MemoryStore { ThrowCompletionOnce = true }; var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()); var executions = 0;
         await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => Run());
         var replay = await Run();
         Assert.Equal(1, executions); Assert.Equal("completed", store.State);
         Assert.Equal(JsonSerializer.Serialize(Response()), JsonSerializer.Serialize(replay));
-        Task<UploadResultResponse> Run() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _) => { executions++; return Task.FromResult(Response()); }, (_, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
+        Task<UploadResultResponse> Run() => coordinator.ExecuteAsync("intranet-service", "workflow-42", "maliev.com", null, [new File("part.stl", "model/stl", [1])], (_, _, _, _) => { executions++; return Task.FromResult(Response()); }, (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
     }
 
     [Fact]
     public async Task RollbackFailure_MarksIdempotentUploadUnknownAndRetainsActionableFailure()
     {
         var store = new MemoryStore();
-        var coordinator = new IdempotentUploadCoordinator(store);
+        var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture());
         var rollbackFailure = new UploadRollbackException(
             new InvalidOperationException("signing unavailable"),
             [new UploadCleanupFailure("maliev.com", "orders/42/part.step", new IOException("delete unavailable"))]);
@@ -154,8 +154,8 @@ public sealed class IdempotentUploadCoordinatorTests
             "maliev.com",
             "orders/42",
             [new File("part.step", "application/step", [1])],
-            (_, _, _) => throw rollbackFailure,
-            (_, _, _) => Task.FromResult<UploadResultResponse?>(null),
+            (_, _, _, _) => throw rollbackFailure,
+            (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null),
             CancellationToken.None));
 
         Assert.Same(rollbackFailure, exception.InnerException);

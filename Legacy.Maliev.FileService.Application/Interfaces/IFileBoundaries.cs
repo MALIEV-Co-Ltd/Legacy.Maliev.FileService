@@ -25,6 +25,16 @@ public interface IFileService
 /// <summary>Durable checkpoint for a private object move; coordinates are never logged.</summary>
 public interface IStorageMoveJournal
 {
+    /// <summary>Atomically fences every exact acknowledged promotion before metadata submission.</summary>
+    Task<bool> TryBeginMetadataSubmissionAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken);
+    /// <summary>Atomically claims every exact acknowledged promotion before conditional compensation.</summary>
+    Task<bool> TryBeginCompensationAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken);
+    /// <summary>Records acknowledged metadata commitment for the complete fenced batch.</summary>
+    Task MetadataSubmissionCommittedAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken);
+    /// <summary>Records one exact-generation compensation outcome without rewriting its evidence.</summary>
+    Task RecordCompensationAsync(StorageMoveClaim claim, CompensationDisposition disposition, CancellationToken cancellationToken);
+    /// <summary>Reads one unique, non-conflicting committed scan proof for an exact destination.</summary>
+    Task<StorageMoveEvidence?> FindCommittedSourceAsync(string bucket, string objectName, CancellationToken cancellationToken);
     /// <summary>Reads the exact durable evidence for an operation.</summary>
     Task<StorageMoveEvidence?> FindAsync(Guid operationId, CancellationToken cancellationToken);
     /// <summary>Records the observed source generation before any copy; false means the operation already exists.</summary>
@@ -43,6 +53,20 @@ public interface IStorageMoveJournal
 public sealed record StorageMoveEvidence(bool ScanClean, string SourceBucket, string SourceObjectName,
     long SourceGeneration, string DestinationBucket, string DestinationObjectName,
     long? DestinationGeneration, string State);
+
+/// <summary>Binds a batch transition to an immutable operation and every recorded generation/coordinate.</summary>
+public sealed record StorageMoveClaim(Guid OperationId, StorageMoveEvidence Evidence);
+
+/// <summary>Distinguishes positively acknowledged removal, confirmed absence and uncertain compensation.</summary>
+public enum CompensationDisposition
+{
+    /// <summary>The exact destination generation was positively removed.</summary>
+    Removed,
+    /// <summary>The provider confirmed the destination was already absent.</summary>
+    Absent,
+    /// <summary>The provider or checkpoint did not positively establish a final outcome.</summary>
+    Unknown,
+}
 
 /// <summary>Read-only live GCS generation and size.</summary>
 public sealed record StorageObjectEvidence(long Generation, long Size);

@@ -97,6 +97,8 @@ public static class FileServiceRuntimeRegistration
         services.TryAddScoped<IUploadRepository, UploadRepository>();
         if (legacyWritesEnabled) services.TryAddScoped<IStorageMoveJournal, StorageMoveJournalRepository>();
         else services.TryAddScoped<IStorageMoveJournal, DisabledStorageMoveJournal>();
+        if (legacyWritesEnabled) services.TryAddScoped<IQuarantineUploadIntent, QuarantineUploadIntentRepository>();
+        else services.TryAddScoped<IQuarantineUploadIntent, DisabledQuarantineUploadIntent>();
         services.TryAddScoped<IUploadIdempotencyStore, RedisUploadIdempotencyStore>();
         services.TryAddScoped<IInstantQuoteFileRepository, InstantQuoteFileRepository>();
         services.TryAddScoped<IInstantQuoteCleanupRepository, InstantQuoteFileRepository>();
@@ -106,6 +108,7 @@ public static class FileServiceRuntimeRegistration
         services.TryAddScoped<IInstantQuoteFileService, InstantQuoteFileService>();
         services.TryAddScoped<InstantQuoteTemporaryObjectCleanupService>();
         services.TryAddScoped<IdempotentUploadCoordinator>();
+        services.TryAddSingleton<UploadSnapshotCapture>();
         services.TryAddSingleton<IInstantQuoteMultipartReader, SingleFileMultipartReader>();
         if (instantQuoteCleanupEnabled)
         {

@@ -218,7 +218,7 @@ public sealed class FileControllerContractTests
         bool writesEnabled = true) =>
         new(
             (service ?? new Mock<IFileService>()).Object,
-            new IdempotentUploadCoordinator(store),
+            new IdempotentUploadCoordinator(store, new UploadSnapshotCapture()),
             new LegacyFileRuntimeGate(Options.Create(new FileStorageOptions
             {
                 Enabled = enabled,
@@ -279,6 +279,7 @@ public sealed class FileControllerMoveCheckpointTests(PostgreSqlFixture fixture)
         var sourceName = $"{prefix}/source.stl";
         var destinationName = $"{prefix}/part.stl";
         var created = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        StorageMoveJournal? priorProof = null;
         if (publicMove)
         {
             context.Uploads.Add(new Upload
@@ -291,6 +292,17 @@ public sealed class FileControllerMoveCheckpointTests(PostgreSqlFixture fixture)
                 ModifiedDate = created
             });
             await context.SaveChangesAsync();
+            // Synthetic prerequisite only: prior committed clean lineage must match
+            // the controlled live source generation17, not a fabricated name-only grant.
+            // Missing lineage refusal is covered by actual Production HTTP controls.
+            var priorId = Guid.NewGuid();
+            var priorJournal = new StorageMoveJournalRepository(context, TimeProvider.System);
+            Assert.True(await priorJournal.BeginAsync(priorId, true, "private", $"_quarantine/{priorId:N}/{sourceName}", 5,
+                "private", sourceName, default));
+            await priorJournal.CopiedAsync(priorId, 17, default);
+            await priorJournal.SourceDeletedAsync(priorId, default);
+            await priorJournal.MetadataCommittedAsync(priorId, default);
+            priorProof = await context.StorageMoveJournals.AsNoTracking().SingleAsync(row => row.OperationId == priorId);
         }
 
         using var request = new CancellationTokenSource();
@@ -342,10 +354,11 @@ public sealed class FileControllerMoveCheckpointTests(PostgreSqlFixture fixture)
         blobSigner.SetupGet(value => value.Algorithm).Returns("GOOG4-RSA-SHA256");
         blobSigner.Setup(value => value.CreateSignatureAsync(It.IsAny<byte[]>(), It.IsAny<UrlSigner.BlobSignerParameters>(), It.IsAny<CancellationToken>()))
             .Callback(() => signingCalls++).ReturnsAsync("AQ==");
+        var snapshots = new UploadSnapshotCapture();
         var service = new FileApplicationService(new GoogleCloudObjectStorage(client.Object, UrlSigner.FromBlobSigner(blobSigner.Object), journal), scanner.Object,
             new UploadRepository(context, TimeProvider.System), journal, new ObjectNamePolicy(options, TimeProvider.System),
-            options, gate, NullLogger<FileApplicationService>.Instance);
-        var controller = new UploadsController(service, new IdempotentUploadCoordinator(new Mock<IUploadIdempotencyStore>(MockBehavior.Strict).Object), gate)
+            options, gate, NullLogger<FileApplicationService>.Instance, new QuarantineUploadIntentRepository(context, TimeProvider.System), snapshots);
+        var controller = new UploadsController(service, new IdempotentUploadCoordinator(new Mock<IUploadIdempotencyStore>(MockBehavior.Strict).Object, snapshots), gate)
         { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
 
         IActionResult? result;
@@ -383,12 +396,19 @@ public sealed class FileControllerMoveCheckpointTests(PostgreSqlFixture fixture)
             var upload = await readback.Uploads.SingleAsync(value => value.Name == sourceName);
             Assert.Equal(created, upload.CreatedDate);
             Assert.Equal(created, upload.ModifiedDate);
+            var retained = await readback.StorageMoveJournals.AsNoTracking().SingleAsync(row => row.OperationId == priorProof!.OperationId);
+            Assert.Equivalent(priorProof, retained, strict: true);
         }
     }
 
     private sealed class FailingDeletionCheckpoint(
         IStorageMoveJournal inner, CancellationTokenSource request, bool canceled, bool unknownCheckpointFails) : IStorageMoveJournal
     {
+        public Task<bool> TryBeginMetadataSubmissionAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken token) => inner.TryBeginMetadataSubmissionAsync(claims, token);
+        public Task<bool> TryBeginCompensationAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken token) => inner.TryBeginCompensationAsync(claims, token);
+        public Task MetadataSubmissionCommittedAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken token) => inner.MetadataSubmissionCommittedAsync(claims, token);
+        public Task RecordCompensationAsync(StorageMoveClaim claim, CompensationDisposition disposition, CancellationToken token) => inner.RecordCompensationAsync(claim, disposition, token);
+        public Task<StorageMoveEvidence?> FindCommittedSourceAsync(string bucket, string name, CancellationToken token) => inner.FindCommittedSourceAsync(bucket, name, token);
         public Task<StorageMoveEvidence?> FindAsync(Guid operationId, CancellationToken cancellationToken) => inner.FindAsync(operationId, cancellationToken);
         public Task<bool> BeginAsync(Guid operationId, bool scanClean, string sourceBucket, string sourceObjectName, long sourceGeneration,
             string destinationBucket, string destinationObjectName, CancellationToken cancellationToken) =>

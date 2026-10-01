@@ -4,9 +4,32 @@ using Legacy.Maliev.FileService.Domain;
 
 namespace Legacy.Maliev.FileService.Application.Services;
 
+/// <summary>Fail-closed initial upload authority for write-disabled runtimes.</summary>
+public sealed class DisabledQuarantineUploadIntent : IQuarantineUploadIntent
+{
+    private static Exception Unavailable() => new MalwareScannerUnavailableException("Legacy file writes are disabled.");
+    /// <inheritdoc />
+    public Task PrepareAsync(Guid operationId, Guid parentOperationId, string bucket, string objectName,
+        string contentType, long declaredSize, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+    /// <inheritdoc />
+    public Task AcknowledgeAsync(Guid operationId, long generation, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+    /// <inheritdoc />
+    public Task UnknownAsync(Guid operationId, CancellationToken cancellationToken) => Task.FromException(Unavailable());
+}
+
 /// <summary>Fail-closed move journal for write-disabled runtimes.</summary>
 public sealed class DisabledStorageMoveJournal : IStorageMoveJournal
 {
+    /// <inheritdoc />
+    public Task<bool> TryBeginMetadataSubmissionAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken) => throw new UploadOutcomeUnknownException("Storage recovery is unavailable.");
+    /// <inheritdoc />
+    public Task<bool> TryBeginCompensationAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken) => throw new UploadOutcomeUnknownException("Storage recovery is unavailable.");
+    /// <inheritdoc />
+    public Task MetadataSubmissionCommittedAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken) => throw new UploadOutcomeUnknownException("Storage recovery is unavailable.");
+    /// <inheritdoc />
+    public Task RecordCompensationAsync(StorageMoveClaim claim, CompensationDisposition disposition, CancellationToken cancellationToken) => throw new UploadOutcomeUnknownException("Storage recovery is unavailable.");
+    /// <inheritdoc />
+    public Task<StorageMoveEvidence?> FindCommittedSourceAsync(string bucket, string objectName, CancellationToken cancellationToken) => throw new UploadOutcomeUnknownException("Storage recovery is unavailable.");
     private static Exception Unavailable() => new MalwareScannerUnavailableException("Legacy file writes are disabled.");
 
     /// <inheritdoc />

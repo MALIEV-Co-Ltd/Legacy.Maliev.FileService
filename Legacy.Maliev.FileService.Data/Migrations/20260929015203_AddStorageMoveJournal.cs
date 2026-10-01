@@ -48,8 +48,7 @@ namespace Legacy.Maliev.FileService.Data.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "StorageMoveJournal");
+            throw new NotSupportedException("Storage move recovery authority is forward-only and cannot be dropped by downgrade.");
         }
     }
 }

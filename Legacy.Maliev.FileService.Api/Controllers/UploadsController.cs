@@ -127,8 +127,8 @@ public sealed class UploadsController(
                 bucket,
                 path,
                 uploadFiles,
-                (generation, effectivePath, token) => service.UploadAsync(bucket, effectivePath, uploadFiles, generation, token),
-                (generation, effectivePath, token) => service.ReconcileUploadAsync(bucket, effectivePath, uploadFiles, generation, token),
+                (generation, effectivePath, captured, token) => service.UploadAsync(bucket, effectivePath, captured, generation, token),
+                (generation, effectivePath, captured, token) => service.ReconcileUploadAsync(bucket, effectivePath, captured, generation, token),
                 cancellationToken);
             return Created("Google Cloud Storage", result);
         }
