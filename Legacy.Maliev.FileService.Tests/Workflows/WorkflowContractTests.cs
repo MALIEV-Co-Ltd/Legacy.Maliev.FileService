@@ -42,7 +42,7 @@ public sealed class WorkflowContractTests
         var inputs = Assert.IsType<YamlMappingNode>(ReadNode(publish, "with"));
 
         Assert.Equal(
-            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@73dd7304ffe85ec504389fd7664cc39070b9f148",
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/.github/workflows/publish-image.yml@503e8846390a597c267d2889b33a9c26863389b3",
             ReadScalar(publish, "uses"));
 
         Assert.Matches("^[0-9a-f]{40}$", serviceDefaultsRef);
