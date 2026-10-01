@@ -33,6 +33,8 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
 {
     private const string InitialMigration = "20260715033302_InitialPostgresCompatibility";
     private const string InstantQuoteMigration = "20260719033405_AddInstantQuoteUploadWorkflow";
+    private const string StorageMoveMigration = "20260929015203_AddStorageMoveJournal";
+    private const string QuarantineIntentMigration = "20261001023704_AddQuarantineUploadIntent";
 
     [Fact]
     public async Task InitialMigration_FreshPostgreSql_CreatesLegacyUploadTableWithoutCustomXmin()
@@ -85,12 +87,13 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
-    public void InstantQuoteMigration_UnshippedSquash_HasOneAdditiveFinalSchemaMigration()
+    public void MigrationInventory_ContainsReviewedAdditiveMigrations()
     {
         using var context = fixture.CreateContext();
         var migrations = context.GetService<IMigrationsAssembly>().Migrations.Keys.ToArray();
 
-        Assert.Equal([InitialMigration, InstantQuoteMigration], migrations);
+        // Inventory only: actual Up/shape/rollback/retention/model tests establish behavior.
+        Assert.Equal([InitialMigration, InstantQuoteMigration, StorageMoveMigration, QuarantineIntentMigration], migrations);
     }
 
     [Fact]
@@ -114,22 +117,24 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
-    public async Task InstantQuoteMigration_RollbackThenUp_RecreatesFinalSchemaWithoutPendingChanges()
+    public async Task InstantQuoteMigration_HistoricalRollbackThenUp_PreservesOriginalWorkflowSchemaContract()
     {
         await using var context = fixture.CreateContext();
         await ResetSchemaAsync(context);
         try
         {
             var migrator = context.GetService<IMigrator>();
-            await migrator.MigrateAsync();
+            await migrator.MigrateAsync(InstantQuoteMigration);
             await migrator.MigrateAsync(InitialMigration);
             Assert.False(await TableExistsAsync(context, "InstantQuoteUploadSession"));
 
-            await migrator.MigrateAsync();
+            await migrator.MigrateAsync(InstantQuoteMigration);
 
             Assert.True(await TableExistsAsync(context, "InstantQuoteUploadSession"));
             Assert.True(await TableExistsAsync(context, "InstantQuoteUploadFile"));
             Assert.True(await TableExistsAsync(context, "InstantQuoteFinalization"));
+            Assert.False(await TableExistsAsync(context, "StorageMoveJournal"));
+            Assert.False(await TableExistsAsync(context, "QuarantineUploadIntent"));
             Assert.False(context.Database.HasPendingModelChanges());
         }
         finally

@@ -3,6 +3,7 @@ using System;
 using Legacy.Maliev.FileService.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Legacy.Maliev.FileService.Data.Migrations
 {
     [DbContext(typeof(FileDbContext))]
-    partial class FileDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260929015203_AddStorageMoveJournal")]
+    partial class AddStorageMoveJournal
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -229,59 +232,6 @@ namespace Legacy.Maliev.FileService.Data.Migrations
                     b.ToTable("InstantQuoteUploadSession", null, t =>
                         {
                             t.HasCheckConstraint("CK_InstantQuoteUploadSession_TokenHash_Length", "octet_length(\"TokenHash\") = 32");
-                        });
-                });
-
-            modelBuilder.Entity("Legacy.Maliev.FileService.Domain.QuarantineUploadIntent", b =>
-                {
-                    b.Property<Guid>("OperationId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<long?>("AcknowledgedGeneration")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Bucket")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<string>("ContentType")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("DeclaredSize")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("ModifiedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ObjectName")
-                        .IsRequired()
-                        .HasMaxLength(1024)
-                        .HasColumnType("character varying(1024)");
-
-                    b.Property<Guid>("ParentOperationId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.HasKey("OperationId");
-
-                    b.HasIndex("Bucket", "ObjectName");
-
-                    b.ToTable("QuarantineUploadIntent", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_QuarantineUploadIntent_DeclaredSize", "\"DeclaredSize\" > 0");
-
-                            t.HasCheckConstraint("CK_QuarantineUploadIntent_Generation", "\"AcknowledgedGeneration\" IS NULL OR \"AcknowledgedGeneration\" > 0");
                         });
                 });
 

@@ -7,7 +7,8 @@ namespace Legacy.Maliev.FileService.Application.Services;
 
 /// <summary>Coordinates replay-safe ownership around the existing scanned-upload workflow.</summary>
 /// <param name="store">The durable fenced checkpoint store.</param>
-public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store)
+/// <param name="snapshots">The singleton whole-batch immutable capture admission.</param>
+public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store, UploadSnapshotCapture snapshots)
 {
     /// <summary>Gets or initializes the interval used to renew active upload ownership.</summary>
     public TimeSpan RenewalInterval { get; init; } = TimeSpan.FromSeconds(30);
@@ -18,11 +19,13 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store)
     /// <returns>The exact completed or reconciled upload response.</returns>
     public async Task<UploadResultResponse> ExecuteAsync(
         string principalId, string? workflowKey, string bucket, string? path, IReadOnlyList<IUploadFile> files,
-        Func<Guid, string?, CancellationToken, Task<UploadResultResponse>> execute,
-        Func<Guid, string?, CancellationToken, Task<UploadResultResponse?>> reconcile,
+        Func<Guid, string?, IReadOnlyList<IUploadFile>, CancellationToken, Task<UploadResultResponse>> execute,
+        Func<Guid, string?, IReadOnlyList<IUploadFile>, CancellationToken, Task<UploadResultResponse?>> reconcile,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(workflowKey)) return await execute(Guid.NewGuid(), path, cancellationToken);
+        using var snapshot = await snapshots.CaptureAsync(files, cancellationToken);
+        files = snapshot;
+        if (string.IsNullOrWhiteSpace(workflowKey)) return await execute(Guid.NewGuid(), path, files, cancellationToken);
         var identity = Identity(principalId, workflowKey);
         var fingerprint = await FingerprintAsync(bucket, path, files, cancellationToken);
         var generation = Generation(identity, fingerprint);
@@ -44,7 +47,7 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store)
                 return acquired.Response;
             }
             UploadResultResponse? reconciled;
-            try { reconciled = await reconcile(generation, acquired.EffectivePath, cancellationToken); }
+            try { reconciled = await reconcile(generation, acquired.EffectivePath, files, cancellationToken); }
             catch (Exception exception) { throw new UploadOutcomeUnknownException("Upload reconciliation is temporarily unavailable.", exception); }
             if (reconciled is null) throw new UploadOutcomeUnknownException("The prior upload outcome requires reconciliation.");
             try { await store.CompleteAsync(identity, fingerprint, acquired.ReservationId!, reconciled, cancellationToken); }
@@ -67,7 +70,7 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store)
         var ownershipLost = false;
         var renew = RenewAsync();
         UploadResultResponse response;
-        try { response = await execute(generation, acquired.EffectivePath, execution.Token); }
+        try { response = await execute(generation, acquired.EffectivePath, files, execution.Token); }
         catch (Exception exception) when (exception is FileUploadValidationException or MalwareDetectedException or MalwareScannerUnavailableException)
         { execution.Cancel(); await renew; await ReleaseAsync(identity, reservation); throw; }
         catch (Exception exception)

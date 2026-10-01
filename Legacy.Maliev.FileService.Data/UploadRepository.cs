@@ -44,7 +44,7 @@ public sealed class UploadRepository(FileDbContext dbContext, TimeProvider timeP
         CancellationToken cancellationToken)
     {
         var modified = timeProvider.GetUtcNow().UtcDateTime;
-        await dbContext.Uploads
+        var updated = await dbContext.Uploads
             .Where(upload => upload.Bucket == sourceBucket && upload.Name == sourceObjectName)
             .ExecuteUpdateAsync(
                 setters => setters
@@ -52,5 +52,6 @@ public sealed class UploadRepository(FileDbContext dbContext, TimeProvider timeP
                     .SetProperty(upload => upload.Name, destinationObjectName)
                     .SetProperty(upload => upload.ModifiedDate, modified),
                 cancellationToken);
+        if (updated != 1) throw new DbUpdateConcurrencyException("Clean upload metadata changed during move.");
     }
 }

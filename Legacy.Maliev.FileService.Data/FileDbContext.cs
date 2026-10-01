@@ -12,6 +12,12 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
     /// <summary>Gets clean upload metadata.</summary>
     public DbSet<Upload> Uploads => Set<Upload>();
 
+    /// <summary>Gets durable generation-bound move evidence.</summary>
+    public DbSet<StorageMoveJournal> StorageMoveJournals => Set<StorageMoveJournal>();
+
+    /// <summary>Gets durable authority for private initial uploads, including unknown acknowledgments.</summary>
+    public DbSet<QuarantineUploadIntent> QuarantineUploadIntents => Set<QuarantineUploadIntent>();
+
     /// <summary>Gets instant-quotation upload sessions.</summary>
     public DbSet<InstantQuoteUploadSession> InstantQuoteUploadSessions => Set<InstantQuoteUploadSession>();
 
@@ -41,6 +47,38 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         upload.HasIndex(value => new { value.Bucket, value.Name })
             .IsUnique()
             .HasDatabaseName("IX_Upload_Bucket_Name");
+
+        var move = modelBuilder.Entity<StorageMoveJournal>();
+        move.ToTable("StorageMoveJournal", table =>
+        {
+            table.HasCheckConstraint("CK_StorageMoveJournal_SourceGeneration", "\"SourceGeneration\" > 0");
+            table.HasCheckConstraint("CK_StorageMoveJournal_DestinationGeneration", "\"DestinationGeneration\" IS NULL OR \"DestinationGeneration\" > 0");
+        });
+        move.HasKey(value => value.OperationId);
+        move.Property(value => value.SourceBucket).HasMaxLength(255).IsRequired();
+        move.Property(value => value.SourceObjectName).HasMaxLength(1024).IsRequired();
+        move.Property(value => value.DestinationBucket).HasMaxLength(255).IsRequired();
+        move.Property(value => value.DestinationObjectName).HasMaxLength(1024).IsRequired();
+        move.Property(value => value.State).HasMaxLength(32).IsRequired();
+        move.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
+        move.Property(value => value.ModifiedAt).HasColumnType("timestamp with time zone");
+        move.HasIndex(value => new { value.SourceBucket, value.SourceObjectName });
+        move.HasIndex(value => new { value.DestinationBucket, value.DestinationObjectName });
+
+        var intent = modelBuilder.Entity<QuarantineUploadIntent>();
+        intent.ToTable("QuarantineUploadIntent", table =>
+        {
+            table.HasCheckConstraint("CK_QuarantineUploadIntent_Generation", "\"AcknowledgedGeneration\" IS NULL OR \"AcknowledgedGeneration\" > 0");
+            table.HasCheckConstraint("CK_QuarantineUploadIntent_DeclaredSize", "\"DeclaredSize\" > 0");
+        });
+        intent.HasKey(value => value.OperationId);
+        intent.Property(value => value.Bucket).HasMaxLength(255).IsRequired();
+        intent.Property(value => value.ObjectName).HasMaxLength(1024).IsRequired();
+        intent.Property(value => value.ContentType).HasMaxLength(255).IsRequired();
+        intent.Property(value => value.State).HasMaxLength(32).IsRequired();
+        intent.Property(value => value.CreatedAt).HasColumnType("timestamp with time zone");
+        intent.Property(value => value.ModifiedAt).HasColumnType("timestamp with time zone");
+        intent.HasIndex(value => new { value.Bucket, value.ObjectName });
 
         var session = modelBuilder.Entity<InstantQuoteUploadSession>();
         session.ToTable("InstantQuoteUploadSession", table =>
