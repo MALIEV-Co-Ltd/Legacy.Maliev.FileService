@@ -23,6 +23,8 @@ The generated `Maliev.UploadService.Api.xml` path was removed by `03dc9a1271c16e
 
 All six obligations remain pending until the responsible producer/operations boundaries have matching evidence. No live IAM, deployment, storage, or customer-data acceptance is asserted here.
 
+Code migration can be accepted through real credential-adapter tests and reviewed rendered-manifest, preflight, and ordering fixtures without applying live infrastructure. The pending status here reflects missing code-boundary evidence. Actual runtime KSA/GSA/IAM deployment and cloud access remain separately deferred operational readiness work; they are not prerequisites for completing the source-code migration.
+
 ## Local publisher checks
 
 The repository's [publisher workflow](../.github/workflows/publish-image.yml) is dormant unless its explicit legacy deployment gate is enabled. [Publisher contract tests](../Legacy.Maliev.FileService.Tests/PublishWorkflowPermissionContractTests.cs) cover the reviewed reusable producer pin, exact dependency pins, minimal job permissions, dedicated publisher inputs, and complementary admission conditions. Draft negative cases reject widened image/context/environment scope, floating dependencies, missing identity inputs, and weakened conditions.
