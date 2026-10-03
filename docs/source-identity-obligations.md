@@ -12,14 +12,14 @@ The generated `Maliev.UploadService.Api.xml` path was removed by `03dc9a1271c16e
 
 ## Boundaries that remain open
 
-| Original guard | What publisher configuration can establish | Required additional evidence |
+| Original guard | What publisher configuration can establish | Required code-equivalence evidence without applying resources |
 | --- | --- | --- |
-| Dedicated runtime Kubernetes service account | Dedicated publisher identity input only | Runtime Deployment service-account binding |
-| Dedicated Google identity and projected token | Publisher WIF inputs only | Runtime KSA/GSA mapping and token availability |
-| Service account applied before Deployment | No runtime apply is performed by these tests | Reviewed infrastructure application ordering |
-| Application-only release changes image only | Dormant publisher admission and legacy image/context scope | Existing-workload image update without infrastructure mutation |
-| Narrow object, signing, and WIF roles | Minimal GitHub publisher permissions | Separately reviewed runtime IAM/bucket/signing roles |
-| IAM preflight before image construction | Immutable reusable-workflow pin | Actual shared producer preflight/build ordering |
+| Dedicated runtime Kubernetes service account | Dedicated publisher identity input only | Real emitted Deployment selects the dedicated KSA |
+| Dedicated Google identity and projected token | Publisher WIF inputs only | Parsed KSA annotation/token intent, namespace/KSA/GSA mismatch controls, and actual ADC registration |
+| Service account applied before Deployment | No runtime apply is performed by these tests | Actual plan through a recording adapter proves KSA-before-Deployment ordering and failure stops subsequent calls |
+| Application-only release changes image only | Dormant publisher admission and legacy image/context scope | Actual named-image update adapter preserves KSA, environment, sidecars, and infrastructure |
+| Narrow object, signing, and WIF roles | Minimal GitHub publisher permissions | Real policy parser/admission checks literal bucket `storage.objectUser`, KSA `workloadIdentityUser`, and signing `serviceAccountTokenCreator` roles |
+| IAM preflight before image construction | Immutable reusable-workflow pin | Actual orchestrator with controlled policy reader/image builder proves IAM-read failure makes zero build, publish, or workload calls |
 
 All six obligations remain pending until the responsible producer/operations boundaries have matching evidence. No live IAM, deployment, storage, or customer-data acceptance is asserted here.
 
