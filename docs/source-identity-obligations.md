@@ -4,7 +4,7 @@ This note records source review for [issue 50](https://github.com/MALIEV-Co-Ltd/
 
 ## Reviewed source
 
-The reviewed private source head is `135e526d0dab85c415b3afdcefd7b70fe2c82e2f`. Source objects were read without changing the original repository. The obligations below originate in `c3450c9d9a75f04b32eeed91d05d95b9f7a2c449`, parent `ca2182c077bd4dde532a99a00b5cd945c1ed1849`, which added the upload workload-identity deployment tests.
+The reviewed private source head is `135e526d0dab85c415b3afdcefd7b70fe2c82e2f`. Source objects were read without changing the original repository. The six-guard upload workload-identity suite was introduced by `4533669fa5231368f17c4b59b17c3e2f52e24a89`, parent `6de82fd9760e86c71ddba3085879a63b43faff9f`. Later `c3450c9d9a75f04b32eeed91d05d95b9f7a2c449`, parent `ca2182c077bd4dde532a99a00b5cd945c1ed1849`, modified its existing application-only release case; it did not introduce the suite. That change constrained the safe-rollout helper's exceptional patch behavior while continuing to prohibit workload-identity infrastructure mutation.
 
 Two earlier credential-wrapper paths are absent at that head: `Maliev.UploadService.GoogleCloudStorage/IServiceAccount.cs` and `ServiceAccount.cs`. Both were removed by `56014f2efc7c7f24b777c51d17a454e023d12bdd` when credential acquisition moved to an injected `IGoogleCredentialProvider`. The retained provider supports Application Default Credentials. This is source supersession evidence, not authorization to restore embedded credentials or a claim that runtime identity is configured. This compatibility service requires ADC/WIF and must not add credential files.
 
