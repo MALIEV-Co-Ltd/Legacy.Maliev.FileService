@@ -109,8 +109,8 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_RejectsSharedActionMainWithPinnedShaComment()
     {
         AssertMutationRejected(
-            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@73dd7304ffe85ec504389fd7664cc39070b9f148",
-            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@main # 73dd7304ffe85ec504389fd7664cc39070b9f148");
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@e3a6093324a24968876782153286f52db8b29fd8",
+            "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@main # e3a6093324a24968876782153286f52db8b29fd8");
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public sealed class WorkflowContractTests
 internal static partial class WorkflowContractValidator
 {
     private const string CheckoutAction = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
-    private const string SharedValidationAction = "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@73dd7304ffe85ec504389fd7664cc39070b9f148";
+    private const string SharedValidationAction = "MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@e3a6093324a24968876782153286f52db8b29fd8";
 
     public static void Validate(string workflow)
     {
@@ -272,10 +272,49 @@ internal static partial class WorkflowContractValidator
         RejectDuplicatedValidationActionsAndCommands(jobs);
 
         var steps = RequireSequence(validateJob, "steps");
-        if (steps.Children.Count != 4)
+        if (steps.Children.Count != 6)
         {
-            throw new InvalidOperationException("Validate job must contain exactly four caller-owned steps.");
+            throw new InvalidOperationException("Validate job must contain four validation and two evidence steps.");
         }
+
+        var environment = RequireMapping(validateJob, "env");
+        if (environment.Children.Count != 4)
+        {
+            throw new InvalidOperationException("Validate environment must contain only dependency root and evidence properties.");
+        }
+
+        RequireScalarValue(environment, "MalievWorkspaceRoot", "${{ github.workspace }}/.dependencies");
+        RequireScalarValue(environment, "VSTestCollect", "XPlat Code Coverage");
+        RequireScalarValue(environment, "VSTestLogger", "trx");
+        RequireScalarValue(environment, "VSTestResultsDirectory", "${{ github.workspace }}/runner-results");
+
+        var gate = RequireMapping(steps.Children[4], "coverage gate");
+        if (gate.Children.Count != 2)
+        {
+            throw new InvalidOperationException("Coverage gate must contain only name and run.");
+        }
+
+        RequireScalarValue(gate, "name", "Gate owned production coverage");
+        RequireScalarValue(gate, "run", "python3 scripts/verify-runner-coverage.py runner-results");
+        var evidence = RequireMapping(steps.Children[5], "evidence upload");
+        if (evidence.Children.Count != 4)
+        {
+            throw new InvalidOperationException("Evidence upload must contain exactly name, if, uses and with.");
+        }
+
+        RequireScalarValue(evidence, "name", "Preserve validation evidence");
+        RequireScalarValue(evidence, "if", "always()");
+        RequireScalarValue(evidence, "uses", "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+        var evidenceInputs = RequireMapping(evidence, "with");
+        if (evidenceInputs.Children.Count != 4)
+        {
+            throw new InvalidOperationException("Evidence upload must have exactly four bounded inputs.");
+        }
+
+        RequireScalarValue(evidenceInputs, "name", "file-validation-${{ github.sha }}");
+        RequireScalarValue(evidenceInputs, "path", "runner-results");
+        RequireScalarValue(evidenceInputs, "if-no-files-found", "warn");
+        RequireScalarValue(evidenceInputs, "retention-days", "7");
 
         ValidateStep(
             steps.Children[0],
