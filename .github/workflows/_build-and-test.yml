@@ -50,7 +50,8 @@ jobs:
           persist-credentials: false
       - name: Verify exact consumer source before compilation
         run: |
-          echo '98a4b2954e9dede6c3d237af1ae9b42198dec7f61835af22a61e601ded731bea  .dependencies/Legacy.Maliev.Intranet/Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs' | sha256sum --check --strict
+          git -C .dependencies/Legacy.Maliev.Intranet show 3f5f7542c93cb085757130971c4fc7cf61043f01:Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs | sha256sum | awk '$1 != "98a4b2954e9dede6c3d237af1ae9b42198dec7f61835af22a61e601ded731bea" { exit 1 }'
+          echo 'a4a31a998cc168709d0914fa19b4836f5da219c73a3d6f99c7a2e40d15429758  .dependencies/Legacy.Maliev.Intranet/Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs' | sha256sum --check --strict
       - name: Validate .NET solution
         uses: MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@e3a6093324a24968876782153286f52db8b29fd8
         with:
