@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Google;
+using Legacy.Maliev.Intranet.PurchaseOrders;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Application.Interfaces;
@@ -49,11 +50,16 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         Assert.Contains("X-Goog-Expires=604800", uri.Query, StringComparison.Ordinal);
         Assert.Contains("response-content-disposition=", uri.Query, StringComparison.Ordinal);
         Assert.Equal(1, factory.SignCalls);
+        Assert.Equal(1, factory.GetCalls);
+        Assert.Contains("generation=31", uri.Query, StringComparison.Ordinal);
+        AssertSignedCanonicalDigest(factory, uri);
         Assert.Null(factory.Services.GetService<IIamServiceClient>());
         using var scope = factory.Services.CreateScope();
         Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
         Assert.IsType<GoogleCloudObjectStorage>(scope.ServiceProvider.GetRequiredService<IObjectStorage>());
         Assert.IsType<UploadRepository>(scope.ServiceProvider.GetRequiredService<IUploadRepository>());
+        Assert.IsType<StorageMoveJournalRepository>(scope.ServiceProvider.GetRequiredService<IStorageReadJournal>());
+        Assert.IsType<DisabledStorageMoveJournal>(scope.ServiceProvider.GetRequiredService<IStorageMoveJournal>());
     }
 
     [Fact]
@@ -92,13 +98,19 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
     }
 
     [Theory]
-    [InlineData("name-only")]
-    [InlineData("missing-live")]
-    [InlineData("generation-replaced")]
-    [InlineData("not-clean")]
-    [InlineData("quarantine")]
-    [InlineData("revoked-journal")]
-    public async Task Characterization_NameMetadataStillSignsWithoutGenerationObservation(string state)
+    [InlineData("name-only", 200, 1)]
+    [InlineData("missing-live", 404, 1)]
+    [InlineData("generation-replaced", 503, 1)]
+    [InlineData("not-clean", 503, 0)]
+    [InlineData("quarantine", 503, 0)]
+    [InlineData("revoked-journal", 503, 0)]
+    [InlineData("revoked-absent", 503, 0)]
+    [InlineData("incomplete", 503, 0)]
+    [InlineData("ambiguous", 503, 0)]
+    [InlineData("unknown", 503, 0)]
+    [InlineData("invalid-generation", 503, 0)]
+    [InlineData("invalid-source", 503, 0)]
+    public async Task IntentionalGenerationAdaptation_DistinguishesHistoricalAbsenceAndUnsafeJournal(string state, int status, int getCalls)
     {
         await using var context = await ContextAsync();
         var name = (state == "quarantine" ? "_quarantine/" : "") + Name();
@@ -108,14 +120,24 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         using var client = factory.Client();
         using var response = await client.GetAsync(Query("/uploads/SignedUrl", name));
 
-        // Observed existing/source compatibility, not certification of scan or generation safety.
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var uri = await response.Content.ReadFromJsonAsync<Uri>();
-        Assert.NotNull(uri);
-        Assert.DoesNotContain("generation=", uri.Query, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, factory.SignCalls);
-        Assert.Equal(0, factory.GetCalls);
+        // PR59 recorded prior name-based behavior. These are explicitly reviewed new-generation oracles.
+        Assert.Equal(status, (int)response.StatusCode);
+        Assert.Equal(getCalls, factory.GetCalls);
+        Assert.Equal(status == 200 ? 1 : 0, factory.SignCalls);
         Assert.Null(factory.Services.GetService<IIamServiceClient>());
+        if (status == 200)
+        {
+            var uri = await response.Content.ReadFromJsonAsync<Uri>();
+            Assert.NotNull(uri);
+            Assert.Contains("generation=31", uri.Query, StringComparison.Ordinal);
+            AssertSignedCanonicalDigest(factory, uri);
+            // No journal row, migration flag or clean claim is manufactured for historical metadata.
+            Assert.False(await context.StorageMoveJournals.AnyAsync(row => row.DestinationObjectName == name));
+        }
+        else
+        {
+            Assert.DoesNotContain(name, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -132,7 +154,7 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         using var second = await client.GetAsync(Query("/uploads/SignedUrl", name));
         Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
         Assert.Equal(1, factory.SignCalls);
-        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(1, factory.GetCalls);
         // Removing metadata prevents a new URL; previously issued cloud URLs are not thereby revoked.
     }
 
@@ -154,6 +176,182 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         Assert.Null(factory.Services.GetService<IIamServiceClient>());
     }
 
+    [Theory]
+    [InlineData("forbidden")]
+    [InlineData("io")]
+    [InlineData("invalid-object")]
+    public async Task ProviderFailure_IsOpaque500NeverFalseAbsence(string failure)
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await SeedAsync(context, name);
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, name) { ReadFailure = failure };
+        using var client = factory.Client();
+        using var response = await client.GetAsync(Query("/uploads/SignedUrl", name));
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(name, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-read-fixture", body, StringComparison.Ordinal);
+        Assert.Equal(1, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+    }
+
+    [Fact]
+    public async Task ReplacementAfterObservation_SignedCanonicalQueryStillSelectsObservedGeneration()
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await SeedAsync(context, name);
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, name) { ReplaceAtSigning = true };
+        using var client = factory.Client();
+        using var response = await client.GetAsync(Query("/uploads/SignedUrl", name));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var uri = await response.Content.ReadFromJsonAsync<Uri>();
+        Assert.NotNull(uri);
+        Assert.Equal(47, factory.LiveGeneration);
+        Assert.Contains("generation=31", uri.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("generation=47", uri.Query, StringComparison.Ordinal);
+        AssertSignedCanonicalDigest(factory, uri);
+        // Controlled SDK selection is not a claim about cloud retention or atomic revocation.
+    }
+
+    [Theory]
+    [InlineData("name-only", 200)]
+    [InlineData("missing-live", 404)]
+    [InlineData("generation-replaced", 503)]
+    [InlineData("sign-failure", 500)]
+    [InlineData("provider-failure", 500)]
+    public async Task ActualPinnedStrictConsumer_UsesRealFilePipelineAndPreservesFailureStatus(string state, int status)
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await SeedAsync(context, name, state);
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, name)
+        {
+            LiveMissing = state == "missing-live",
+            LiveGeneration = state == "generation-replaced" ? 47 : 31,
+            FailSigning = state == "sign-failure",
+            ReadFailure = state == "provider-failure" ? "forbidden" : null,
+        };
+        using var client = factory.Client();
+        var consumer = new LegacyFileClient(client);
+        var token = client.DefaultRequestHeaders.Authorization!.Parameter!;
+        if (status == 200)
+        {
+            var uri = await consumer.GetSignedUrlAsync("private", name, token, default);
+            Assert.NotNull(uri);
+            Assert.Contains("generation=31", uri.Query, StringComparison.Ordinal);
+        }
+        else if (status == 404)
+        {
+            Assert.Null(await consumer.GetSignedUrlAsync("private", name, token, default));
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAsync<HttpRequestException>(() => consumer.GetSignedUrlAsync("private", name, token, default));
+            Assert.Equal((HttpStatusCode)status, failure.StatusCode);
+            Assert.DoesNotContain(name, failure.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task ReadOnlyRuntime_StillRefusesUploadBeforeCloudWrite()
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, name);
+        using var client = factory.Client("create");
+        using var body = new MultipartFormDataContent();
+        body.Add(new ByteArrayContent([1]), "files", "part.step");
+        using var response = await client.PostAsync("/Uploads?bucket=private", body);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+    }
+
+    [Fact]
+    public async Task ActualPinnedStrictConsumer_CancellationBeforeSendHasNoStorageEffect()
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await SeedAsync(context, name);
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, name);
+        using var client = factory.Client();
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new LegacyFileClient(client).GetSignedUrlAsync(
+            "private", name, client.DefaultRequestHeaders.Authorization!.Parameter!, canceled.Token));
+        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+    }
+
+    [Fact]
+    public async Task ActualPinnedStrictConsumer_MalformedJsonUriFailsInsteadOfReturningNull()
+    {
+        // Consumer-only wire failure; production's Uri serialization cannot emit this invalid JSON shape.
+        using var client = new HttpClient(new MalformedUriHandler()) { BaseAddress = new Uri("https://file.example.invalid") };
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => new LegacyFileClient(client).GetSignedUrlAsync(
+            "private", "orders/part.step", "controlled-token", default));
+    }
+
+    [Theory]
+    [InlineData("name-only", StorageReadState.Absent)]
+    [InlineData("clean", StorageReadState.Confirmed)]
+    [InlineData("incomplete", StorageReadState.Incomplete)]
+    [InlineData("not-clean", StorageReadState.Unclean)]
+    [InlineData("revoked-journal", StorageReadState.Revoked)]
+    [InlineData("ambiguous", StorageReadState.Ambiguous)]
+    public async Task TypedJournal_ReadsRealPostgreSqlWithoutChangingAuthority(string state, StorageReadState expected)
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await SeedAsync(context, name, state);
+        var before = await context.StorageMoveJournals.AsNoTracking().Where(row => row.DestinationObjectName == name)
+            .OrderBy(row => row.OperationId).ToArrayAsync();
+        var result = await new StorageMoveJournalRepository(context, TimeProvider.System).FindReadEvidenceAsync("private", name, default);
+        Assert.Equal(expected, result.State);
+        if (expected == StorageReadState.Confirmed) Assert.Equal(31, result.Evidence?.DestinationGeneration);
+        else Assert.Null(result.Evidence);
+        var after = await context.StorageMoveJournals.AsNoTracking().Where(row => row.DestinationObjectName == name)
+            .OrderBy(row => row.OperationId).ToArrayAsync();
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(before), System.Text.Json.JsonSerializer.Serialize(after));
+    }
+
+    [Fact]
+    public async Task TypedJournal_IncompatiblePhysicalSchemaThrowsInsteadOfInferringHistoricalAbsence()
+    {
+        await using var context = await ContextAsync();
+        // Transactional DDL is isolated to this test's own collection database and always rolled back.
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE \"StorageMoveJournal\" RENAME COLUMN \"SourceGeneration\" TO \"UnexpectedSourceGeneration\"");
+            await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => new StorageMoveJournalRepository(context, TimeProvider.System)
+                .FindReadEvidenceAsync("private", Name(), default));
+        }
+        finally
+        {
+            await transaction.RollbackAsync();
+        }
+    }
+
+    private sealed class MalformedUriHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"Uri\":false}", Encoding.UTF8, "application/json") });
+    }
+
+    private static void AssertSignedCanonicalDigest(SignedReadFactory factory, Uri uri)
+    {
+        var query = string.Join("&", uri.Query.TrimStart('?').Split('&')
+            .Where(value => !value.StartsWith("X-Goog-Signature=", StringComparison.Ordinal)));
+        var canonical = "GET\n" + uri.AbsolutePath + "\n" + query + "\nhost:storage.googleapis.com\n\nhost\nUNSIGNED-PAYLOAD";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        Assert.NotNull(factory.SigningPayload);
+        Assert.EndsWith("\n" + digest, Encoding.UTF8.GetString(factory.SigningPayload), StringComparison.Ordinal);
+    }
+
     private async Task<FileDbContext> ContextAsync()
     {
         var context = fixture.CreateContext();
@@ -172,12 +370,33 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
             OperationId = Guid.NewGuid(),
             ScanClean = state != "not-clean",
             SourceBucket = "private",
-            SourceObjectName = "_quarantine/" + name,
+            SourceObjectName = state == "invalid-source" ? "" : "_quarantine/" + name,
             SourceGeneration = 17,
             DestinationBucket = "private",
             DestinationObjectName = name,
+            DestinationGeneration = state == "invalid-generation" ? null : 31,
+            State = state switch
+            {
+                "revoked-journal" => "CompensatedRemoved",
+                "revoked-absent" => "CompensatedAbsent",
+                "incomplete" => "MetadataSubmitting",
+                "unknown" => "CompensationUnknown",
+                _ => "MetadataCommitted",
+            },
+            CreatedAt = DateTimeOffset.UtcNow,
+            ModifiedAt = DateTimeOffset.UtcNow,
+        });
+        if (state == "ambiguous") context.StorageMoveJournals.Add(new StorageMoveJournal
+        {
+            OperationId = Guid.NewGuid(),
+            ScanClean = true,
+            SourceBucket = "private",
+            SourceObjectName = "_quarantine/" + name,
+            SourceGeneration = 18,
+            DestinationBucket = "private",
+            DestinationObjectName = name,
             DestinationGeneration = 31,
-            State = state == "revoked-journal" ? "CompensatedRemoved" : "MetadataCommitted",
+            State = "MetadataCommitted",
             CreatedAt = DateTimeOffset.UtcNow,
             ModifiedAt = DateTimeOffset.UtcNow,
         });
@@ -189,7 +408,10 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         private readonly RSA key = RSA.Create(2048);
         private readonly string principal = "signed-read-" + Guid.NewGuid().ToString("N");
         public bool LiveMissing { get; init; }
-        public long LiveGeneration { get; init; } = 31;
+        public long LiveGeneration { get; set; } = 31;
+        public string? ReadFailure { get; init; }
+        public bool ReplaceAtSigning { get; init; }
+        public byte[]? SigningPayload { get; private set; }
         public bool FailSigning { get; init; }
         public int GetCalls { get; private set; }
         public int SignCalls { get; private set; }
@@ -203,7 +425,7 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
             // File's unchanged registration has no IAM client. Exercise its real signed-claim admission.
             var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, principal) };
             if (identity is "read" or "wrong-key") claims.Add(new("permissions", FilePermissions.Read));
-            if (identity == "wrong-permission") claims.Add(new("permissions", FilePermissions.Create));
+            if (identity is "wrong-permission" or "create") claims.Add(new("permissions", FilePermissions.Create));
             var token = new JwtSecurityToken("https://issuer.example.invalid", "https://file.example.invalid",
                 claims, now.AddMinutes(-1), now.AddMinutes(5),
                 new SigningCredentials(new RsaSecurityKey(wrongKey ?? key), SecurityAlgorithms.RsaSha256));
@@ -230,6 +452,9 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
                     .Returns(() =>
                     {
                         GetCalls++;
+                        if (ReadFailure == "forbidden") return Task.FromException<StorageObject>(new GoogleApiException("storage", "private-read-fixture") { HttpStatusCode = HttpStatusCode.Forbidden });
+                        if (ReadFailure == "io") return Task.FromException<StorageObject>(new IOException("private-read-fixture"));
+                        if (ReadFailure == "invalid-object") return Task.FromResult(new StorageObject { Generation = 0, Size = 7 });
                         return LiveMissing ? Task.FromException<StorageObject>(new GoogleApiException("storage", "controlled absent object") { HttpStatusCode = HttpStatusCode.NotFound })
                             : Task.FromResult(new StorageObject { Bucket = "private", Name = name, Generation = LiveGeneration, Size = 7 });
                     });
@@ -237,8 +462,10 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
                 signer.SetupGet(value => value.Id).Returns("controlled@example.invalid");
                 signer.SetupGet(value => value.Algorithm).Returns("GOOG4-RSA-SHA256");
                 signer.Setup(value => value.CreateSignatureAsync(It.IsAny<byte[]>(), It.IsAny<UrlSigner.BlobSignerParameters>(), It.IsAny<CancellationToken>()))
-                    .Returns(() =>
+                    .Returns((byte[] payload, UrlSigner.BlobSignerParameters parameters, CancellationToken token) =>
                     {
+                        SigningPayload = payload.ToArray();
+                        if (ReplaceAtSigning) LiveGeneration = 47;
                         SignCalls++;
                         return FailSigning ? Task.FromException<string>(new IOException("private-signing-fixture")) : Task.FromResult("AQ==");
                     });

@@ -19,7 +19,8 @@ public sealed class FileApplicationService(
     LegacyFileRuntimeGate runtimeGate,
     ILogger<FileApplicationService> logger,
     IQuarantineUploadIntent quarantineIntents,
-    UploadSnapshotCapture snapshots) : IFileService
+    UploadSnapshotCapture snapshots,
+    IStorageReadJournal readJournal) : IFileService
 {
     /// <summary>Maximum aggregate size accepted by the edge-facing upload workflow.</summary>
     public const long MaximumUploadBytes = 100L * 1024L * 1024L;
@@ -276,8 +277,23 @@ public sealed class FileApplicationService(
             return null;
         }
 
+        var authority = await readJournal.FindReadEvidenceAsync(bucket, objectName, cancellationToken);
+        if (authority.State is not (StorageReadState.Absent or StorageReadState.Confirmed)
+            || objectName.StartsWith("_quarantine/", StringComparison.Ordinal)
+            || objectName.StartsWith(options.Value.QuarantinePrefix.TrimEnd('/') + "/", StringComparison.Ordinal))
+            throw new SignedReadEvidenceUnavailableException();
+        var live = await storage.GetEvidenceAsync(bucket, objectName, cancellationToken);
+        if (live is null) return null;
+        if (authority.State == StorageReadState.Confirmed
+            && (authority.Evidence is not { ScanClean: true, State: "MetadataCommitted" } evidence
+                || evidence.SourceGeneration <= 0 || string.IsNullOrWhiteSpace(evidence.SourceBucket)
+                || string.IsNullOrWhiteSpace(evidence.SourceObjectName)
+                || evidence.DestinationBucket != bucket || evidence.DestinationObjectName != objectName
+                || evidence.DestinationGeneration != live.Generation))
+            throw new SignedReadEvidenceUnavailableException();
         var duration = TimeSpan.FromHours(Math.Clamp(options.Value.SignedUrlHours, 1, 168));
-        return await storage.CreateSignedReadUriAsync(bucket, objectName, duration, cancellationToken);
+        // Historical absence establishes no scan claim; the live generation only binds selected bytes.
+        return await storage.CreateSignedGenerationReadUriAsync(bucket, objectName, live.Generation, duration, cancellationToken);
     }
 
     private async Task<IReadOnlyList<StorageMoveClaim>> ReadPromotionClaimsAsync(

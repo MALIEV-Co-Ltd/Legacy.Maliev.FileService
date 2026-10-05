@@ -338,11 +338,21 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         return new Uri(url, UriKind.Absolute);
     }
 
+    /// <inheritdoc />
+    public async Task<Uri> CreateSignedGenerationReadUriAsync(string bucket, string objectName, long generation,
+        TimeSpan duration, CancellationToken cancellationToken)
+    {
+        if (generation <= 0) throw new ArgumentOutOfRangeException(nameof(generation));
+        var request = CreateReadRequestTemplate(bucket, objectName, generation);
+        var url = await signer.SignAsync(request, CreateReadOptions(duration), cancellationToken);
+        return new Uri(url, UriKind.Absolute);
+    }
+
     internal static UrlSigner.Options CreateReadOptions(TimeSpan duration) =>
         UrlSigner.Options.FromDuration(duration > TimeSpan.FromDays(7) ? TimeSpan.FromDays(7) : duration)
             .WithSigningVersion(SigningVersion.V4);
 
-    internal static UrlSigner.RequestTemplate CreateReadRequestTemplate(string bucket, string objectName)
+    internal static UrlSigner.RequestTemplate CreateReadRequestTemplate(string bucket, string objectName, long? generation = null)
     {
         var fileName = objectName.Replace('\\', '/').Split('/').Last();
         if (string.IsNullOrEmpty(fileName))
@@ -364,6 +374,12 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         {
             ["response-content-disposition"] = [disposition.ToString()],
         };
+
+        if (generation is not null)
+        {
+            if (generation <= 0) throw new ArgumentOutOfRangeException(nameof(generation));
+            parameters["generation"] = [generation.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)];
+        }
 
         return UrlSigner.RequestTemplate.FromBucket(bucket)
             .WithObjectName(objectName)

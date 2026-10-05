@@ -161,6 +161,7 @@ public sealed class FileApplicationServiceTests
         });
         var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository, writesEnabled: false);
 
+        storage.SeedLive("maliev.com", "uploads/existing.stl", 3);
         var result = await service.GetSignedUrlAsync("maliev.com", "uploads/existing.stl", CancellationToken.None);
 
         Assert.Equal(new Uri("https://storage.test/uploads/existing.stl"), result);
@@ -426,7 +427,7 @@ public sealed class FileApplicationServiceTests
             options,
             new LegacyFileRuntimeGate(options),
             NullLogger<FileApplicationService>.Instance,
-            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture());
+            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);
     }
 
     private sealed class MemoryUploadFile(string name, string contentType, byte[] bytes) : IUploadFile
@@ -463,7 +464,7 @@ public sealed class FileApplicationServiceTests
         public Task UnknownAsync(Guid operationId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private sealed class RecordingMoveJournal : IStorageMoveJournal
+    private sealed class RecordingMoveJournal : IStorageMoveJournal, IStorageReadJournal
     {
         public Task<bool> TryBeginMetadataSubmissionAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken token) =>
             Task.FromResult(Transition(claims, "SourceDeleted", "MetadataSubmitting", token));
@@ -491,6 +492,11 @@ public sealed class FileApplicationServiceTests
             var matches = Evidence.Values.Where(item => item.DestinationBucket == bucket && item.DestinationObjectName == name).ToArray();
             return Task.FromResult(matches.Length == 1 && matches[0].ScanClean && matches[0].State == "MetadataCommitted"
                 && matches[0].SourceGeneration > 0 && matches[0].DestinationGeneration > 0 ? matches[0] : null);
+        }
+        public async Task<StorageReadEvidence> FindReadEvidenceAsync(string bucket, string name, CancellationToken token)
+        {
+            var evidence = await FindCommittedSourceAsync(bucket, name, token);
+            return evidence is null ? new(StorageReadState.Absent) : new(StorageReadState.Confirmed, evidence);
         }
         private bool Transition(IReadOnlyList<StorageMoveClaim> claims, string expected, string target, CancellationToken token)
         {
@@ -603,9 +609,14 @@ public sealed class FileApplicationServiceTests
         public Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
             Task.FromResult(sizes.TryGetValue((bucket, objectName), out var size) ? (long?)size : null);
 
+        public void SeedLive(string bucket, string name, long size) => sizes[(bucket, name)] = size;
+
         public Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
             Task.FromResult(sizes.TryGetValue((bucket, objectName), out var size)
                 ? new StorageObjectEvidence(LiveGeneration, size) : null);
+
+        public Task<Uri> CreateSignedGenerationReadUriAsync(string bucket, string objectName, long generation, TimeSpan duration, CancellationToken token) =>
+            CreateSignedReadUriAsync(bucket, objectName, duration, token);
 
         public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken)
         {

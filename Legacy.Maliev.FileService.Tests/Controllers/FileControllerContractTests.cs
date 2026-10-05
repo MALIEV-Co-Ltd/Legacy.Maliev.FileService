@@ -357,7 +357,7 @@ public sealed class FileControllerMoveCheckpointTests(PostgreSqlFixture fixture)
         var snapshots = new UploadSnapshotCapture();
         var service = new FileApplicationService(new GoogleCloudObjectStorage(client.Object, UrlSigner.FromBlobSigner(blobSigner.Object), journal), scanner.Object,
             new UploadRepository(context, TimeProvider.System), journal, new ObjectNamePolicy(options, TimeProvider.System),
-            options, gate, NullLogger<FileApplicationService>.Instance, new QuarantineUploadIntentRepository(context, TimeProvider.System), snapshots);
+            options, gate, NullLogger<FileApplicationService>.Instance, new QuarantineUploadIntentRepository(context, TimeProvider.System), snapshots, new StorageMoveJournalRepository(context, TimeProvider.System));
         var controller = new UploadsController(service, new IdempotentUploadCoordinator(new Mock<IUploadIdempotencyStore>(MockBehavior.Strict).Object, snapshots), gate)
         { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };
 

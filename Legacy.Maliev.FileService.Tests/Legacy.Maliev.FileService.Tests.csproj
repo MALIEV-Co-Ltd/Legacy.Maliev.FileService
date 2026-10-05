@@ -29,9 +29,11 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="Microsoft.AspNetCore.Http" />
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="$(MalievWorkspaceRoot)\Legacy.Maliev.Intranet\Legacy.Maliev.Intranet\PurchaseOrders\LegacyFileClient.cs" Link="ReviewedConsumers\LegacyFileClient.cs" />
     <ProjectReference Include="..\Legacy.Maliev.FileService.Api\Legacy.Maliev.FileService.Api.csproj" />
     <ProjectReference Include="..\Legacy.Maliev.FileService.Application\Legacy.Maliev.FileService.Application.csproj" />
     <ProjectReference Include="..\Legacy.Maliev.FileService.Data\Legacy.Maliev.FileService.Data.csproj" />

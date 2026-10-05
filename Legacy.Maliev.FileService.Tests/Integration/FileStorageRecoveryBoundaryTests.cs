@@ -1321,7 +1321,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         return new FileApplicationService(cloud.Storage(journal), scanner ?? new ControlledScanner(),
             repository ?? new UploadRepository(context, TimeProvider.System), journal, new ObjectNamePolicy(options, TimeProvider.System),
             options, new LegacyFileRuntimeGate(options), NullLogger<FileApplicationService>.Instance,
-            intents ?? new QuarantineUploadIntentRepository(context, TimeProvider.System), new UploadSnapshotCapture());
+            intents ?? new QuarantineUploadIntentRepository(context, TimeProvider.System), new UploadSnapshotCapture(), journal);
     }
 
     private static string Prefix() => "recovery-" + Guid.NewGuid().ToString("N");
