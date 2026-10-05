@@ -33,6 +33,38 @@ public sealed class PublishWorkflowPermissionContractTests
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => Validate(root));
     }
 
+    [Theory]
+    [InlineData("image", "${{ vars.LEGACY_ARTIFACT_REGISTRY }}/maliev-file-service")]
+    [InlineData("dockerfile", "Maliev.FileService.Api/Dockerfile")]
+    [InlineData("context", "..")]
+    [InlineData("environment", "production")]
+    [InlineData("workload-identity-provider", "")]
+    [InlineData("service-account", "${{ vars.GENERIC_PUBLISHER_SERVICE_ACCOUNT }}")]
+    [InlineData("legacy-service-defaults-ref", "main")]
+    [InlineData("compatibility-contracts-ref", "main")]
+    public void Publisher_RejectsChangedAuthorityIdentityAndUnpinnedDependencies(string input, string unsafeValue)
+    {
+        var root = Parse();
+        Validate(root);
+        Mapping(Publish(root), "with").Children[new YamlScalarNode(input)] = new YamlScalarNode(unsafeValue);
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => Validate(root));
+    }
+
+    [Theory]
+    [InlineData("publish", "true")]
+    [InlineData("publish", "vars.LEGACY_DEPLOY_ENABLED != 'false'")]
+    [InlineData("deployment-gate", "vars.LEGACY_DEPLOY_ENABLED == 'false'")]
+    [InlineData("deployment-gate", "false")]
+    public void Publisher_RejectsWeakOrNoncomplementaryActivationConditions(string jobName, string unsafeCondition)
+    {
+        var root = Parse();
+        Validate(root);
+        Mapping(Mapping(root, "jobs"), jobName).Children[new YamlScalarNode("if")] = new YamlScalarNode(unsafeCondition);
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => Validate(root));
+    }
+
     private static void Validate(YamlMappingNode root)
     {
         var global = Mapping(root, "permissions");
