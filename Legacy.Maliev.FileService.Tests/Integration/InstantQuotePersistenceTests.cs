@@ -416,11 +416,22 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         var second = CreateReconciliationService(new InstantQuoteFileRepository(secondContext), storage);
         var owner = new InstantQuoteOwner("https://issuer.example|user-42", true);
 
-        var attempts = await Task.WhenAll(
-            Record.ExceptionAsync(() => first.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
-                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None)),
-            Record.ExceptionAsync(() => second.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
-                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None)));
+        var firstAttempt = Record.ExceptionAsync(() => first.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
+            new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None));
+        Task<Exception?> secondAttempt;
+        try
+        {
+            await storage.DownloadEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            // Observe the competing PostgreSQL reservation while the winner still owns its lease.
+            secondAttempt = Record.ExceptionAsync(() => second.UploadAsync(sessionId, owner, token, idempotencyKey, sha, new MemoryStream(bytes),
+                new InstantQuoteUploadMetadata(fileName, contentType), CancellationToken.None));
+            await secondAttempt.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            storage.ReleaseDownload();
+        }
+        var attempts = await Task.WhenAll(firstAttempt, secondAttempt);
 
         Assert.Single(attempts, exception => exception is null);
         Assert.Single(attempts, exception => exception is InstantQuoteUploadInProgressException);
@@ -970,7 +981,8 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
         string sha256) : IInstantQuoteObjectStorage
     {
         private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int downloadCount;
+        public TaskCompletionSource DownloadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void ReleaseDownload() => release.TrySetResult();
 
         public Task<InstantQuoteObjectMetadata> UploadTemporaryAsync(
             string bucket, string objectName, Stream content, string expectedSha256,
@@ -985,10 +997,7 @@ public sealed class InstantQuotePersistenceTests(PostgreSqlFixture fixture)
             string bucket, string objectName, long generation, Stream destination,
             CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref downloadCount) == 1)
-            {
-                release.TrySetResult();
-            }
+            DownloadEntered.TrySetResult();
             await release.Task.WaitAsync(cancellationToken);
             await destination.WriteAsync(bytes, cancellationToken);
         }
