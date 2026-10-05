@@ -23,6 +23,8 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store, U
         Func<Guid, string?, IReadOnlyList<IUploadFile>, CancellationToken, Task<UploadResultResponse?>> reconcile,
         CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrWhiteSpace(workflowKey) && !IsCanonicalReplayPrincipal(principalId))
+            throw new UploadIdempotencyUnavailableException("Upload identity is unavailable.");
         using var snapshot = await snapshots.CaptureAsync(files, cancellationToken);
         files = snapshot;
         if (string.IsNullOrWhiteSpace(workflowKey)) return await execute(Guid.NewGuid(), path, files, cancellationToken);
@@ -95,6 +97,14 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store, U
             catch { ownershipLost = true; execution.Cancel(); }
         }
     }
+
+    /// <summary>Rejects ambiguous signed identities without changing existing canonical replay hashes.</summary>
+    /// <param name="principal">The selected, unmodified signed principal claim.</param>
+    /// <returns>Whether the principal is nonempty, unpadded and free of control characters.</returns>
+    public static bool IsCanonicalReplayPrincipal(string? principal) =>
+        !string.IsNullOrWhiteSpace(principal)
+        && string.Equals(principal, principal.Trim(), StringComparison.Ordinal)
+        && !principal.Any(char.IsControl);
 
     private async Task ReleaseAsync(string identity, string reservation) { using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)); try { await store.ReleaseAsync(identity, reservation, timeout.Token); } catch { } }
     private async Task MarkUnknownAsync(string identity, string reservation, UploadResultResponse? response) { using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)); try { await store.MarkUnknownAsync(identity, reservation, response, timeout.Token); } catch { } }
