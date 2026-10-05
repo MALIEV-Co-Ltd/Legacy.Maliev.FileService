@@ -189,8 +189,10 @@ public sealed class LegacyFileMoveHttpBoundaryTests(PostgreSqlFixture fixture)
 
     private static Dictionary<string, string> Coordinates() => new()
     {
-        ["sourceBucket"] = "maliev.com", ["sourceObjectName"] = Source,
-        ["destinationBucket"] = "maliev.com", ["destinationObjectName"] = Destination,
+        ["sourceBucket"] = "maliev.com",
+        ["sourceObjectName"] = Source,
+        ["destinationBucket"] = "maliev.com",
+        ["destinationObjectName"] = Destination,
     };
 
     private static async Task<HttpResponseMessage> SendAsync(HttpClient client, string tokenValue,
