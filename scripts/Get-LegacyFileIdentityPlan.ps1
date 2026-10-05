@@ -1,4 +1,4 @@
-# Offline validation only. No cloud, Kubernetes, process, or resource-write adapter.
+# Offline validation only. Read-only Git observation; no cloud or resource-write adapter.
 function ConvertFrom-LegacyFilePlanJson {
     param([Parameter(Mandatory)][string]$Json)
     function Test-UniqueNames([System.Text.Json.JsonElement]$Element) {
@@ -99,12 +99,19 @@ function New-LegacyFileIdentityPlan {
         [Parameter(Mandatory)][string]$ServiceAccountJson,
         [Parameter(Mandatory)][string]$ExpectedBucketUri,
         [Parameter(Mandatory)][string]$SourceCommit,
+        [Parameter(Mandatory)][string]$SourceCheckoutPath,
+        [Parameter(Mandatory)][string]$ApprovedSourceRepository,
+        [switch]$AllowFixtureOrigin,
         [Parameter(Mandatory)][string]$ApprovedImageRepository,
         [Parameter(Mandatory)][scriptblock]$ReadIamSnapshot,
         [Parameter(Mandatory)][scriptblock]$BuildImage,
-        [string]$ImageOnlyPlanScriptPath = (Join-Path $PSScriptRoot "../.dependencies/Legacy.Maliev.Workflows/scripts/New-OfflineImageOnlyDeploymentPlan.ps1")
+        [string]$ImageOnlyPlanScriptPath = (Join-Path $PSScriptRoot "../.dependencies/Legacy.Maliev.Workflows/scripts/New-OfflineImageOnlyDeploymentPlan.ps1"),
+        [string]$SourceGuardScriptPath = (Join-Path $PSScriptRoot "../.dependencies/Legacy.Maliev.Workflows/scripts/Assert-OfflineReleaseSource.ps1"),
+        [string]$SourceGuardModulePath = (Join-Path $PSScriptRoot "../.dependencies/Legacy.Maliev.Workflows/scripts/offline_release_source.py")
     )
     if ($SourceCommit -cnotmatch '^[a-f0-9]{40}$' -or
+        (-not $AllowFixtureOrigin -and $ApprovedSourceRepository -cne 'https://github.com/MALIEV-Co-Ltd/Legacy.Maliev.FileService.git') -or
+        ($AllowFixtureOrigin -and -not $ApprovedSourceRepository.StartsWith('file:///', [StringComparison]::Ordinal)) -or
         $ApprovedImageRepository -cnotmatch '^[a-z0-9-]+-docker\.pkg\.dev/maliev-website/[a-z0-9._-]+/legacy-maliev-file-service$') {
         throw 'Legacy File build provenance scope is invalid.'
     }
@@ -119,11 +126,34 @@ function New-LegacyFileIdentityPlan {
         throw 'Legacy File image-plan producer bytes are not approved.'
     }
     . $ImageOnlyPlanScriptPath
+    foreach ($producer in @(
+        @{ Path = $SourceGuardScriptPath; Hash = '52E80516F6EDCFCEC725C17E7ADDB6FF6404E9D0F219678FBFA2A68D4F8F9432' },
+        @{ Path = $SourceGuardModulePath; Hash = 'B91F780DD2D18D91962D500F1090E82772358559346FB13977B04CDD4509A82F' }
+    )) {
+        try {
+            if ((Get-Item -LiteralPath $producer.Path -ErrorAction Stop).Length -gt 131072) { throw 'Oversized producer.' }
+            $text = [IO.File]::ReadAllText($producer.Path).Replace("`r`n", "`n")
+            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($text)))
+        } catch { throw 'Legacy File source-guard producer is unavailable.' }
+        if ($hash -cne $producer.Hash) { throw 'Legacy File source-guard producer bytes are not approved.' }
+    }
+    . $SourceGuardScriptPath
+    $sourceArguments = @{
+        RepositoryRoot = $SourceCheckoutPath
+        ExpectedSourceCommit = $SourceCommit
+        ApprovedSourceRepository = $ApprovedSourceRepository
+        AllowFixtureOrigin = $AllowFixtureOrigin
+        SourceGuardModulePath = $SourceGuardModulePath
+    }
     $intent = Assert-LegacyFileIdentityIntent -DeploymentJson $DeploymentJson -ServiceAccountJson $ServiceAccountJson
+    try { $sourceProof = Assert-OfflineReleaseSource @sourceArguments }
+    catch { throw 'Legacy File source observation failed before IAM inspection.' }
     try { $snapshot = & $ReadIamSnapshot }
     catch { throw 'Legacy File IAM policy read failed before image construction.' }
     if ($snapshot -isnot [string]) { throw 'Legacy File IAM policy reader returned an invalid snapshot.' }
     $null = Assert-LegacyFileIamSnapshot -SnapshotJson $snapshot -ExpectedBucketUri $ExpectedBucketUri
+    try { $sourceProof = Assert-OfflineReleaseSource @sourceArguments }
+    catch { throw 'Legacy File source observation failed before image construction.' }
     # The only image construction boundary follows successful policy validation.
     # No default adapter exists; callers must explicitly supply a controlled one.
     try { $built = & $BuildImage }
@@ -133,6 +163,8 @@ function New-LegacyFileIdentityPlan {
         $built.image.Substring($ApprovedImageRepository.Length) -cnotmatch '^@sha256:[a-f0-9]{64}$') {
         throw 'Legacy File immutable image provenance is invalid.'
     }
+    try { $sourceProof = Assert-OfflineReleaseSource @sourceArguments }
+    catch { throw 'Legacy File source observation failed after image construction.' }
     $imagePlan = New-OfflineImageOnlyDeploymentPlan -DeploymentJson $DeploymentJson -SourceCommit $SourceCommit -ApprovedImageRepository $ApprovedImageRepository -ImageProof $built -ContractVersion 'legacy-file-image-only/v1'
     if ($imagePlan.DeploymentAllowed -or $imagePlan.LiveAccepted -or $imagePlan.SchemaVersion -cne 'legacy-file-image-only/v1') {
         throw 'Legacy File image plan crossed its offline contract.'
@@ -141,6 +173,7 @@ function New-LegacyFileIdentityPlan {
         SchemaVersion = 'legacy-file-identity-plan/v1'
         Mode = 'offline-identity-preparation'
         SourceCommit = $SourceCommit
+        SourceObservation = $sourceProof
         Resources = @($intent.ServiceAccount, $imagePlan.Deployment)
         DeploymentAllowed = $false
         LiveAccepted = $false

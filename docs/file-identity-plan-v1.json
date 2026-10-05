@@ -34,7 +34,7 @@
       "member": "serviceAccount:legacy-maliev-file@maliev-website.iam.gserviceaccount.com"
     }
   ],
-  "preflight": "validate fixed identity and unconditional literal IAM bindings before any controlled image-builder callback",
+  "preflight": "Actual pinned source observer checks clean isolated checkout, exact HEAD and approved origin/main before IAM read, before controlled image builder and after builder; identity and IAM semantics remain mandatory.",
   "imageOnlyBoundary": "Real hash-bound shared producer invocation after guarded builder; only selected image changes; all other Deployment fields and paired ServiceAccount remain unchanged.",
   "residuals": [
     "runtime deployment does not exist in inspected GitOps base",
@@ -54,10 +54,22 @@
   },
   "imageOnlyProducer": {
     "repository": "MALIEV-Co-Ltd/Legacy.Maliev.Workflows",
-    "commit": "ee3772967b2bf44687fbde11213127e656b9c49c",
+    "commit": "c1ddff20c190fe0b441bb179805a0fa809101126",
     "path": "scripts/New-OfflineImageOnlyDeploymentPlan.ps1",
     "canonicalLfSha256": "bff22600979e72eb63958eae1c5f86ec9bb000dd6ab24ea9d529d9cac92df515",
     "contractVersion": "legacy-file-image-only/v1",
     "acceptanceRequirement": "Both producer and consumer exact-main CI must pass before accepting this boundary."
+  },
+  "sourceGuardProducer": {
+    "repository": "MALIEV-Co-Ltd/Legacy.Maliev.Workflows",
+    "commit": "c1ddff20c190fe0b441bb179805a0fa809101126",
+    "bridgePath": "scripts/Assert-OfflineReleaseSource.ps1",
+    "bridgeCanonicalLfSha256": "52e80516f6edcfcec725c17e7addb6ff6404e9d0f219678fbfa2a68d4f8f9432",
+    "modulePath": "scripts/offline_release_source.py",
+    "moduleCanonicalLfSha256": "b91f780dd2d18d91962d500f1090e82772358559346fb13977b04cdd4509a82f",
+    "fixtureOrigin": "Explicit opt-in only; isolated-fixture-origin receipt grants no repository authenticity or live acceptance.",
+    "productionOrigin": "https://github.com/MALIEV-Co-Ltd/Legacy.Maliev.FileService.git",
+    "observationLimits": "Each source observation has a 10 second total Git budget; repeated observations cannot atomically lock local state or remote main.",
+    "acceptanceRequirement": "Both immutable producer and File consumer exact-main CI must pass; no deployment acceptance."
   }
 }
