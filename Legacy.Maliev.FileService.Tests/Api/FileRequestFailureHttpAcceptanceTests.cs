@@ -25,6 +25,7 @@ namespace Legacy.Maliev.FileService.Tests.Api;
 
 // Exercises actual Program/JWT/controller/shared middleware. Only the application
 // call throws a controlled failure; this does not prove a real storage failure.
+[Collection(FileIncidentHttpCollection.Name)]
 public sealed class FileRequestFailureHttpAcceptanceTests(FileOpenApiPostgresFixture database)
     : IClassFixture<FileOpenApiPostgresFixture>
 {
@@ -209,4 +210,12 @@ public sealed class FileRequestFailureHttpAcceptanceTests(FileOpenApiPostgresFix
 
     private sealed record LogEntry(string Category, LogLevel Level, Exception? Exception,
         string Message, Dictionary<string, object?> Values);
+}
+
+// Isolate this container/RSA-backed fixture from other test collections, including
+// existing scanner termination controls with a one-second completion bound.
+[CollectionDefinition(FileIncidentHttpCollection.Name, DisableParallelization = true)]
+public sealed class FileIncidentHttpCollection
+{
+    public const string Name = "File incident HTTP acceptance";
 }
