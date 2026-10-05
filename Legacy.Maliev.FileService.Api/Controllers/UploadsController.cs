@@ -130,7 +130,7 @@ public sealed class UploadsController(
                 ?? User.FindFirst("azp")?.Value
                 ?? User.FindFirst("sub")?.Value
                 ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (!string.IsNullOrWhiteSpace(idempotencyKey) && string.IsNullOrWhiteSpace(principalId))
+            if (!string.IsNullOrWhiteSpace(idempotencyKey) && !IdempotentUploadCoordinator.IsCanonicalReplayPrincipal(principalId))
             {
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, Problem("Upload identity is unavailable."));
             }

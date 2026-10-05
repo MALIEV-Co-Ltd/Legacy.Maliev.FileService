@@ -8,6 +8,42 @@ namespace Legacy.Maliev.FileService.Tests.Application;
 
 public sealed class IdempotentUploadCoordinatorTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData(" service-a")]
+    [InlineData("service-a ")]
+    [InlineData("service\na")]
+    [InlineData("service\ta")]
+    [InlineData("service\0a")]
+    public async Task AmbiguousPrincipal_RejectsBeforeSnapshotStoreOrExecution(string principal)
+    {
+        var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);
+        var file = new Moq.Mock<IUploadFile>(Moq.MockBehavior.Strict);
+        var coordinator = new IdempotentUploadCoordinator(store.Object, new UploadSnapshotCapture());
+        var failure = await Assert.ThrowsAsync<UploadIdempotencyUnavailableException>(() => coordinator.ExecuteAsync(
+            principal, "workflow-42", "maliev.com", null, [file.Object],
+            (_, _, _, _) => throw new InvalidOperationException("execution must not start"),
+            (_, _, _, _) => throw new InvalidOperationException("reconciliation must not start"), default));
+        Assert.Equal("Upload identity is unavailable.", failure.Message);
+        store.VerifyNoOtherCalls();
+        file.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task UnkeyedUpload_PreservesExistingExecutionWithoutReplayIdentityOrStore()
+    {
+        var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);
+        var coordinator = new IdempotentUploadCoordinator(store.Object, new UploadSnapshotCapture());
+        var executions = 0;
+        var response = await coordinator.ExecuteAsync(" service-a ", null, "maliev.com", null,
+            [new File("part.stl", "model/stl", [1])],
+            (_, _, _, _) => { executions++; return Task.FromResult(Response()); },
+            (_, _, _, _) => throw new InvalidOperationException("must not reconcile"), default);
+        Assert.Equal(1, executions);
+        Assert.Equal(JsonSerializer.Serialize(Response()), JsonSerializer.Serialize(response));
+        store.VerifyNoOtherCalls();
+    }
+
     [Fact]
     public async Task ResponseLossRetry_ReplaysExactSignedResponseWithoutSecondExecution()
     {
