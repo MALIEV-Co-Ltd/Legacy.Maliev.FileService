@@ -130,11 +130,11 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
     {
         await using var factory = new AdmissionFactory(database.ConnectionString);
         if (method == "DELETE")
-            factory.Service.Setup(service => service.DeleteAsync("source-bucket", "folder/source +ไทย.txt", It.IsAny<CancellationToken>()))
+            factory.Service.Setup(service => service.DeleteAsync("source-bucket", "folder/source +à¹„à¸—à¸¢.txt", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(succeeds);
         else
-            factory.Service.Setup(service => service.MoveAsync("source-bucket", "folder/source +ไทย.txt",
-                "destination-bucket", "folder/destination +ไทย.txt", It.IsAny<CancellationToken>()))
+            factory.Service.Setup(service => service.MoveAsync("source-bucket", "folder/source +à¹„à¸—à¸¢.txt",
+                "destination-bucket", "folder/destination +à¹„à¸—à¸¢.txt", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(succeeds);
         using var client = AuthorizedClient(factory, method);
         using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), LegacyQuery(method)));
@@ -145,10 +145,10 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
             await response.Content.ReadFromJsonAsync<string>());
         factory.Service.VerifyAll();
         if (method == "DELETE")
-            factory.Service.Verify(service => service.DeleteAsync("source-bucket", "folder/source +ไทย.txt", It.IsAny<CancellationToken>()), Times.Once);
+            factory.Service.Verify(service => service.DeleteAsync("source-bucket", "folder/source +à¹„à¸—à¸¢.txt", It.IsAny<CancellationToken>()), Times.Once);
         else
-            factory.Service.Verify(service => service.MoveAsync("source-bucket", "folder/source +ไทย.txt",
-                "destination-bucket", "folder/destination +ไทย.txt", It.IsAny<CancellationToken>()), Times.Once);
+            factory.Service.Verify(service => service.MoveAsync("source-bucket", "folder/source +à¹„à¸—à¸¢.txt",
+                "destination-bucket", "folder/destination +à¹„à¸—à¸¢.txt", It.IsAny<CancellationToken>()), Times.Once);
         factory.Service.VerifyNoOtherCalls();
     }
 
@@ -163,11 +163,11 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
     private static string LegacyQuery(string method, string? missingField = null)
     {
         var fields = method == "DELETE"
-            ? new Dictionary<string, string> { ["bucket"] = "source-bucket", ["objectName"] = "folder/source +ไทย.txt" }
+            ? new Dictionary<string, string> { ["bucket"] = "source-bucket", ["objectName"] = "folder/source +à¹„à¸—à¸¢.txt" }
             : new Dictionary<string, string>
             {
-                ["sourceBucket"] = "source-bucket", ["sourceObjectName"] = "folder/source +ไทย.txt",
-                ["destinationBucket"] = "destination-bucket", ["destinationObjectName"] = "folder/destination +ไทย.txt",
+                ["sourceBucket"] = "source-bucket", ["sourceObjectName"] = "folder/source +à¹„à¸—à¸¢.txt",
+                ["destinationBucket"] = "destination-bucket", ["destinationObjectName"] = "folder/destination +à¹„à¸—à¸¢.txt",
             };
         return "/Uploads?" + string.Join("&", fields.Where(field => field.Key != missingField)
             .Select(field => field.Key + "=" + Uri.EscapeDataString(field.Value)));
