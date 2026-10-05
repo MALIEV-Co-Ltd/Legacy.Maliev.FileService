@@ -121,6 +121,15 @@ public sealed class WorkflowContractTests
             "ref: main # 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3");
     }
 
+    [Theory]
+    [InlineData("ref: ee3772967b2bf44687fbde11213127e656b9c49c", "ref: main")]
+    [InlineData("repository: MALIEV-Co-Ltd/Legacy.Maliev.Workflows", "repository: MALIEV-Co-Ltd/Legacy.Maliev.FileService")]
+    [InlineData("path: .dependencies/Legacy.Maliev.Workflows", "path: .dependencies/unapproved")]
+    public void BuildAndTest_RejectsChangedOfflineImageProducer(string original, string replacement)
+    {
+        AssertMutationRejected(original, replacement);
+    }
+
     [Fact]
     public void ApiProject_UsesOnlyLegacyServiceDefaults()
     {
@@ -272,9 +281,9 @@ internal static partial class WorkflowContractValidator
         RejectDuplicatedValidationActionsAndCommands(jobs);
 
         var steps = RequireSequence(validateJob, "steps");
-        if (steps.Children.Count != 6)
+        if (steps.Children.Count != 7)
         {
-            throw new InvalidOperationException("Validate job must contain four validation and two evidence steps.");
+            throw new InvalidOperationException("Validate job must contain four checkout steps, validation, and two evidence steps.");
         }
 
         var environment = RequireMapping(validateJob, "env");
@@ -288,7 +297,7 @@ internal static partial class WorkflowContractValidator
         RequireScalarValue(environment, "VSTestLogger", "trx");
         RequireScalarValue(environment, "VSTestResultsDirectory", "${{ github.workspace }}/runner-results");
 
-        var gate = RequireMapping(steps.Children[4], "coverage gate");
+        var gate = RequireMapping(steps.Children[5], "coverage gate");
         if (gate.Children.Count != 2)
         {
             throw new InvalidOperationException("Coverage gate must contain only name and run.");
@@ -296,7 +305,7 @@ internal static partial class WorkflowContractValidator
 
         RequireScalarValue(gate, "name", "Gate owned production coverage");
         RequireScalarValue(gate, "run", "python3 scripts/verify-runner-coverage.py runner-results");
-        var evidence = RequireMapping(steps.Children[5], "evidence upload");
+        var evidence = RequireMapping(steps.Children[6], "evidence upload");
         if (evidence.Children.Count != 4)
         {
             throw new InvalidOperationException("Evidence upload must contain exactly name, if, uses and with.");
@@ -345,6 +354,16 @@ internal static partial class WorkflowContractValidator
             });
         ValidateStep(
             steps.Children[3],
+            CheckoutAction,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.Workflows",
+                ["ref"] = "ee3772967b2bf44687fbde11213127e656b9c49c",
+                ["path"] = ".dependencies/Legacy.Maliev.Workflows",
+                ["persist-credentials"] = "false",
+            });
+        ValidateStep(
+            steps.Children[4],
             SharedValidationAction,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
