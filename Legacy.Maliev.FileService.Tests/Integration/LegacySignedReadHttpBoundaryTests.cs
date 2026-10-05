@@ -169,9 +169,17 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         context.Uploads.Add(new Upload { Bucket = "private", Name = name, ContentType = "application/octet-stream", Size = 7 });
         if (state != "name-only") context.StorageMoveJournals.Add(new StorageMoveJournal
         {
-            OperationId = Guid.NewGuid(), ScanClean = state != "not-clean", SourceBucket = "private", SourceObjectName = "_quarantine/" + name,
-            SourceGeneration = 17, DestinationBucket = "private", DestinationObjectName = name, DestinationGeneration = 31,
-            State = state == "revoked-journal" ? "CompensatedRemoved" : "MetadataCommitted", CreatedAt = DateTimeOffset.UtcNow, ModifiedAt = DateTimeOffset.UtcNow,
+            OperationId = Guid.NewGuid(),
+            ScanClean = state != "not-clean",
+            SourceBucket = "private",
+            SourceObjectName = "_quarantine/" + name,
+            SourceGeneration = 17,
+            DestinationBucket = "private",
+            DestinationObjectName = name,
+            DestinationGeneration = 31,
+            State = state == "revoked-journal" ? "CompensatedRemoved" : "MetadataCommitted",
+            CreatedAt = DateTimeOffset.UtcNow,
+            ModifiedAt = DateTimeOffset.UtcNow,
         });
         await context.SaveChangesAsync();
     }
