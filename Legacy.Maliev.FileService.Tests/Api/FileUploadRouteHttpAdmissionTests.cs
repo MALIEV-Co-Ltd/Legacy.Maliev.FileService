@@ -9,6 +9,7 @@ using System.Text.Json;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Tests.OpenApi;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -22,7 +23,8 @@ using Moq;
 namespace Legacy.Maliev.FileService.Tests.Api;
 
 // Actual Program/JWT/controller/resource-filter admission with storage and writes
-// disabled. The strict application boundary must never be called in these cases.
+// disabled. Admission cases never call the strict application boundary; query
+// handoff cases control that boundary, and gate cases retain the actual service.
 [Collection(FileIncidentHttpCollection.Name)]
 public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture database)
     : IClassFixture<FileOpenApiPostgresFixture>
@@ -79,7 +81,99 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
         factory.Service.VerifyNoOtherCalls();
     }
 
-    private sealed class AdmissionFactory(string connectionString) : WebApplicationFactory<Program>
+    [Theory]
+    [InlineData("DELETE")]
+    [InlineData("PUT")]
+    public async Task ValidLegacyQuery_ActualApplicationRejectsDisabledWrites(string method)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, useActualApplication: true);
+        using var client = AuthorizedClient(factory, method);
+        using var scope = factory.Services.CreateScope();
+        Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
+        Assert.Null(factory.Services.GetService<StorageClient>());
+
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), LegacyQuery(method)));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(503, problem.GetProperty("status").GetInt32());
+        Assert.Equal("Legacy file service unavailable", problem.GetProperty("title").GetString());
+        Assert.Equal("File storage is temporarily unavailable.", problem.GetProperty("detail").GetString());
+        factory.Service.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("DELETE", "bucket")]
+    [InlineData("DELETE", "objectName")]
+    [InlineData("PUT", "sourceBucket")]
+    [InlineData("PUT", "sourceObjectName")]
+    [InlineData("PUT", "destinationBucket")]
+    [InlineData("PUT", "destinationObjectName")]
+    public async Task EachMissingLegacyQueryField_RejectsBeforeApplication(string method, string missingField)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString);
+        using var client = AuthorizedClient(factory, method);
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), LegacyQuery(method, missingField)));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(method == "DELETE" ? "Bucket and object name is required" : "Bucket and object names are required",
+            await response.Content.ReadFromJsonAsync<string>());
+        factory.Service.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("DELETE", true)]
+    [InlineData("DELETE", false)]
+    [InlineData("PUT", true)]
+    [InlineData("PUT", false)]
+    public async Task ValidLegacyQuery_HandsDecodedFieldsToControlledApplication(string method, bool succeeds)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString);
+        if (method == "DELETE")
+            factory.Service.Setup(service => service.DeleteAsync("source-bucket", "folder/source +ไทย.txt", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(succeeds);
+        else
+            factory.Service.Setup(service => service.MoveAsync("source-bucket", "folder/source +ไทย.txt",
+                "destination-bucket", "folder/destination +ไทย.txt", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(succeeds);
+        using var client = AuthorizedClient(factory, method);
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), LegacyQuery(method)));
+
+        Assert.Equal(succeeds ? HttpStatusCode.NoContent : HttpStatusCode.BadRequest, response.StatusCode);
+        if (succeeds) Assert.Empty(await response.Content.ReadAsByteArrayAsync());
+        else Assert.Equal(method == "DELETE" ? "Could not delete uploaded file" : "Could not move the uploaded file",
+            await response.Content.ReadFromJsonAsync<string>());
+        factory.Service.VerifyAll();
+        if (method == "DELETE")
+            factory.Service.Verify(service => service.DeleteAsync("source-bucket", "folder/source +ไทย.txt", It.IsAny<CancellationToken>()), Times.Once);
+        else
+            factory.Service.Verify(service => service.MoveAsync("source-bucket", "folder/source +ไทย.txt",
+                "destination-bucket", "folder/destination +ไทย.txt", It.IsAny<CancellationToken>()), Times.Once);
+        factory.Service.VerifyNoOtherCalls();
+    }
+
+    private static HttpClient AuthorizedClient(AdmissionFactory factory, string method)
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        client.DefaultRequestHeaders.Authorization = new("Bearer", factory.Token("required-permission", method));
+        return client;
+    }
+
+    private static string LegacyQuery(string method, string? missingField = null)
+    {
+        var fields = method == "DELETE"
+            ? new Dictionary<string, string> { ["bucket"] = "source-bucket", ["objectName"] = "folder/source +ไทย.txt" }
+            : new Dictionary<string, string>
+            {
+                ["sourceBucket"] = "source-bucket", ["sourceObjectName"] = "folder/source +ไทย.txt",
+                ["destinationBucket"] = "destination-bucket", ["destinationObjectName"] = "folder/destination +ไทย.txt",
+            };
+        return "/Uploads?" + string.Join("&", fields.Where(field => field.Key != missingField)
+            .Select(field => field.Key + "=" + Uri.EscapeDataString(field.Value)));
+    }
+
+    private sealed class AdmissionFactory(string connectionString, bool useActualApplication = false) : WebApplicationFactory<Program>
     {
         private const string Issuer = "https://file-route-fixture.invalid";
         private const string Audience = "file-route-fixture";
@@ -104,11 +198,12 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
             };
             foreach (var setting in settings) builder.UseSetting(setting.Key, setting.Value);
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(settings));
-            builder.ConfigureTestServices(services =>
-            {
-                services.RemoveAll<IFileService>();
-                services.AddSingleton(Service.Object);
-            });
+            if (!useActualApplication)
+                builder.ConfigureTestServices(services =>
+                {
+                    services.RemoveAll<IFileService>();
+                    services.AddSingleton(Service.Object);
+                });
         }
 
         public string Token(string identity, string method)
