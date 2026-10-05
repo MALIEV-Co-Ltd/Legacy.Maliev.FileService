@@ -15,6 +15,9 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 public sealed class SignedUrlController(IFileService service) : ControllerBase
 {
     /// <summary>Creates a time-limited URL for a recorded clean object.</summary>
+    /// <param name="bucket">The bucket.</param>
+    /// <param name="objectName">Name of the object.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
     [HttpGet]
     [RequirePermission(FilePermissions.Read)]
     public async Task<ActionResult<Uri>> GetSignedUrlAsync([FromQuery] string? bucket, [FromQuery] string? objectName, CancellationToken cancellationToken)

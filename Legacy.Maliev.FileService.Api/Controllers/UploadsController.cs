@@ -20,6 +20,9 @@ public sealed class UploadsController(
     LegacyFileRuntimeGate runtimeGate) : ControllerBase
 {
     /// <summary>Deletes an uploaded object.</summary>
+    /// <param name="bucket">The bucket.</param>
+    /// <param name="objectName">Name of the object.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
     [HttpDelete]
     [RequirePermission(FilePermissions.Delete)]
     public async Task<ActionResult> DeleteUploadAsync([FromQuery] string? bucket, [FromQuery] string? objectName, CancellationToken cancellationToken)
@@ -46,6 +49,11 @@ public sealed class UploadsController(
     }
 
     /// <summary>Moves an uploaded object.</summary>
+    /// <param name="sourceBucket">The bucket.</param>
+    /// <param name="sourceObjectName">Name of the source object.</param>
+    /// <param name="destinationBucket">The destination bucket.</param>
+    /// <param name="destinationObjectName">Name of the destination object.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
     [HttpPut]
     [RequirePermission(FilePermissions.Update)]
     public async Task<ActionResult> MoveUploadAsync(
@@ -87,6 +95,11 @@ public sealed class UploadsController(
     }
 
     /// <summary>Uploads files through private quarantine and malware scanning.</summary>
+    /// <param name="bucket">Name of the bucket.</param>
+    /// <param name="files">The files.</param>
+    /// <param name="path">The path.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <param name="idempotencyKey">Identifies an optional upload replay.</param>
     [HttpPost]
     [RequireLegacyFileWrites]
     [RequestSizeLimit(FileApplicationService.MaximumRequestBytes)]
