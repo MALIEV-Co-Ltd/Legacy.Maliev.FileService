@@ -1,0 +1,84 @@
+using System.Diagnostics;
+using Legacy.Maliev.FileService.Tests.Api;
+
+namespace Legacy.Maliev.FileService.Tests.Workflows;
+
+[Collection(FileIncidentHttpCollection.Name)]
+public sealed class FileIdentityPlanContractTests
+{
+    [Theory]
+    [InlineData("intent-valid")]
+    [InlineData("intent-namespace")]
+    [InlineData("intent-deployment")]
+    [InlineData("intent-container")]
+    [InlineData("intent-ksa")]
+    [InlineData("intent-account-namespace")]
+    [InlineData("intent-account-name")]
+    [InlineData("intent-gsa")]
+    [InlineData("intent-token-false")]
+    [InlineData("intent-token-string")]
+    [InlineData("iam-valid")]
+    [InlineData("iam-project")]
+    [InlineData("iam-bucket")]
+    [InlineData("iam-gsa")]
+    [InlineData("iam-missing-object")]
+    [InlineData("iam-missing-wif")]
+    [InlineData("iam-missing-signing")]
+    [InlineData("iam-conditional-object")]
+    [InlineData("iam-conditional-wif")]
+    [InlineData("iam-conditional-signing")]
+    [InlineData("iam-storage-admin")]
+    [InlineData("iam-owner")]
+    [InlineData("iam-editor")]
+    [InlineData("iam-member-case")]
+    [InlineData("iam-duplicate-binding")]
+    [InlineData("iam-public")]
+    [InlineData("iam-cross-bucket")]
+    [InlineData("iam-cross-signing")]
+    [InlineData("iam-cross-wif")]
+    [InlineData("plan-valid")]
+    [InlineData("plan-duplicate-json")]
+    [InlineData("plan-duplicate-iam-json")]
+    [InlineData("plan-helper-missing")]
+    [InlineData("plan-helper-changed")]
+    [InlineData("plan-identity-invalid")]
+    [InlineData("plan-reader-fails")]
+    [InlineData("plan-policy-invalid")]
+    [InlineData("plan-builder-fails")]
+    [InlineData("plan-image-invalid")]
+    [InlineData("plan-source-invalid")]
+    [InlineData("plan-unapproved")]
+    public async Task OfflineIdentityAndIamContract_UsesActualParsedProducer(string scenario)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Legacy.Maliev.FileService.slnx")))
+            root = root.Parent;
+        Assert.NotNull(root);
+        var start = new ProcessStartInfo("pwsh")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = root.FullName,
+        };
+        start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(Path.Combine(root.FullName, "Legacy.Maliev.FileService.Tests", "Workflows", "FileIdentityPlanScenarios.ps1"));
+        start.ArgumentList.Add("-Scenario");
+        start.ArgumentList.Add(scenario);
+        using var process = Process.Start(start);
+        Assert.NotNull(process);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            throw;
+        }
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal("PASS:" + scenario, (await output).Trim());
+        Assert.Empty(await error);
+    }
+}

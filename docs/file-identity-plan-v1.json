@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "legacy-file-identity-plan/v1",
+  "purpose": "offline source migration plan; no runtime or infrastructure activation",
+  "deploymentAllowed": false,
+  "liveAccepted": false,
+  "identity": {
+    "project": "maliev-website",
+    "namespace": "maliev-legacy",
+    "deployment": "legacy-maliev-file",
+    "container": "legacy-maliev-file-service",
+    "kubernetesServiceAccount": "legacy-maliev-file",
+    "googleServiceAccount": "legacy-maliev-file@maliev-website.iam.gserviceaccount.com"
+  },
+  "identityStatus": "proposed dormant Deployment/container intent; KSA/GSA names match committed GitOps 9598923957dad5e962559e38cf1167bed8cd3fbc",
+  "resourceOrder": [
+    "ServiceAccount",
+    "Deployment"
+  ],
+  "tokenIntent": "explicit automountServiceAccountToken=true required; current GitOps false remains unaccepted",
+  "requiredBindings": [
+    {
+      "scope": "bucket",
+      "role": "roles/storage.objectUser",
+      "member": "serviceAccount:legacy-maliev-file@maliev-website.iam.gserviceaccount.com"
+    },
+    {
+      "scope": "googleServiceAccount",
+      "role": "roles/iam.workloadIdentityUser",
+      "member": "serviceAccount:maliev-website.svc.id.goog[maliev-legacy/legacy-maliev-file]"
+    },
+    {
+      "scope": "googleServiceAccount",
+      "role": "roles/iam.serviceAccountTokenCreator",
+      "member": "serviceAccount:legacy-maliev-file@maliev-website.iam.gserviceaccount.com"
+    }
+  ],
+  "preflight": "validate fixed identity and unconditional literal IAM bindings before any controlled image-builder callback",
+  "imageOnlyBoundary": "Real hash-bound shared producer invocation after guarded builder; only selected image changes; all other Deployment fields and paired ServiceAccount remain unchanged.",
+  "residuals": [
+    "runtime deployment does not exist in inspected GitOps base",
+    "live policy freshness/authenticity is not proved by supplied snapshots",
+    "no live ADC, storage, build, publication, apply or data acceptance"
+  ],
+  "tokenRequirementSource": {
+    "sha": "4533669fa5231368f17c4b59b17c3e2f52e24a89",
+    "path": "Maliev.Web.Tests/UploadServiceWorkloadIdentityDeploymentTests.cs",
+    "guard": "ServiceAccount_MapsToDedicatedGoogleServiceAccount literal automountServiceAccountToken: true"
+  },
+  "tokenProofBoundary": "Literal source intent only; projected token audience, mount path and ownership were not specified by that guard. This does not establish a universal GKE ADC token-mount requirement or modern runtime adoption.",
+  "iamRequirementSource": {
+    "sha": "25418c95b5ac79400029ce274541f0e51728da3e",
+    "path": "Maliev.UploadService.Api/configure-workload-identity.ps1",
+    "portion": "literal bucket objectUser, KSA workloadIdentityUser and GSA self-signing TokenCreator bindings read before image construction"
+  },
+  "imageOnlyProducer": {
+    "repository": "MALIEV-Co-Ltd/Legacy.Maliev.Workflows",
+    "commit": "ee3772967b2bf44687fbde11213127e656b9c49c",
+    "path": "scripts/New-OfflineImageOnlyDeploymentPlan.ps1",
+    "canonicalLfSha256": "bff22600979e72eb63958eae1c5f86ec9bb000dd6ab24ea9d529d9cac92df515",
+    "contractVersion": "legacy-file-image-only/v1",
+    "acceptanceRequirement": "Both producer and consumer exact-main CI must pass before accepting this boundary."
+  }
+}
