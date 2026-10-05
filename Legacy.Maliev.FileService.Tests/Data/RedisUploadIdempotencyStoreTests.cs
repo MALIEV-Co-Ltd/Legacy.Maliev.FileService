@@ -44,7 +44,7 @@ public sealed class RedisUploadIdempotencyStoreTests : IAsyncLifetime
     {
         var store = new RedisUploadIdempotencyStore(connection);
         var results = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => store.AcquireAsync("RACE", "fingerprint", "orders/42", default)));
-        var owner = Assert.Single(results.Where(result => result.State == UploadAcquireState.Acquired));
+        var owner = Assert.Single(results, result => result.State == UploadAcquireState.Acquired);
         Assert.Equal(11, results.Count(result => result.State == UploadAcquireState.InProgress));
         Assert.Equal(owner.ReservationId, (string?)await connection!.GetDatabase().StringGetAsync("legacy:file:idempotency:v1:RACE:lease"));
         Assert.True(await store.RenewAsync("RACE", owner.ReservationId!, default));
