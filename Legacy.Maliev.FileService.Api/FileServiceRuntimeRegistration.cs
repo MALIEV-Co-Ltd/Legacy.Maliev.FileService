@@ -95,6 +95,8 @@ public static class FileServiceRuntimeRegistration
         }
 
         services.TryAddScoped<IUploadRepository, UploadRepository>();
+        if (legacyStorageEnabled) services.TryAddScoped<IStorageReadJournal, StorageMoveJournalRepository>();
+        else services.TryAddScoped<IStorageReadJournal, DisabledStorageReadJournal>();
         if (legacyWritesEnabled) services.TryAddScoped<IStorageMoveJournal, StorageMoveJournalRepository>();
         else services.TryAddScoped<IStorageMoveJournal, DisabledStorageMoveJournal>();
         if (legacyWritesEnabled) services.TryAddScoped<IQuarantineUploadIntent, QuarantineUploadIntentRepository>();

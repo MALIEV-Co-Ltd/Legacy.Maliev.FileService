@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Legacy.Maliev.FileService.Data;
 
 /// <summary>PostgreSQL-backed, non-expiring storage move evidence.</summary>
-public sealed class StorageMoveJournalRepository(FileDbContext db, TimeProvider clock) : IStorageMoveJournal
+public sealed class StorageMoveJournalRepository(FileDbContext db, TimeProvider clock) : IStorageMoveJournal, IStorageReadJournal
 {
     /// <inheritdoc />
     public Task<bool> TryBeginMetadataSubmissionAsync(IReadOnlyList<StorageMoveClaim> claims, CancellationToken cancellationToken) =>
@@ -52,6 +52,24 @@ public sealed class StorageMoveJournalRepository(FileDbContext db, TimeProvider 
         if (!row.ScanClean || row.State != "MetadataCommitted" || row.SourceGeneration <= 0 || row.DestinationGeneration is not > 0
             || string.IsNullOrWhiteSpace(row.SourceBucket) || string.IsNullOrWhiteSpace(row.SourceObjectName)) return null;
         return Evidence(row);
+    }
+
+    /// <inheritdoc />
+    public async Task<StorageReadEvidence> FindReadEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken)
+    {
+        // Missing or incompatible physical schema is a failure, never historical absence.
+        await QuarantineUploadIntentRepository.EnsurePhysicalSchemaAsync(db, cancellationToken);
+        var rows = await db.StorageMoveJournals.AsNoTracking().Where(row => row.DestinationBucket == bucket
+            && row.DestinationObjectName == objectName).Take(2).ToArrayAsync(cancellationToken);
+        if (rows.Length == 0) return new(StorageReadState.Absent);
+        if (rows.Length != 1) return new(StorageReadState.Ambiguous);
+        var row = rows[0];
+        if (row.State is "CompensatedRemoved" or "CompensatedAbsent") return new(StorageReadState.Revoked);
+        if (!row.ScanClean) return new(StorageReadState.Unclean);
+        if (row.State != "MetadataCommitted" || row.SourceGeneration <= 0 || row.DestinationGeneration is not > 0
+            || string.IsNullOrWhiteSpace(row.SourceBucket) || string.IsNullOrWhiteSpace(row.SourceObjectName))
+            return new(StorageReadState.Incomplete);
+        return new(StorageReadState.Confirmed, Evidence(row));
     }
 
     private async Task<bool> TransitionBatchAsync(IReadOnlyList<StorageMoveClaim> claims, string expectedState,

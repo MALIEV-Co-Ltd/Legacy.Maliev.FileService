@@ -36,6 +36,10 @@ public sealed class SignedUrlController(IFileService service) : ControllerBase
         {
             return BadRequest();
         }
+        catch (SignedReadEvidenceUnavailableException)
+        {
+            return LegacyFileProblem.Unavailable();
+        }
         catch (MalwareScannerUnavailableException)
         {
             return LegacyFileProblem.Unavailable();

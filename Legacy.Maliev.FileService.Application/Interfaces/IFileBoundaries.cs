@@ -22,6 +22,35 @@ public interface IFileService
     Task<Uri?> GetSignedUrlAsync(string bucket, string objectName, CancellationToken cancellationToken);
 }
 
+/// <summary>Read-only authority for an existing object's generation evidence.</summary>
+public interface IStorageReadJournal
+{
+    /// <summary>Distinguishes historical absence from present, incomplete or revoked evidence.</summary>
+    Task<StorageReadEvidence> FindReadEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken);
+}
+
+/// <summary>Classifies evidence without inferring that historical metadata was scanned.</summary>
+public enum StorageReadState
+{
+    /// <summary>No matching journal exists; historical compatibility requires a live generation.</summary>
+    Absent,
+    /// <summary>One clean, committed, complete generation record exists.</summary>
+    Confirmed,
+    /// <summary>The record is pending, unknown or structurally incomplete.</summary>
+    Incomplete,
+    /// <summary>The record does not certify a complete clean scan.</summary>
+    Unclean,
+    /// <summary>Compensation positively removed or established absence of the destination.</summary>
+    Revoked,
+    /// <summary>Multiple destination records cannot establish unique authority.</summary>
+    Ambiguous,
+}
+
+/// <summary>Typed read-only journal state and its optional confirmed immutable evidence.</summary>
+/// <param name="State">The authority classification.</param>
+/// <param name="Evidence">Complete evidence only when the state is confirmed.</param>
+public sealed record StorageReadEvidence(StorageReadState State, StorageMoveEvidence? Evidence = null);
+
 /// <summary>Durable checkpoint for a private object move; coordinates are never logged.</summary>
 public interface IStorageMoveJournal
 {
@@ -90,6 +119,8 @@ public interface IObjectStorage
     Task<long?> GetSizeAsync(string bucket, string objectName, CancellationToken cancellationToken);
     /// <summary>Reads the live generation and size without downloading bytes.</summary>
     Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken);
+    /// <summary>Signs an exact positive object generation without selecting replacement bytes.</summary>
+    Task<Uri> CreateSignedGenerationReadUriAsync(string bucket, string objectName, long generation, TimeSpan duration, CancellationToken cancellationToken);
     /// <summary>Creates a time-limited signed read URL.</summary>
     Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken);
 }

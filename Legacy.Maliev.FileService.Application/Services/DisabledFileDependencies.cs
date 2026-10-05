@@ -17,6 +17,14 @@ public sealed class DisabledQuarantineUploadIntent : IQuarantineUploadIntent
     public Task UnknownAsync(Guid operationId, CancellationToken cancellationToken) => Task.FromException(Unavailable());
 }
 
+/// <summary>Fail-closed read evidence when legacy storage is disabled.</summary>
+public sealed class DisabledStorageReadJournal : IStorageReadJournal
+{
+    /// <inheritdoc />
+    public Task<StorageReadEvidence> FindReadEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
+        Task.FromException<StorageReadEvidence>(new MalwareScannerUnavailableException("Legacy file storage is disabled."));
+}
+
 /// <summary>Fail-closed move journal for write-disabled runtimes.</summary>
 public sealed class DisabledStorageMoveJournal : IStorageMoveJournal
 {
@@ -87,6 +95,10 @@ public sealed class DisabledObjectStorage : IObjectStorage
     /// <inheritdoc />
     public Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
         Task.FromException<StorageObjectEvidence?>(Unavailable());
+
+    /// <inheritdoc />
+    public Task<Uri> CreateSignedGenerationReadUriAsync(string bucket, string objectName, long generation, TimeSpan duration, CancellationToken cancellationToken) =>
+        Task.FromException<Uri>(Unavailable());
 
     /// <inheritdoc />
     public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken) =>
