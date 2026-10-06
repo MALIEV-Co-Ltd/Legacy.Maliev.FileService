@@ -8,9 +8,14 @@ using StorageObject = Google.Apis.Storage.v1.Data.Object;
 
 namespace Legacy.Maliev.FileService.Data;
 
-/// <summary>Google Cloud Storage adapter using Application Default Credentials only.</summary>
-public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner signer, IStorageMoveJournal? journal = null) : IObjectStorage
+/// <summary>Google storage adapter with normal ADC or an explicitly isolated hosted acceptance composition.</summary>
+public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner signer, IStorageMoveJournal? journal,
+    HostedAcceptanceSignedReadOrigin? hostedOrigin = null) : IObjectStorage
 {
+    /// <summary>Preserves the ordinary adapter constructor and its default cloud signing origin.</summary>
+    public GoogleCloudObjectStorage(StorageClient client, UrlSigner signer, IStorageMoveJournal? journal = null)
+        : this(client, signer, journal, null) { }
+
     /// <inheritdoc />
     public async Task UploadAsync(
         string bucket,
@@ -334,8 +339,9 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
     {
         var request = CreateReadRequestTemplate(bucket, objectName);
         var options = CreateReadOptions(duration);
+        if (hostedOrigin is not null) options = hostedOrigin.Apply(options);
         var url = await signer.SignAsync(request, options, cancellationToken);
-        return new Uri(url, UriKind.Absolute);
+        return hostedOrigin is null ? new Uri(url, UriKind.Absolute) : hostedOrigin.ValidateSignedUri(url);
     }
 
     /// <inheritdoc />
@@ -344,8 +350,10 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
     {
         if (generation <= 0) throw new ArgumentOutOfRangeException(nameof(generation));
         var request = CreateReadRequestTemplate(bucket, objectName, generation);
-        var url = await signer.SignAsync(request, CreateReadOptions(duration), cancellationToken);
-        return new Uri(url, UriKind.Absolute);
+        var options = CreateReadOptions(duration);
+        if (hostedOrigin is not null) options = hostedOrigin.Apply(options);
+        var url = await signer.SignAsync(request, options, cancellationToken);
+        return hostedOrigin is null ? new Uri(url, UriKind.Absolute) : hostedOrigin.ValidateSignedUri(url);
     }
 
     internal static UrlSigner.Options CreateReadOptions(TimeSpan duration) =>
