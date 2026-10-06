@@ -11,8 +11,12 @@ namespace Legacy.Maliev.FileService.Data;
 /// <summary>Streams complete files to a ClamAV daemon without writing them to local disk.</summary>
 public sealed class ClamAvFileSafetyScanner(
     IOptions<MalwareScannerOptions> options,
-    ILogger<ClamAvFileSafetyScanner> logger) : IFileSafetyScanner, IInstantQuoteFileSafetyScanner
+    ILogger<ClamAvFileSafetyScanner> logger, HostedAcceptanceDependencyLease? hostedLease = null) : IFileSafetyScanner, IInstantQuoteFileSafetyScanner
 {
+    /// <summary>Preserves ordinary scanner construction without a hosted acceptance lease.</summary>
+    public ClamAvFileSafetyScanner(IOptions<MalwareScannerOptions> options, ILogger<ClamAvFileSafetyScanner> logger)
+        : this(options, logger, null) { }
+
     private const int ChunkSize = 64 * 1024;
     private const int MaxResponseBytes = 4096;
 
@@ -38,7 +42,7 @@ public sealed class ClamAvFileSafetyScanner(
     private async Task<FileSafetyResult> ScanContentAsync(Stream content, CancellationToken cancellationToken)
     {
         var settings = options.Value;
-        if (string.IsNullOrWhiteSpace(settings.Host))
+        if (string.IsNullOrWhiteSpace(settings.Host) || hostedLease is { IsCurrent: false })
         {
             return new FileSafetyResult(FileSafetyVerdict.Unavailable);
         }
@@ -71,7 +75,7 @@ public sealed class ClamAvFileSafetyScanner(
             await network.FlushAsync(timeout.Token);
 
             var response = await ReadResponseAsync(network, timeout.Token);
-            return response is null
+            return response is null || hostedLease is { IsCurrent: false }
                 ? new FileSafetyResult(FileSafetyVerdict.Unavailable)
                 : ParseResponse(response);
         }

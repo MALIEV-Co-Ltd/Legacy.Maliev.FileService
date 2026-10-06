@@ -3,6 +3,8 @@ using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using Legacy.Maliev.FileService.Api;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -12,6 +14,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Legacy.Maliev.FileService.Tests.OpenApi;
@@ -175,7 +179,36 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         if (bearer) context.Request.Headers.Authorization = "Bearer " + factory.Token();
     }
 
-    private sealed class FileHostFactory(string connectionString, bool configuredProxy, string environment, string policy)
+    [Fact]
+    public async Task HostedHandshakeRequiresRealBearerReturnsOnlyPublicKeyAndHonorsExpiry()
+    {
+        var clock = new HostedClock();
+        await using var factory = new FileHostFactory(database.ConnectionString, false,
+            HostedFinancialCompletionProfile.EnvironmentName, "InternalHttpWithTrustedEdgeHttps", clock);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://fixture.invalid") });
+        using var anonymous = await client.GetAsync("/file/acceptance/signing-key");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", factory.Token());
+        using var authorized = await client.GetAsync("/file/acceptance/signing-key");
+        Assert.Equal(HttpStatusCode.OK, authorized.StatusCode);
+        using var body = JsonDocument.Parse(await authorized.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "Algorithm", "PublicKey" }, body.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("GOOG4-RSA-SHA256", body.RootElement.GetProperty("Algorithm").GetString());
+        using var key = RSA.Create();
+        key.ImportSubjectPublicKeyInfo(Convert.FromBase64String(body.RootElement.GetProperty("PublicKey").GetString()!), out _);
+        Assert.Equal(2048, key.KeySize);
+        clock.Current = clock.Current.AddMinutes(11);
+        using var expired = await client.GetAsync("/file/acceptance/signing-key");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, expired.StatusCode);
+    }
+
+    private sealed class HostedClock : TimeProvider
+    {
+        public DateTimeOffset Current { get; set; } = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => Current;
+    }
+
+    private sealed class FileHostFactory(string connectionString, bool configuredProxy, string environment, string policy, HostedClock? hostedClock = null)
         : WebApplicationFactory<Program>
     {
         private const string Issuer = "https://file-host-policy-fixture.invalid";
@@ -201,6 +234,43 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
                 ["InstantQuoteFiles:WritesEnabled"] = "false",
                 ["InstantQuoteFiles:CleanupEnabled"] = "false"
             };
+            if (hostedClock is not null)
+            {
+                var prefix = "HostedFinancialCompletionAcceptance:Admission:";
+                settings["HostedFinancialCompletionAcceptance:Enabled"] = "true";
+                settings["FileStorage:Enabled"] = "true";
+                settings["FileStorage:WritesEnabled"] = "true";
+                settings["FileStorage:AllowedBuckets:0"] = "synthetic-private";
+                settings[prefix + "SchemaVersion"] = "1";
+                settings[prefix + "RunId"] = Environment.GetEnvironmentVariable("GITHUB_RUN_ID");
+                settings[prefix + "RunAttempt"] = Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT");
+                settings[prefix + "FileSourceSha"] = HostedFinancialCompletionProfile.BuildSourceSha();
+                settings[prefix + "IssuedUtc"] = hostedClock.Current.ToString("O");
+                settings[prefix + "ExpiresUtc"] = hostedClock.Current.AddMinutes(10).ToString("O");
+                settings[prefix + "StorageOrigin"] = "http://127.0.0.1:5010/";
+                settings[prefix + "ResourceLeaseId"] = "c821-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+                settings[prefix + "StorageEndpointIdentity:Kind"] = "process";
+                settings[prefix + "StorageEndpointIdentity:Pid"] = "123";
+                settings[prefix + "StorageEndpointIdentity:StartedUtc"] = hostedClock.Current.AddMinutes(-1).ToString("O");
+                settings[prefix + "StorageEndpointIdentity:ExecutableAbsolutePath"] = "/usr/bin/dotnet";
+                settings[prefix + "StorageEndpointIdentity:ExecutableSha256"] = new string('a', 64);
+                settings[prefix + "StorageEndpointIdentity:HostIp"] = "127.0.0.1";
+                settings[prefix + "StorageEndpointIdentity:HostPort"] = "5010";
+                settings[prefix + "ScannerHost"] = "127.0.0.1";
+                settings[prefix + "ScannerPort"] = "3310";
+                settings[prefix + "ScannerContainerId"] = new string('b', 64);
+                settings[prefix + "ScannerImageDigest"] = "sha256:" + new string('c', 64);
+                settings[prefix + "ScannerDatabaseIdentity:EngineVersion"] = "controlled-protocol-fixture";
+                settings[prefix + "ScannerDatabaseIdentity:LoadedDatabaseVersion"] = "controlled-not-engine-evidence";
+                settings[prefix + "ScannerDatabaseIdentity:ObservedUtc"] = hostedClock.Current.ToString("O");
+                settings[prefix + "ScannerDatabaseIdentity:ReadinessReceiptSha256"] = new string('d', 64);
+                settings[prefix + "ScannerDatabaseIdentity:DatabaseFilesSha256:daily.cvd"] = new string('e', 64);
+                builder.ConfigureTestServices(services =>
+                {
+                    services.RemoveAll<TimeProvider>();
+                    services.AddSingleton<TimeProvider>(hostedClock);
+                });
+            }
             foreach (var setting in settings) builder.UseSetting(setting.Key, setting.Value);
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(settings));
         }

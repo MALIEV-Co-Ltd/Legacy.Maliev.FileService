@@ -161,7 +161,55 @@ public sealed class ClamAvFileSafetyScannerTests
         Assert.Equal(InstantQuoteScanResult.Unavailable, result);
     }
 
-    private static ClamAvFileSafetyScanner CreateScanner(int port, int timeoutSeconds = 5) =>
+    [Theory]
+    [InlineData("stream: OK\0", InstantQuoteScanResult.Clean)]
+    [InlineData("stream: Eicar-Test-Signature FOUND\0", InstantQuoteScanResult.Unsafe)]
+    [InlineData("stream: ERROR\0", InstantQuoteScanResult.Unavailable)]
+    public async Task AdmittedActualScannerPreservesCompleteInstreamProtocol(string response, InstantQuoteScanResult expected)
+    {
+        byte[]? received = null;
+        await using var server = new LoopbackClamAvServer(async (stream, cancellationToken) =>
+        {
+            await AssertCommandAsync(stream, cancellationToken);
+            received = (await ReadChunksAsync(stream, cancellationToken)).SelectMany(chunk => chunk).ToArray();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(response), cancellationToken);
+        });
+        var clock = new HostedClock();
+        var scanner = CreateScanner(server.Port, hostedLease: new HostedAcceptanceDependencyLease(clock.Current.AddMinutes(1), clock));
+        using var content = new MemoryStream("complete benign bytes"u8.ToArray());
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await ((IInstantQuoteFileSafetyScanner)scanner).ScanAsync(content, deadline.Token);
+        Assert.Equal(expected, result);
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(content.ToArray(), received);
+    }
+
+    [Fact]
+    public async Task LeaseExpiringDuringScanCannotReturnCleanForPromotion()
+    {
+        var clock = new HostedClock();
+        var expiry = clock.Current.AddMinutes(1);
+        await using var server = new LoopbackClamAvServer(async (stream, cancellationToken) =>
+        {
+            await AssertCommandAsync(stream, cancellationToken);
+            _ = await ReadChunksAsync(stream, cancellationToken);
+            clock.Current = expiry;
+            await stream.WriteAsync("stream: OK\0"u8.ToArray(), cancellationToken);
+        });
+        var scanner = CreateScanner(server.Port, hostedLease: new HostedAcceptanceDependencyLease(expiry, clock));
+        using var content = new MemoryStream("benign bytes"u8.ToArray());
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        Assert.Equal(InstantQuoteScanResult.Unavailable, await ((IInstantQuoteFileSafetyScanner)scanner).ScanAsync(content, deadline.Token));
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private sealed class HostedClock : TimeProvider
+    {
+        public DateTimeOffset Current { get; set; } = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => Current;
+    }
+
+    private static ClamAvFileSafetyScanner CreateScanner(int port, int timeoutSeconds = 5, HostedAcceptanceDependencyLease? hostedLease = null) =>
         new(
             Options.Create(new MalwareScannerOptions
             {
@@ -169,7 +217,7 @@ public sealed class ClamAvFileSafetyScannerTests
                 Port = port,
                 TimeoutSeconds = timeoutSeconds,
             }),
-            NullLogger<ClamAvFileSafetyScanner>.Instance);
+            NullLogger<ClamAvFileSafetyScanner>.Instance, hostedLease);
 
     private static async Task AssertCommandAsync(NetworkStream stream, CancellationToken cancellationToken)
     {
