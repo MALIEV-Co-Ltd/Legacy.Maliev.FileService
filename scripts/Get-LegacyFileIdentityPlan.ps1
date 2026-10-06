@@ -45,6 +45,11 @@ function Assert-LegacyFileIdentityIntent {
         $account.automountServiceAccountToken -isnot [bool] -or -not $account.automountServiceAccountToken) {
         throw 'Legacy File service-account identity or token intent is invalid.'
     }
+    $pod = $deployment.spec.template.spec
+    if ($pod.ContainsKey('automountServiceAccountToken') -and
+        ($pod.automountServiceAccountToken -isnot [bool] -or -not $pod.automountServiceAccountToken)) {
+        throw 'Legacy File Pod token intent is invalid.'
+    }
     return [pscustomobject]@{ Deployment = $deployment; ServiceAccount = $account; DeploymentAllowed = $false; LiveAccepted = $false }
 }
 
@@ -92,6 +97,21 @@ function Assert-LegacyFileIamSnapshot {
     return [pscustomobject]@{ SchemaVersion = 'legacy-file-identity-plan/v1'; PolicySemanticsAccepted = $true; DeploymentAllowed = $false; LiveAccepted = $false }
 }
 
+function Assert-LegacyFileSourceGuardProducer {
+    param([string]$ScriptPath, [string]$ModulePath)
+    foreach ($producer in @(
+        @{ Path = $ScriptPath; Hash = '06E0D8710B4DE9B9E2B59BA1CF1DC013547D15848827674D5D5B30688297E85C' },
+        @{ Path = $ModulePath; Hash = 'B91F780DD2D18D91962D500F1090E82772358559346FB13977B04CDD4509A82F' }
+    )) {
+        try {
+            if ((Get-Item -LiteralPath $producer.Path -ErrorAction Stop).Length -gt 131072) { throw 'Oversized producer.' }
+            $text = [IO.File]::ReadAllText($producer.Path).Replace("`r`n", "`n")
+            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($text)))
+        } catch { throw 'Legacy File source-guard producer is unavailable.' }
+        if ($hash -cne $producer.Hash) { throw 'Legacy File source-guard producer bytes are not approved.' }
+    }
+}
+
 function New-LegacyFileIdentityPlan {
     [CmdletBinding()]
     param(
@@ -126,17 +146,7 @@ function New-LegacyFileIdentityPlan {
         throw 'Legacy File image-plan producer bytes are not approved.'
     }
     . $ImageOnlyPlanScriptPath
-    foreach ($producer in @(
-        @{ Path = $SourceGuardScriptPath; Hash = '06E0D8710B4DE9B9E2B59BA1CF1DC013547D15848827674D5D5B30688297E85C' },
-        @{ Path = $SourceGuardModulePath; Hash = 'B91F780DD2D18D91962D500F1090E82772358559346FB13977B04CDD4509A82F' }
-    )) {
-        try {
-            if ((Get-Item -LiteralPath $producer.Path -ErrorAction Stop).Length -gt 131072) { throw 'Oversized producer.' }
-            $text = [IO.File]::ReadAllText($producer.Path).Replace("`r`n", "`n")
-            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($text)))
-        } catch { throw 'Legacy File source-guard producer is unavailable.' }
-        if ($hash -cne $producer.Hash) { throw 'Legacy File source-guard producer bytes are not approved.' }
-    }
+    Assert-LegacyFileSourceGuardProducer -ScriptPath $SourceGuardScriptPath -ModulePath $SourceGuardModulePath
     . $SourceGuardScriptPath
     $sourceArguments = @{
         RepositoryRoot = $SourceCheckoutPath
@@ -148,7 +158,7 @@ function New-LegacyFileIdentityPlan {
     $intent = Assert-LegacyFileIdentityIntent -DeploymentJson $DeploymentJson -ServiceAccountJson $ServiceAccountJson
     try { $sourceProof = Assert-OfflineReleaseSource @sourceArguments }
     catch { throw 'Legacy File source observation failed before IAM inspection.' }
-    try { $snapshot = & $ReadIamSnapshot }
+    try { $snapshot = & $ReadIamSnapshot *>&1 }
     catch { throw 'Legacy File IAM policy read failed before image construction.' }
     if ($snapshot -isnot [string]) { throw 'Legacy File IAM policy reader returned an invalid snapshot.' }
     $null = Assert-LegacyFileIamSnapshot -SnapshotJson $snapshot -ExpectedBucketUri $ExpectedBucketUri
@@ -156,7 +166,7 @@ function New-LegacyFileIdentityPlan {
     catch { throw 'Legacy File source observation failed before image construction.' }
     # The only image construction boundary follows successful policy validation.
     # No default adapter exists; callers must explicitly supply a controlled one.
-    try { $built = & $BuildImage }
+    try { $built = & $BuildImage *>&1 }
     catch { throw 'Legacy File controlled image construction failed.' }
     if ($built -isnot [hashtable] -or $built.Count -ne 3 -or $built.sourceCommit -cne $SourceCommit -or $built.approved -isnot [bool] -or -not $built.approved -or
         $built.image -isnot [string] -or -not $built.image.StartsWith($ApprovedImageRepository + '@sha256:', [StringComparison]::Ordinal) -or

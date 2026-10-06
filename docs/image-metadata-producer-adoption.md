@@ -40,3 +40,10 @@ inventory is 75; the expected full suite is 857, derived from accepted 838 plus
 The paired source bridge pin is canonical-LF SHA-256
 `06e0d8710b4de9b9e2b59ba1cf1dc013547d15848827674d5d5b30688297e85c`.
 The Python source guard module and image-plan producer remain unchanged.
+
+The subsequent token-intent correction requires the unchanged real dormant
+template to fail identity admission before callbacks because its Pod token
+mounting is disabled. Metadata admission/copy guards remain intact for eligible
+identity plans. See [token intent and ordered recording](token-intent-and-resource-recording.md)
+for the current 83 identity-plan cases and separate recording boundary; the 75/857
+inventory above describes the accepted File67 adoption baseline.
