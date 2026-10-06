@@ -18,6 +18,7 @@ builder.AddStandardCache("legacy:file:");
 builder.AddStandardCors();
 builder.AddJwtAuthentication();
 builder.AddStandardMiddleware(options => options.EnableRequestLogging = true);
+builder.AddFileHostTransportPolicy();
 builder.AddStandardOpenApi(
     title: "Legacy MALIEV File Service API",
     description: "Temporary .NET 10 compatibility service preserving secure legacy upload API contracts.");
@@ -43,7 +44,9 @@ builder.Services.AddFileServiceRuntime(builder.Configuration);
 
 var app = builder.Build();
 
+app.UseFileHostTransportBoundary();
 app.UseStandardMiddleware();
+app.UseFileHostTransportPolicy();
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
