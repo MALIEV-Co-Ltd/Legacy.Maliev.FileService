@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Legacy.Maliev.FileService.Api.Authorization;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -33,8 +34,8 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         await using var factory = Factory();
         var context = await SendAsync(factory, path, Caller, bearer: bearer);
         Assert.Equal(status, context.Response.StatusCode);
-        Assert.Empty(context.Response.Headers["Strict-Transport-Security"]);
-        Assert.Empty(context.Response.Headers.Location);
+        Assert.Equal(0, context.Response.Headers["Strict-Transport-Security"].Count);
+        Assert.Equal(0, context.Response.Headers.Location.Count);
     }
 
     [Theory]
@@ -46,7 +47,7 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         var context = await SendAsync(factory, ApiPath, Caller, scheme: "https", bearer: true);
         Assert.Equal(503, context.Response.StatusCode);
         Assert.Equal(hsts ? "max-age=2592000" : "", context.Response.Headers["Strict-Transport-Security"].ToString());
-        Assert.Empty(context.Response.Headers.Location);
+        Assert.Equal(0, context.Response.Headers.Location.Count);
     }
 
     [Theory]
@@ -60,7 +61,7 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         Assert.Equal("https", context.Request.Scheme);
         Assert.Equal(IPAddress.Parse(Caller), context.Connection.RemoteIpAddress);
         Assert.Equal("max-age=2592000", context.Response.Headers["Strict-Transport-Security"].ToString());
-        Assert.Empty(context.Request.Headers["X-File-Original-Scheme"]);
+        Assert.Equal(0, context.Request.Headers["X-File-Original-Scheme"].Count);
     }
 
     [Theory]
@@ -73,8 +74,8 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         await using var factory = Factory();
         var context = await SendAsync(factory, ApiPath, Proxy, forwardedScheme: forwardedScheme);
         Assert.Equal(426, context.Response.StatusCode);
-        Assert.Empty(context.Response.Headers.WWWAuthenticate);
-        Assert.Empty(context.Response.Headers.Location);
+        Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+        Assert.Equal(0, context.Response.Headers.Location.Count);
         Assert.Equal("application/problem+json", context.Response.ContentType);
     }
 
@@ -89,10 +90,10 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         Assert.Equal(503, context.Response.StatusCode);
         Assert.Equal("http", context.Request.Scheme);
         Assert.Equal(remote is null ? null : IPAddress.Parse(remote), context.Connection.RemoteIpAddress);
-        Assert.Empty(context.Response.Headers["Strict-Transport-Security"]);
-        Assert.Empty(context.Response.Headers.Location);
-        Assert.Empty(context.Request.Headers["X-File-Original-Scheme"]);
-        Assert.Empty(context.Request.Headers["X-Original-Proto"]);
+        Assert.Equal(0, context.Response.Headers["Strict-Transport-Security"].Count);
+        Assert.Equal(0, context.Response.Headers.Location.Count);
+        Assert.Equal(0, context.Request.Headers["X-File-Original-Scheme"].Count);
+        Assert.Equal(0, context.Request.Headers["X-Original-Proto"].Count);
         if (!configuredProxy)
         {
             var options = factory.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
@@ -111,8 +112,8 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         await using var factory = Factory();
         var context = await SendAsync(factory, path, Proxy, forwardedScheme: "http");
         Assert.Equal(200, context.Response.StatusCode);
-        Assert.Empty(context.Response.Headers.Location);
-        Assert.Empty(context.Response.Headers["Strict-Transport-Security"]);
+        Assert.Equal(0, context.Response.Headers.Location.Count);
+        Assert.Equal(0, context.Response.Headers["Strict-Transport-Security"].Count);
     }
 
     [Theory]
@@ -131,7 +132,7 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         });
         Assert.Equal(204, context.Response.StatusCode);
         Assert.Equal(allowed ? origin : "", context.Response.Headers.AccessControlAllowOrigin.ToString());
-        Assert.Empty(context.Response.Headers.WWWAuthenticate);
+        Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
         Assert.Equal("max-age=2592000", context.Response.Headers["Strict-Transport-Security"].ToString());
     }
 
