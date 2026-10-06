@@ -42,6 +42,37 @@ namespace Legacy.Maliev.FileService.Tests.Integration;
 public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
 {
     [Fact]
+    public async Task LegacyUpload_UnknownSizePersistsAndMaterializesWithoutInventingZero()
+    {
+        await using var context = await ContextAsync();
+        var name = Prefix();
+        context.Uploads.Add(new Upload { Bucket = "private", ContentType = "application/octet-stream", Name = name, Size = null });
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Uploads.AsNoTracking().SingleAsync(row => row.Name == name);
+        Assert.Null(stored.Size);
+        Assert.True(await new UploadRepository(context, TimeProvider.System).ExistsAsync("private", name, default));
+        Assert.False(context.Database.HasPendingModelChanges());
+    }
+
+    [Fact]
+    public void LegacyUploadSizeMigration_RelaxesOnlySizeAndRejectsUnsafeRollback()
+    {
+        using var context = fixture.CreateContext();
+        var assembly = context.GetService<IMigrationsAssembly>();
+        var migration = assembly.CreateMigration(assembly.Migrations["20261006070500_RestoreLegacyUploadSizeNullability"], context.Database.ProviderName!);
+        var operation = Assert.IsType<Microsoft.EntityFrameworkCore.Migrations.Operations.AlterColumnOperation>(Assert.Single(migration.UpOperations));
+        Assert.Equal("Upload", operation.Table);
+        Assert.Equal("Size", operation.Name);
+        Assert.Equal("bigint", operation.ColumnType);
+        Assert.Equal("bigint", operation.OldColumn.ColumnType);
+        Assert.True(operation.IsNullable);
+        Assert.False(operation.OldColumn.IsNullable);
+        Assert.Throws<NotSupportedException>(() => migration.DownOperations);
+    }
+
+    [Fact]
     public async Task UploadRpc_BeforeAnyProviderEffect_HasDurablePrivateCoordinates()
     {
         await using var context = await ContextAsync();

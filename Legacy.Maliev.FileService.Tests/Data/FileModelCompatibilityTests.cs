@@ -21,5 +21,7 @@ public sealed class FileModelCompatibilityTests
         Assert.Equal(50, entity.FindProperty(nameof(Upload.ContentType))!.GetMaxLength());
         Assert.Null(entity.FindProperty(nameof(Upload.Name))!.GetMaxLength());
         Assert.Null(entity.FindProperty("xmin"));
+        Assert.True(entity.FindProperty(nameof(Upload.Size))!.IsNullable);
+        Assert.Equal(typeof(long?), entity.FindProperty(nameof(Upload.Size))!.ClrType);
     }
 }
