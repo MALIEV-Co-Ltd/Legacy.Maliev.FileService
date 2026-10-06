@@ -12,7 +12,7 @@ public sealed class Upload
     /// <summary>Gets or sets the object name.</summary>
     public string Name { get; set; } = string.Empty;
     /// <summary>Gets or sets the object size in bytes.</summary>
-    public long Size { get; set; }
+    public long? Size { get; set; }
     /// <summary>Gets or sets the creation timestamp.</summary>
     public DateTime? CreatedDate { get; set; }
     /// <summary>Gets or sets the modification timestamp.</summary>

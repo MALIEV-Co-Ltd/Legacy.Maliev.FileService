@@ -37,7 +37,7 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         upload.Property(value => value.Bucket).HasMaxLength(50).IsRequired();
         upload.Property(value => value.ContentType).HasMaxLength(50).IsRequired();
         upload.Property(value => value.Name).IsRequired();
-        upload.Property(value => value.Size).IsRequired();
+        upload.Property(value => value.Size).IsRequired(false);
         upload.Property(value => value.CreatedDate)
             .HasColumnType("timestamp with time zone")
             .HasDefaultValueSql("CURRENT_TIMESTAMP");
