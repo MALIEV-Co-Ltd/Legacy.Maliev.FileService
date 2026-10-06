@@ -16,7 +16,11 @@ public sealed class HostedAcceptanceSigningIdentity : IDisposable
         try
         {
             Signer = UrlSigner.FromCredential(new ServiceAccountCredential(new ServiceAccountCredential.Initializer(
-                "hosted-file-signing@example.invalid") { Key = key, HttpClientFactory = new RejectingFactory() }));
+                "hosted-file-signing@example.invalid")
+            {
+                Key = key,
+                HttpClientFactory = new RejectingFactory()
+            }));
             VerificationPublicKey = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
         }
         catch
