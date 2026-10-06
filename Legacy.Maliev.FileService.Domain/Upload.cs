@@ -6,11 +6,11 @@ public sealed class Upload
     /// <summary>Gets or sets the legacy identifier.</summary>
     public int Id { get; set; }
     /// <summary>Gets or sets the Google Cloud Storage bucket.</summary>
-    public string Bucket { get; set; } = string.Empty;
+    public string? Bucket { get; set; }
     /// <summary>Gets or sets the object content type.</summary>
-    public string ContentType { get; set; } = string.Empty;
+    public string? ContentType { get; set; }
     /// <summary>Gets or sets the object name.</summary>
-    public string Name { get; set; } = string.Empty;
+    public string? Name { get; set; }
     /// <summary>Gets or sets the object size in bytes.</summary>
     public long? Size { get; set; }
     /// <summary>Gets or sets the creation timestamp.</summary>

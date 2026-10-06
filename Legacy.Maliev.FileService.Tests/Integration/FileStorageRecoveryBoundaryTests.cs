@@ -42,6 +42,183 @@ namespace Legacy.Maliev.FileService.Tests.Integration;
 public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
 {
     [Fact]
+    public async Task LegacyUploadReferenceMigration_ActualUpgradePreservesExistingRowsSchemaAndIndex()
+    {
+        await using var master = fixture.CreateContext();
+        var connection = new NpgsqlConnectionStringBuilder(master.Database.GetConnectionString());
+        var database = "legacy_reference_" + Guid.NewGuid().ToString("N");
+        await using var administrative = new NpgsqlConnection(connection.ConnectionString);
+        await administrative.OpenAsync();
+        await using (var create = new NpgsqlCommand($"CREATE DATABASE \"{database}\"", administrative)) await create.ExecuteNonQueryAsync();
+        try
+        {
+            connection.Database = database;
+            await using var context = new FileDbContext(new DbContextOptionsBuilder<FileDbContext>().UseNpgsql(connection.ConnectionString).Options);
+            await context.Database.MigrateAsync("20261006070500_RestoreLegacyUploadSizeNullability");
+            var timestamp = new DateTime(2026, 10, 6, 0, 0, 0, DateTimeKind.Utc);
+            var unknownSize = new Upload { Bucket = "private", Name = Prefix(), ContentType = "application/pdf", Size = null, CreatedDate = timestamp, ModifiedDate = timestamp.AddMinutes(1) };
+            var populated = new Upload { Bucket = "private", Name = Prefix(), ContentType = "application/octet-stream", Size = 42, CreatedDate = timestamp.AddMinutes(2), ModifiedDate = timestamp.AddMinutes(3) };
+            context.Uploads.AddRange(unknownSize, populated);
+            await context.SaveChangesAsync();
+
+            await context.Database.OpenConnectionAsync();
+            await using var command = context.Database.GetDbConnection().CreateCommand();
+            const string columnShapeSql = """
+                SELECT string_agg(concat_ws('|', column_name, data_type,
+                    COALESCE(character_maximum_length::text, ''), udt_name,
+                    COALESCE(column_default, ''), is_identity, identity_generation), E'\n' ORDER BY ordinal_position)
+                FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'Upload';
+                """;
+            const string indexSql = "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'Upload' AND indexname = 'IX_Upload_Bucket_Name';";
+            command.CommandText = columnShapeSql;
+            var originalColumns = Assert.IsType<string>(await command.ExecuteScalarAsync());
+            command.CommandText = indexSql;
+            var originalIndex = Assert.IsType<string>(await command.ExecuteScalarAsync());
+            command.CommandText = "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'Upload' AND column_name IN ('Bucket', 'Name', 'ContentType') AND is_nullable = 'NO';";
+            Assert.Equal(3L, await command.ExecuteScalarAsync());
+
+            await context.Database.MigrateAsync("20261006073000_RestoreLegacyUploadReferenceNullability");
+            context.ChangeTracker.Clear();
+            foreach (var expected in new[] { unknownSize, populated })
+            {
+                var actual = await context.Uploads.AsNoTracking().SingleAsync(row => row.Id == expected.Id);
+                Assert.Equal(expected.Id, actual.Id);
+                Assert.Equal(expected.Bucket, actual.Bucket);
+                Assert.Equal(expected.Name, actual.Name);
+                Assert.Equal(expected.ContentType, actual.ContentType);
+                Assert.Equal(expected.Size, actual.Size);
+                Assert.Equal(expected.CreatedDate, actual.CreatedDate);
+                Assert.Equal(expected.ModifiedDate, actual.ModifiedDate);
+            }
+            command.CommandText = columnShapeSql;
+            Assert.Equal(originalColumns, await command.ExecuteScalarAsync());
+            command.CommandText = indexSql;
+            Assert.Equal(originalIndex, await command.ExecuteScalarAsync());
+            command.CommandText = "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'Upload' AND column_name IN ('Bucket', 'Name', 'ContentType') AND is_nullable = 'YES';";
+            Assert.Equal(3L, await command.ExecuteScalarAsync());
+            var legacyNulls = new Upload { Bucket = null, Name = null, ContentType = null, Size = null };
+            context.Uploads.Add(legacyNulls);
+            await context.SaveChangesAsync();
+            context.ChangeTracker.Clear();
+            var storedNulls = await context.Uploads.AsNoTracking().SingleAsync(row => row.Id == legacyNulls.Id);
+            Assert.Null(storedNulls.Bucket);
+            Assert.Null(storedNulls.Name);
+            Assert.Null(storedNulls.ContentType);
+            Assert.Null(storedNulls.Size);
+            Assert.False(context.Database.HasPendingModelChanges());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"DROP DATABASE \"{database}\" WITH (FORCE)", administrative);
+            await drop.ExecuteNonQueryAsync(); // Only this unique database inside the owned native Testcontainers fixture.
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task LegacyUpload_OptionalReferenceFieldsPreserveNullsAndPopulatedValues(bool missingBucket, bool missingName, bool missingContentType)
+    {
+        await using var context = await ContextAsync();
+        var populated = new Upload { Bucket = "private", Name = Prefix(), ContentType = "application/pdf", Size = 42 };
+        var legacy = new Upload
+        {
+            Bucket = missingBucket ? null : "private",
+            Name = missingName ? null : Prefix(),
+            ContentType = missingContentType ? null : "application/octet-stream",
+            Size = null
+        };
+        context.Uploads.AddRange(populated, legacy);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Uploads.AsNoTracking().SingleAsync(row => row.Id == legacy.Id);
+        Assert.Equal(legacy.Bucket, stored.Bucket);
+        Assert.Equal(legacy.Name, stored.Name);
+        Assert.Equal(legacy.ContentType, stored.ContentType);
+        Assert.Null(stored.Size);
+        var unchanged = await context.Uploads.AsNoTracking().SingleAsync(row => row.Id == populated.Id);
+        Assert.Equal(populated.Bucket, unchanged.Bucket);
+        Assert.Equal(populated.Name, unchanged.Name);
+        Assert.Equal(populated.ContentType, unchanged.ContentType);
+        Assert.Equal(populated.Size, unchanged.Size);
+        Assert.False(context.Database.HasPendingModelChanges());
+    }
+
+    [Fact]
+    public void LegacyUploadReferenceMigration_RelaxesOnlyThreeFieldsAndRejectsUnsafeRollback()
+    {
+        using var context = fixture.CreateContext();
+        var assembly = context.GetService<IMigrationsAssembly>();
+        var migration = assembly.CreateMigration(assembly.Migrations["20261006073000_RestoreLegacyUploadReferenceNullability"], context.Database.ProviderName!);
+        Assert.Equal(3, migration.UpOperations.Count);
+        var operations = migration.UpOperations.Select(operation => Assert.IsType<Microsoft.EntityFrameworkCore.Migrations.Operations.AlterColumnOperation>(operation)).ToArray();
+        Assert.Equal(["Bucket", "ContentType", "Name"], operations.Select(operation => operation.Name));
+        foreach (var operation in operations)
+        {
+            Assert.Equal("Upload", operation.Table);
+            Assert.Equal(typeof(string), operation.ClrType);
+            Assert.Equal(typeof(string), operation.OldColumn.ClrType);
+            var columnType = operation.Name == "Name" ? "text" : "character varying(50)";
+            int? maximumLength = operation.Name == "Name" ? null : 50;
+            Assert.Equal(columnType, operation.ColumnType);
+            Assert.Equal(columnType, operation.OldColumn.ColumnType);
+            Assert.Equal(maximumLength, operation.MaxLength);
+            Assert.Equal(maximumLength, operation.OldColumn.MaxLength);
+            Assert.True(operation.IsNullable);
+            Assert.False(operation.OldColumn.IsNullable);
+            Assert.Null(operation.DefaultValue);
+            Assert.Null(operation.DefaultValueSql);
+        }
+        Assert.Throws<NotSupportedException>(() => migration.DownOperations);
+    }
+
+    [Fact]
+    public async Task LegacyUpload_ValidCoordinatesWithUnknownTypeAndSizeUseOnlyLiveGeneration()
+    {
+        await using var context = await ContextAsync();
+        var name = Prefix();
+        context.Uploads.Add(new Upload { Bucket = "private", Name = name, ContentType = null, Size = null });
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var cloud = new ControlledCloud { AllowControlledSigning = true };
+        cloud.Objects.Add(name, 31);
+
+        var signed = await Service(context, cloud).GetSignedUrlAsync("private", name, default);
+
+        Assert.NotNull(signed);
+        Assert.Contains("generation=31", signed.AbsoluteUri, StringComparison.Ordinal);
+        Assert.Equal(1, cloud.ReadCalls);
+        Assert.Equal(1, cloud.SignCalls);
+        Assert.False(await context.StorageMoveJournals.AnyAsync(row => row.DestinationBucket == "private" && row.DestinationObjectName == name));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task LegacyUpload_MissingCoordinatesCannotAuthorizeAnotherAvailableObject(bool missingBucket, bool missingName)
+    {
+        await using var context = await ContextAsync();
+        var requestedName = Prefix();
+        context.Uploads.Add(new Upload { Bucket = missingBucket ? null : "private", Name = missingName ? null : requestedName, ContentType = null, Size = null });
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var cloud = new ControlledCloud { AllowControlledSigning = true };
+        cloud.Objects.Add(requestedName, 31);
+
+        Assert.Null(await Service(context, cloud).GetSignedUrlAsync("private", requestedName, default));
+        Assert.Equal(0, cloud.ReadCalls);
+        Assert.Equal(0, cloud.SignCalls);
+    }
+
+    [Fact]
     public async Task LegacyUpload_UnknownSizePersistsAndMaterializesWithoutInventingZero()
     {
         await using var context = await ContextAsync();
@@ -301,7 +478,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         var move = await context.StorageMoveJournals.AsNoTracking().SingleAsync(row => row.DestinationObjectName.StartsWith(prefix));
         Assert.Equal(31, move.DestinationGeneration);
         Assert.False(cloud.Objects.ContainsKey(move.SourceObjectName));
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         var attempted = Assert.Single(cloud.DeleteAttempts, item => item.Generation == 31);
         Assert.False(attempted.Canceled, "Compensation inherited caller cancellation.");
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation is null);
@@ -349,7 +526,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => Service(context, cloud).UploadAsync("private", prefix, Files(), request.Token));
 
         Assert.Equal(0, cloud.SignCalls);
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         Assert.Contains(cloud.Objects, item => item.Key.StartsWith(prefix) && item.Value == 31);
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation == 31 || item.Generation is null);
         var row = await context.StorageMoveJournals.AsNoTracking().SingleAsync(item => item.DestinationObjectName.StartsWith(prefix));
@@ -556,7 +733,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
             .UploadAsync("private", prefix, [new ControlledFile("first.stl"), new ControlledFile("second.stl")], request.Token));
 
         Assert.Same(repository.Failure, failure.InnerException);
-        Assert.Equal(2, await context.Uploads.AsNoTracking().CountAsync(row => row.Name.StartsWith(prefix)));
+        Assert.Equal(2, await context.Uploads.AsNoTracking().CountAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         Assert.Equal(2, cloud.SignCalls);
         Assert.Equal(2, cloud.Objects.Count);
         Assert.All(cloud.Objects, item => Assert.Equal(31, item.Value));
@@ -583,7 +760,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         Assert.Equal(3, cloud.Objects.Count); // First destination plus second quarantine and uncertain destination.
         Assert.Equal(2, cloud.Objects.Count(item => item.Value == 31));
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation == 31 || item.Generation is null);
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
     }
 
     [Fact]
@@ -598,7 +775,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
 
         Assert.Equal(2, cloud.SignCalls);
         Assert.Equal(2, cloud.CopyCalls);
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         Assert.Equal(2, cloud.DeleteAttempts.Count(item => item.Generation == 31));
         Assert.Empty(cloud.Objects);
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation is null);
@@ -997,7 +1174,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
 
         Assert.Equal(new[] { "MetadataSubmitting", "MetadataSubmitting" }, observed);
         Assert.Equal(1, repository.Calls);
-        Assert.Equal(2, await context.Uploads.CountAsync(row => row.Name.StartsWith(prefix)));
+        Assert.Equal(2, await context.Uploads.CountAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
     }
 
     [Fact]
@@ -1021,7 +1198,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
             .UploadAsync("private", prefix, [new ControlledFile("first.stl"), new ControlledFile("second.stl")], default)));
 
         Assert.Equal(0, repository.Calls);
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         Assert.Equal(2, cloud.Objects.Count);
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation == 31);
     }
@@ -1074,7 +1251,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         Assert.Equal(new[] { "CompensationPending", "CompensationPending" }, observations[0]);
         Assert.Equal(2, cloud.DeleteAttempts.Count(item => item.Generation == 31));
         Assert.Empty(cloud.Objects);
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
     }
 
     [Theory]
@@ -1102,7 +1279,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         Assert.Equal(31, row.DestinationGeneration);
         Assert.Single(cloud.DeleteAttempts, item => item.Generation == 31);
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation is null);
-        Assert.False(await context.Uploads.AnyAsync(item => item.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(item => item.Name != null && item.Name.StartsWith(prefix)));
         if (outcome == "replacement") Assert.Equal(47, Assert.Single(cloud.Objects).Value);
         else Assert.Empty(cloud.Objects);
     }
@@ -1130,7 +1307,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation == 31);
         Assert.Equal(2, cloud.Objects.Count);
         Assert.All(cloud.Objects.Values, value => Assert.Equal(31, value));
-        Assert.False(await context.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await context.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         if (committed) Assert.True(await context.StorageMoveJournals.AnyAsync(row => row.DestinationObjectName.StartsWith(prefix) && row.State == "MetadataCommitted"));
     }
 
@@ -1210,7 +1387,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         Assert.DoesNotContain(cloud.DeleteAttempts, item => item.Generation != 17);
         Assert.Equal(2, cloud.Objects.Count);
         Assert.All(cloud.Objects.Values, item => Assert.Equal(31, item));
-        Assert.False(await seed.Uploads.AnyAsync(row => row.Name.StartsWith(prefix)));
+        Assert.False(await seed.Uploads.AnyAsync(row => row.Name != null && row.Name.StartsWith(prefix)));
         var after = await seed.StorageMoveJournals.AsNoTracking().Where(row => row.DestinationObjectName.StartsWith(prefix)).ToArrayAsync();
         Assert.Equal(2, after.Length);
         Assert.All(after, row => Assert.Equal(lostAcknowledgment ? "CompensationPending" : "SourceDeleted", row.State));
@@ -1546,6 +1723,7 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
         public int UploadCalls { get; private set; }
         public int CopyCalls { get; private set; }
         public int SignCalls { get; private set; }
+        public int ReadCalls { get; private set; }
 
         public GoogleCloudObjectStorage Storage(IStorageMoveJournal journal)
         {
@@ -1557,9 +1735,12 @@ public sealed class FileStorageRecoveryBoundaryTests(PostgreSqlFixture fixture)
                     (CancellationToken)invocation.Arguments[3])));
             client.Setup(value => value.GetObjectAsync("private", It.IsAny<string>(), It.IsAny<GetObjectOptions>(), It.IsAny<CancellationToken>()))
                 .Returns<string, string, GetObjectOptions, CancellationToken>((_, name, _, _) =>
-                    Objects.TryGetValue(name, out var generation)
+                {
+                    ReadCalls++;
+                    return Objects.TryGetValue(name, out var generation)
                         ? Task.FromResult(new StorageObject { Generation = generation, Size = 1 })
-                        : Task.FromException<StorageObject>(ApiError(HttpStatusCode.NotFound)));
+                        : Task.FromException<StorageObject>(ApiError(HttpStatusCode.NotFound));
+                });
             client.Setup(value => value.CopyObjectAsync("private", It.IsAny<string>(), "private", It.IsAny<string>(),
                     It.IsAny<CopyObjectOptions>(), It.IsAny<CancellationToken>()))
                 .Returns<string, string, string, string, CopyObjectOptions, CancellationToken>((_, source, _, destination, options, _) =>

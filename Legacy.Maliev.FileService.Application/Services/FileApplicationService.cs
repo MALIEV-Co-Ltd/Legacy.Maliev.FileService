@@ -123,10 +123,10 @@ public sealed class FileApplicationService(
             var result = new List<UploadObjectResponse>(uploads.Count);
             try
             {
-                foreach (var upload in uploads)
+                foreach (var (uploadBucket, uploadName, _) in promoted)
                 {
-                    var uri = await storage.CreateSignedReadUriAsync(upload.Bucket, upload.Name, duration, cancellationToken);
-                    result.Add(new UploadObjectResponse(upload.Bucket, upload.Name, uri));
+                    var uri = await storage.CreateSignedReadUriAsync(uploadBucket, uploadName, duration, cancellationToken);
+                    result.Add(new UploadObjectResponse(uploadBucket, uploadName, uri));
                 }
             }
             catch (Exception signingFailure) { await CompensateSigningFailureAsync(promoted, operationId, signingFailure); throw; }

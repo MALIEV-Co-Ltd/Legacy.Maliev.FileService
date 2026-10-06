@@ -37,6 +37,8 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
     private const string QuarantineIntentMigration = "20261001023704_AddQuarantineUploadIntent";
     private const string SizeNullabilityMigration = "20261006070500_RestoreLegacyUploadSizeNullability";
 
+    private const string ReferenceNullabilityMigration = "20261006073000_RestoreLegacyUploadReferenceNullability";
+
     [Fact]
     public async Task InitialMigration_FreshPostgreSql_CreatesLegacyUploadTableWithoutCustomXmin()
     {
@@ -94,7 +96,7 @@ public sealed class PostgreSqlMigrationTests(PostgreSqlFixture fixture)
         var migrations = context.GetService<IMigrationsAssembly>().Migrations.Keys.ToArray();
 
         // Inventory only: actual Up/shape/rollback/retention/model tests establish behavior.
-        Assert.Equal([InitialMigration, InstantQuoteMigration, StorageMoveMigration, QuarantineIntentMigration, SizeNullabilityMigration], migrations);
+        Assert.Equal([InitialMigration, InstantQuoteMigration, StorageMoveMigration, QuarantineIntentMigration, SizeNullabilityMigration, ReferenceNullabilityMigration], migrations);
     }
 
     [Fact]
