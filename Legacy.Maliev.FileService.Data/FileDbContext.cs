@@ -34,9 +34,9 @@ public sealed class FileDbContext(DbContextOptions<FileDbContext> options) : DbC
         upload.ToTable("Upload");
         upload.HasKey(value => value.Id);
         upload.Property(value => value.Id).HasColumnName("ID").ValueGeneratedOnAdd();
-        upload.Property(value => value.Bucket).HasMaxLength(50).IsRequired();
-        upload.Property(value => value.ContentType).HasMaxLength(50).IsRequired();
-        upload.Property(value => value.Name).IsRequired();
+        upload.Property(value => value.Bucket).HasMaxLength(50).IsRequired(false);
+        upload.Property(value => value.ContentType).HasMaxLength(50).IsRequired(false);
+        upload.Property(value => value.Name).IsRequired(false);
         upload.Property(value => value.Size).IsRequired(false);
         upload.Property(value => value.CreatedDate)
             .HasColumnType("timestamp with time zone")
