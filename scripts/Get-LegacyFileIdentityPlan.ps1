@@ -122,12 +122,12 @@ function New-LegacyFileIdentityPlan {
         $helperText = [IO.File]::ReadAllText($ImageOnlyPlanScriptPath).Replace("`r`n", "`n")
         $helperHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($helperText)))
     } catch { throw 'Legacy File image-plan producer is unavailable.' }
-    if ($helperHash -cne 'BFF22600979E72EB63958EAE1C5F86EC9BB000DD6AB24EA9D529D9CAC92DF515') {
+    if ($helperHash -cne '4F09E547E58569847479FC5D94925CD3B32CDE6693C7CC05C0AD21557A8A1D4E') {
         throw 'Legacy File image-plan producer bytes are not approved.'
     }
     . $ImageOnlyPlanScriptPath
     foreach ($producer in @(
-        @{ Path = $SourceGuardScriptPath; Hash = '52E80516F6EDCFCEC725C17E7ADDB6FF6404E9D0F219678FBFA2A68D4F8F9432' },
+        @{ Path = $SourceGuardScriptPath; Hash = '06E0D8710B4DE9B9E2B59BA1CF1DC013547D15848827674D5D5B30688297E85C' },
         @{ Path = $SourceGuardModulePath; Hash = 'B91F780DD2D18D91962D500F1090E82772358559346FB13977B04CDD4509A82F' }
     )) {
         try {

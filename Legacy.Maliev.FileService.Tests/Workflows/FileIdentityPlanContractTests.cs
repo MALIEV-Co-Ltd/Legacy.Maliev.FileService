@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Legacy.Maliev.FileService.Tests.Api;
+using YamlDotNet.Serialization;
 
 namespace Legacy.Maliev.FileService.Tests.Workflows;
 
@@ -63,6 +64,25 @@ public sealed class FileIdentityPlanContractTests
     [InlineData("plan-image-invalid")]
     [InlineData("plan-source-invalid")]
     [InlineData("plan-unapproved")]
+    [InlineData("plan-metadata-http")]
+    [InlineData("plan-metadata-tcp")]
+    [InlineData("plan-metadata-grpc")]
+    [InlineData("plan-metadata-references")]
+    [InlineData("plan-metadata-singleton")]
+    [InlineData("plan-metadata-literal")]
+    [InlineData("plan-metadata-selected-template")]
+    [InlineData("plan-metadata-probe-exec")]
+    [InlineData("plan-metadata-probe-headers")]
+    [InlineData("plan-metadata-probe-unknown")]
+    [InlineData("plan-metadata-probe-multiple")]
+    [InlineData("plan-metadata-probe-missing-port")]
+    [InlineData("plan-metadata-probe-scalar")]
+    [InlineData("plan-metadata-reference-unknown")]
+    [InlineData("plan-metadata-reference-scalar")]
+    [InlineData("plan-metadata-reference-multiple")]
+    [InlineData("plan-metadata-reference-null")]
+    [InlineData("plan-metadata-environment-scalar")]
+    [InlineData("plan-metadata-environment-entry-scalar")]
     public async Task OfflineIdentityAndIamContract_UsesActualParsedProducer(string scenario)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
@@ -81,6 +101,14 @@ public sealed class FileIdentityPlanContractTests
         start.ArgumentList.Add(Path.Combine(root.FullName, "Legacy.Maliev.FileService.Tests", "Workflows", "FileIdentityPlanScenarios.ps1"));
         start.ArgumentList.Add("-Scenario");
         start.ArgumentList.Add(scenario);
+        if (scenario == "plan-metadata-selected-template")
+        {
+            var template = File.ReadAllText(Path.Combine(root.FullName, "deploy", "disabled", "file-deployment.template.yaml"));
+            var parsed = new DeserializerBuilder().WithAttemptingUnquotedStringTypeDeserialization().Build().Deserialize<object>(template);
+            var json = new SerializerBuilder().JsonCompatible().Build().Serialize(parsed);
+            start.ArgumentList.Add("-SelectedDeploymentJson");
+            start.ArgumentList.Add(json);
+        }
         using var process = Process.Start(start);
         Assert.NotNull(process);
         var output = process.StandardOutput.ReadToEndAsync();

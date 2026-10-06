@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: MALIEV-Co-Ltd/Legacy.Maliev.Workflows
-          ref: a5ac83a99130e273e4dae29b0c4bab87e2feca56
+          ref: 0159e67a033712a7120d52173819e8bde214cf6e
           path: .dependencies/Legacy.Maliev.Workflows
           persist-credentials: false
       - name: Check out immutable strict File consumer
