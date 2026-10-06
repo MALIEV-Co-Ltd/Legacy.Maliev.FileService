@@ -29,7 +29,7 @@ $fixture = if ($plan) { New-FileReleaseSourceFixture } else { $null }
 $expectedSourceCommit = if ($fixture) { $fixture.SourceCommit } else { $null }
 $expectedOrigin = if ($fixture) { $fixture.OriginUri } else { $null }
 $fixtureOptIn = $true
-$accepted = $Scenario -in @('intent-valid', 'iam-valid', 'plan-valid', 'plan-metadata-http', 'plan-metadata-tcp', 'plan-metadata-grpc', 'plan-metadata-references', 'plan-metadata-singleton', 'plan-metadata-literal', 'plan-metadata-selected-template')
+$accepted = $Scenario -in @('intent-valid', 'intent-pod-true', 'iam-valid', 'plan-valid', 'plan-pod-true', 'plan-metadata-http', 'plan-metadata-tcp', 'plan-metadata-grpc', 'plan-metadata-references', 'plan-metadata-singleton', 'plan-metadata-literal')
 $container = $deployment.spec.template.spec.containers[0]
 switch -CaseSensitive ($Scenario) {
     'plan-metadata-selected-template' {
@@ -69,6 +69,14 @@ switch -CaseSensitive ($Scenario) {
     'intent-gsa' { $account.metadata.annotations['iam.gke.io/gcp-service-account'] = 'other@example.invalid' }
     'intent-token-false' { $account.automountServiceAccountToken = $false }
     'intent-token-string' { $account.automountServiceAccountToken = 'true' }
+    'intent-pod-true' { $deployment.spec.template.spec.automountServiceAccountToken = $true }
+    'intent-pod-false' { $deployment.spec.template.spec.automountServiceAccountToken = $false }
+    'intent-pod-string' { $deployment.spec.template.spec.automountServiceAccountToken = 'true' }
+    'intent-pod-null' { $deployment.spec.template.spec.automountServiceAccountToken = $null }
+    'plan-pod-true' { $deployment.spec.template.spec.automountServiceAccountToken = $true }
+    'plan-pod-false' { $deployment.spec.template.spec.automountServiceAccountToken = $false }
+    'plan-pod-string' { $deployment.spec.template.spec.automountServiceAccountToken = 'true' }
+    'plan-pod-null' { $deployment.spec.template.spec.automountServiceAccountToken = $null }
     'iam-valid' { }
     'iam-project' { $snapshot.project = 'other-project' }
     'iam-bucket' { $snapshot.bucketUri = 'gs://other-bucket' }
@@ -173,8 +181,13 @@ try {
     if ($result.DeploymentAllowed -or $result.LiveAccepted) { throw 'Offline contract activated a runtime boundary.' }
 } catch { $failed = $true; $failureMessage = $_.Exception.Message; if ($_.Exception.Message.Contains('private', [StringComparison]::Ordinal)) { throw 'Private callback details escaped the controlled boundary.' } } finally { if ($tempHelperPath) { [IO.File]::Delete($tempHelperPath) }; if ($tempSourceGuard) { [IO.File]::Delete($tempSourceGuard) }; if ($tempSourceModule) { [IO.File]::Delete($tempSourceModule) }; if ($fixture) { Remove-FileReleaseSourceFixture -Root $fixture.Root } }
 if ($accepted -eq $failed) { throw ('Contract scenario returned an unexpected outcome: ' + $failureMessage) }
+if ($Scenario -eq 'plan-metadata-selected-template' -and
+    ($failureMessage -cne 'Legacy File Pod token intent is invalid.' -or $deployment.spec.replicas -ne 0 -or
+     $deployment.spec.template.spec.automountServiceAccountToken -ne $false)) {
+    throw 'The dormant template must remain disabled and fail token admission.'
+}
 if ($plan) {
-    $expected = if ($Scenario -in @('plan-identity-invalid', 'plan-helper-missing', 'plan-helper-changed', 'plan-duplicate-json', 'plan-source-dirty-tracked', 'plan-source-dirty-untracked', 'plan-source-dirty-staged', 'plan-source-wrong-head', 'plan-source-origin', 'plan-source-stale-remote', 'plan-source-helper-missing', 'plan-source-helper-changed', 'plan-source-module-changed', 'plan-fixture-without-opt-in', 'plan-production-origin-mismatch')) { '' } elseif ($Scenario -in @('plan-reader-fails', 'plan-policy-invalid', 'plan-duplicate-iam-json', 'plan-reader-source-dirty', 'plan-reader-source-remote')) { 'iam-read' } else { 'iam-read,image-build' }
+    $expected = if ($Scenario -in @('plan-pod-false', 'plan-pod-string', 'plan-pod-null', 'plan-metadata-selected-template', 'plan-identity-invalid', 'plan-helper-missing', 'plan-helper-changed', 'plan-duplicate-json', 'plan-source-dirty-tracked', 'plan-source-dirty-untracked', 'plan-source-dirty-staged', 'plan-source-wrong-head', 'plan-source-origin', 'plan-source-stale-remote', 'plan-source-helper-missing', 'plan-source-helper-changed', 'plan-source-module-changed', 'plan-fixture-without-opt-in', 'plan-production-origin-mismatch')) { '' } elseif ($Scenario -in @('plan-reader-fails', 'plan-policy-invalid', 'plan-duplicate-iam-json', 'plan-reader-source-dirty', 'plan-reader-source-remote')) { 'iam-read' } else { 'iam-read,image-build' }
     if (($calls -join ',') -cne $expected) { throw 'IAM preflight ordering did not stop image construction.' }
 }
 Write-Output ('PASS:' + $Scenario)
