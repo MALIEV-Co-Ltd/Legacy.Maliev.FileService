@@ -25,7 +25,7 @@ public static class HostedFinancialCompletionProfile
         var admission = section.GetSection("Admission").Get<HostedFinancialCompletionAdmission>(options => options.ErrorOnUnknownConfiguration = true)
             ?? throw new InvalidOperationException("Hosted acceptance admission is absent.");
         var context = new HostedAcceptanceRunContext(
-            OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true",
+            IsHostedLinux(OperatingSystem.IsLinux(), Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")),
             Environment.GetEnvironmentVariable("GITHUB_RUN_ID") ?? string.Empty,
             int.TryParse(Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT"), out var attempt) ? attempt : 0,
             BuildSourceSha());
@@ -67,6 +67,10 @@ public static class HostedFinancialCompletionProfile
         });
         return builder;
     }
+
+    // The pinned validation action overrides GITHUB_ACTIONS for local project references.
+    // GitHub's runner classification still distinguishes hosted from self-hosted runners.
+    internal static bool IsHostedLinux(bool linux, string? runnerEnvironment) => linux && runnerEnvironment == "github-hosted";
 
     internal static string BuildSourceSha()
     {

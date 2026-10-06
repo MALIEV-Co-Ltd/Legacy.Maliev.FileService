@@ -22,6 +22,21 @@ public sealed class HostedFinancialCompletionProfileTests
     private static HostedAcceptanceRunContext Context => new(true, "123", 1, Source);
 
     [Theory]
+    [InlineData(true, "github-hosted", true)]
+    [InlineData(false, "github-hosted", false)]
+    [InlineData(true, "self-hosted", false)]
+    [InlineData(true, "GITHUB-HOSTED", false)]
+    [InlineData(true, "", false)]
+    [InlineData(true, null, false)]
+    public void HostedLinuxClassificationRequiresExactGitHubHostedRunner(bool linux, string? runnerEnvironment, bool expected)
+    {
+        Assert.Equal(expected, HostedFinancialCompletionProfile.IsHostedLinux(linux, runnerEnvironment));
+        if (!expected)
+            Assert.Throws<InvalidOperationException>(() => HostedFinancialCompletionProfile.ValidateAdmission(Admission(),
+                Context with { HostedLinux = false }, Now));
+    }
+
+    [Theory]
     [InlineData("schema")]
     [InlineData("run")]
     [InlineData("run-leading-zero")]

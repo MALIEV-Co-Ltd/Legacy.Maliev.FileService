@@ -6,6 +6,13 @@ This profile selects the actual Google storage SDK and actual
 the existing ADC/WIF storage registration, cloud signing origin and scanner
 settings. Explicit profile configuration in another environment is rejected.
 
+Admission requires Linux and the exact GitHub-provided
+`RUNNER_ENVIRONMENT=github-hosted` classification. Self-hosted, absent or differently
+cased classifications are rejected. The pinned validation action overrides
+`GITHUB_ACTIONS` while selecting local dependency projects, so that boolean is
+not the runner classification. Exact run, attempt, compiled source, resource and
+finite lease checks remain required.
+
 The admission delivery mechanism is ordinary .NET configuration, under
 `HostedFinancialCompletionAcceptance:Enabled=true` and
 `HostedFinancialCompletionAcceptance:Admission`. The dedicated launcher supplies
