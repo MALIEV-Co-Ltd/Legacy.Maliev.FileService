@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory)][string]$Scenario,
     [string]$ImageOnlyPlanScriptPath = (Join-Path $PSScriptRoot "../../.dependencies/Legacy.Maliev.Workflows/scripts/New-OfflineImageOnlyDeploymentPlan.ps1"),
     [string]$SourceGuardScriptPath = (Join-Path $PSScriptRoot "../../.dependencies/Legacy.Maliev.Workflows/scripts/Assert-OfflineReleaseSource.ps1"),
-    [string]$SourceGuardModulePath = (Join-Path $PSScriptRoot "../../.dependencies/Legacy.Maliev.Workflows/scripts/offline_release_source.py")
+    [string]$SourceGuardModulePath = (Join-Path $PSScriptRoot "../../.dependencies/Legacy.Maliev.Workflows/scripts/offline_release_source.py"),
+    [string]$SelectedDeploymentJson
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../scripts/Get-LegacyFileIdentityPlan.ps1')
@@ -28,8 +29,36 @@ $fixture = if ($plan) { New-FileReleaseSourceFixture } else { $null }
 $expectedSourceCommit = if ($fixture) { $fixture.SourceCommit } else { $null }
 $expectedOrigin = if ($fixture) { $fixture.OriginUri } else { $null }
 $fixtureOptIn = $true
-$accepted = $Scenario -in @('intent-valid', 'iam-valid', 'plan-valid')
+$accepted = $Scenario -in @('intent-valid', 'iam-valid', 'plan-valid', 'plan-metadata-http', 'plan-metadata-tcp', 'plan-metadata-grpc', 'plan-metadata-references', 'plan-metadata-singleton', 'plan-metadata-literal', 'plan-metadata-selected-template')
+$container = $deployment.spec.template.spec.containers[0]
 switch -CaseSensitive ($Scenario) {
+    'plan-metadata-selected-template' {
+        if ([string]::IsNullOrWhiteSpace($SelectedDeploymentJson)) { throw 'The actual dormant template JSON is required.' }
+        $deployment = ConvertFrom-LegacyFilePlanJson -Json $SelectedDeploymentJson
+    }
+    'plan-metadata-http' { $container.readinessProbe = @{ httpGet = @{ path = '/health/ready'; port = 8080; scheme = 'HTTP' }; timeoutSeconds = 4 } }
+    'plan-metadata-tcp' { $container.livenessProbe = @{ tcpSocket = @{ port = 9000 }; failureThreshold = 3 } }
+    'plan-metadata-grpc' { $container.startupProbe = @{ grpc = @{ port = 5001; service = 'fixture' }; periodSeconds = 5 } }
+    'plan-metadata-references' { $container.env = @(@{ name = 'FIXTURE_SECRET_REF'; valueFrom = @{ secretKeyRef = @{ name = 'fixture-secret'; key = 'setting' } } }, @{ name = 'FIXTURE_CONFIG_REF'; valueFrom = @{ configMapKeyRef = @{ name = 'fixture-config'; key = 'setting' } } }, @{ name = 'FIXTURE_FIELD_REF'; valueFrom = @{ fieldRef = @{ fieldPath = 'metadata.name' } } }, @{ name = 'FIXTURE_RESOURCE_REF'; valueFrom = @{ resourceFieldRef = @{ resource = 'limits.memory' } } }) }
+    'plan-metadata-singleton' {
+        $deployment.spec.template.spec.containers = @($container)
+        $container.env = @(@{ name = 'FIXTURE_CONFIG_REF'; valueFrom = @{ configMapKeyRef = @{ name = 'fixture-config'; key = 'setting' } } })
+        $container.volumeMounts = @(@{ name = 'fixture-config'; mountPath = '/fixture' })
+        $deployment.spec.template.spec.volumes = @(@{ name = 'fixture-config'; configMap = @{ name = 'fixture-config' } })
+    }
+    'plan-metadata-literal' { $container.env = @(@{ name = 'ARBITRARY_LITERAL_NAME'; value = 'recording-only' }) }
+    'plan-metadata-probe-exec' { $container.readinessProbe = @{ exec = @{ command = @('private fixture command') } } }
+    'plan-metadata-probe-headers' { $container.readinessProbe = @{ httpGet = @{ port = 8080; httpHeaders = @(@{ name = 'X-Fixture'; value = 'private fixture header' }) } } }
+    'plan-metadata-probe-unknown' { $container.livenessProbe = @{ tcpSocket = @{ port = 9000 }; unknown = 'private fixture option' } }
+    'plan-metadata-probe-multiple' { $container.readinessProbe = @{ httpGet = @{ port = 8080 }; tcpSocket = @{ port = 9000 } } }
+    'plan-metadata-probe-missing-port' { $container.readinessProbe = @{ httpGet = @{ path = '/health/ready' } } }
+    'plan-metadata-probe-scalar' { $container.readinessProbe = 'private fixture scalar' }
+    'plan-metadata-reference-unknown' { $container.env = @(@{ name = 'FIXTURE'; valueFrom = @{ unknown = @{ name = 'private fixture reference' } } }) }
+    'plan-metadata-reference-scalar' { $container.env = @(@{ name = 'FIXTURE'; valueFrom = 'private fixture scalar' }) }
+    'plan-metadata-reference-multiple' { $container.env = @(@{ name = 'FIXTURE'; valueFrom = @{ fieldRef = @{ fieldPath = 'metadata.name' }; configMapKeyRef = @{ name = 'fixture-config'; key = 'setting' } } }) }
+    'plan-metadata-reference-null' { $container.env = @(@{ name = 'FIXTURE'; valueFrom = $null }) }
+    'plan-metadata-environment-scalar' { $container.env = 'private fixture scalar' }
+    'plan-metadata-environment-entry-scalar' { $container.env = @('private fixture scalar') }
     'intent-valid' { }
     'intent-namespace' { $deployment.metadata.namespace = 'maliev' }
     'intent-deployment' { $deployment.metadata.name = 'maliev-file-service' }
@@ -126,6 +155,14 @@ try {
         if (($value.Resources[1] | ConvertTo-Json -Depth 30 -Compress) -cne ($expectedDeployment | ConvertTo-Json -Depth 30 -Compress) -or
             ($value.Resources[0] | ConvertTo-Json -Depth 30 -Compress) -cne $originalAccountJson -or
             ($deployment | ConvertTo-Json -Depth 30 -Compress) -cne $originalDeploymentJson) { throw 'Offline image plan modified non-image settings or its input.' }
+        if ($Scenario -eq 'plan-metadata-singleton') {
+            $pod = $value.Resources[1].spec.template.spec
+            if ($pod.containers -isnot [array] -or $pod.containers.Count -ne 1 -or $pod.containers[0].env -isnot [array] -or
+                $pod.containers[0].env.Count -ne 1 -or $pod.volumes -isnot [array] -or $pod.volumes.Count -ne 1 -or
+                $pod.containers[0].volumeMounts -isnot [array] -or $pod.containers[0].volumeMounts.Count -ne 1) { throw 'Singleton metadata arrays changed shape.' }
+        }
+        if ($Scenario -eq 'plan-metadata-selected-template' -and ($value.Resources[1].spec.replicas -ne 0 -or
+            $value.Resources[1].spec.template.spec.automountServiceAccountToken -ne $false)) { throw 'The actual template lost dormant or token-disabled metadata.' }
         if ($value.SourceObservation.sourceCommit -cne $fixture.SourceCommit -or $value.SourceObservation.repositoryIdentity -cne 'isolated-fixture-origin' -or $value.SourceObservation.deploymentAllowed -or $value.SourceObservation.liveAccepted) { throw 'Source observation crossed its fixture boundary.' }
         $value
     } elseif ($intent) {

@@ -133,7 +133,7 @@ public sealed class WorkflowContractTests
     }
 
     [Theory]
-    [InlineData("ref: a5ac83a99130e273e4dae29b0c4bab87e2feca56", "ref: main")]
+    [InlineData("ref: 0159e67a033712a7120d52173819e8bde214cf6e", "ref: main")]
     [InlineData("repository: MALIEV-Co-Ltd/Legacy.Maliev.Workflows", "repository: MALIEV-Co-Ltd/Legacy.Maliev.FileService")]
     [InlineData("path: .dependencies/Legacy.Maliev.Workflows", "path: .dependencies/unapproved")]
     public void BuildAndTest_RejectsChangedOfflineImageProducer(string original, string replacement)
@@ -369,7 +369,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.Workflows",
-                ["ref"] = "a5ac83a99130e273e4dae29b0c4bab87e2feca56",
+                ["ref"] = "0159e67a033712a7120d52173819e8bde214cf6e",
                 ["path"] = ".dependencies/Legacy.Maliev.Workflows",
                 ["persist-credentials"] = "false",
             });
