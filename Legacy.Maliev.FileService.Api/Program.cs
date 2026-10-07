@@ -37,7 +37,11 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, InstantQuoteAuthorizationResultHandler>();
 builder.Services.Configure<FormOptions>(options =>
-    options.MultipartBodyLengthLimit = FileApplicationService.MaximumRequestBytes);
+{
+    options.MultipartBodyLengthLimit = FileApplicationService.MaximumRequestBytes;
+    options.ValueCountLimit = 1024;
+    options.ValueLengthLimit = 4 * 1024 * 1024;
+});
 builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = FileApplicationService.MaximumRequestBytes);
 builder.AddHostedFinancialCompletionAcceptance();
