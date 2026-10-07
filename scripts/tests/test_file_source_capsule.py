@@ -1,5 +1,7 @@
 import base64
 import hashlib
+import http.client
+import socket
 import io
 import json
 from pathlib import Path
@@ -101,9 +103,27 @@ class RawCapsuleTests(unittest.TestCase):
             def wait(self): return 1
         with patch.object(s.subprocess, 'Popen', return_value=Worker()), self.assertRaisesRegex(ValueError, '^Git blob fetch worker failed$'):
             s.fetch_git_blob('owner/repository', 'a'*40)
+    def test_actual_http_response_fixed_chunked_and_connection_eof(self):
+        cases = [
+            b'HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nonetwo',
+            b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n3\r\ntwo\r\n0\r\n\r\n',
+            b'HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nonetwo',
+        ]
+        for wire in cases:
+            with self.subTest(wire=wire):
+                reader, writer = socket.socketpair()
+                try:
+                    writer.sendall(wire); writer.shutdown(socket.SHUT_WR)
+                    with http.client.HTTPResponse(reader) as response:
+                        response.begin()
+                        self.assertEqual(s.read_deadline(response, s.time.monotonic()+2), b'onetwo')
+                        self.assertTrue(response.isclosed())
+                finally:
+                    reader.close(); writer.close()
     def test_fetch_trickle_cannot_extend_total_deadline(self):
         now = [0.0]; timeouts = []
         class Response:
+            def isclosed(self): return False
             fp = SimpleNamespace(raw=SimpleNamespace(_sock=SimpleNamespace(settimeout=timeouts.append)))
             def read1(self, size):
                 now[0] += 3.0
@@ -120,6 +140,7 @@ class RawCapsuleTests(unittest.TestCase):
     def test_fetch_eof_returns_exact_bytes(self):
         parts = iter([b'one', b'two', b''])
         class Response:
+            def isclosed(self): return False
             fp = SimpleNamespace(raw=SimpleNamespace(_sock=SimpleNamespace(settimeout=lambda _: None)))
             def read1(self, size): return next(parts)
         self.assertEqual(s.read_deadline(Response(), 5.0, lambda: 0.0), b'onetwo')

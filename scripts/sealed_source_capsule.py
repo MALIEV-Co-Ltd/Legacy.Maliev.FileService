@@ -82,6 +82,10 @@ def read_deadline(response, deadline, clock=time.monotonic):
         remaining = deadline - clock()
         if remaining <= 0:
             raise TimeoutError('Git blob total deadline exceeded')
+        if response.isclosed():
+            if response.length not in (None, 0):
+                raise ValueError('Git blob HTTP body truncated')
+            return b''.join(chunks)
         # urllib HTTPSResponse exposes its connected socket through this chain.
         # Fail closed if the runtime cannot enforce the remaining blocking budget.
         response.fp.raw._sock.settimeout(remaining)
