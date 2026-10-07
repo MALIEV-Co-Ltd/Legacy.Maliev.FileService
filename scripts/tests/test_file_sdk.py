@@ -68,12 +68,12 @@ class MainGateControls(unittest.TestCase):
  def test_smoke_mode_never_fetches_grant_or_calls_sdk_controller(self):
   with tempfile.TemporaryDirectory() as owned:
    argv=['qualify','--policy','test-only','--intake-policy','test-only','--evidence',owned,'--mode','smoke-only']
-   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ={})),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob') as fetch,patch.object(q,'execute_build') as sdk,contextlib.redirect_stdout(io.StringIO()):
+   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ={})),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'verify_git_provenance'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob') as fetch,patch.object(q,'execute_build') as sdk,contextlib.redirect_stdout(io.StringIO()):
     q.main();fetch.assert_not_called();sdk.assert_not_called()
  def test_bad_raw_root_grant_never_calls_sdk_controller(self):
   with tempfile.TemporaryDirectory() as owned:
    argv=['qualify','--policy','test-only','--intake-policy','test-only','--evidence',owned,'--mode','restore-build','--grant-blob','a'*40,'--grant-sha256','0'*64]
-   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ={})),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob',return_value=b'{}'),patch.object(q,'execute_build') as sdk,self.assertRaises(ValueError):
+   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ={})),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'verify_git_provenance'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob',return_value=b'{}'),patch.object(q,'execute_build') as sdk,self.assertRaises(ValueError):
     q.main()
    sdk.assert_not_called()
  def test_fetch_credential_removed_before_sdk_entry(self):
@@ -81,12 +81,12 @@ class MainGateControls(unittest.TestCase):
    argv=['qualify','--policy','test-only','--intake-policy','test-only','--evidence',str(Path(owned)/'evidence'),'--mode','restore-build','--grant-blob','a'*40,'--grant-sha256','0'*64]
    environment={'GH_TOKEN':'synthetic-readonly'};calls=[]
    def sdk(*unused):self.assertNotIn('GH_TOKEN',environment);calls.append(True)
-   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ=environment)),patch.object(q,'FIXED_ROOT',str(Path(owned)/'native')),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob',return_value=b'{}'),patch.object(q,'validate_grant',return_value={}),patch.object(q,'execute_build',side_effect=sdk),patch.object(q,'retain_build_evidence'),contextlib.redirect_stdout(io.StringIO()):q.main()
+   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ=environment)),patch.object(q,'FIXED_ROOT',str(Path(owned)/'native')),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'verify_git_provenance'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob',return_value=b'{}'),patch.object(q,'validate_grant',return_value={}),patch.object(q,'execute_build',side_effect=sdk),patch.object(q,'retain_build_evidence'),contextlib.redirect_stdout(io.StringIO()):q.main()
    self.assertEqual(calls,[True])
  def test_sdk_cancellation_not_masked_by_evidence_or_reporting_fault(self):
   with tempfile.TemporaryDirectory() as owned:
    argv=['qualify','--policy','test-only','--intake-policy','test-only','--evidence',str(Path(owned)/'evidence'),'--mode','restore-build','--grant-blob','a'*40,'--grant-sha256','0'*64];first=KeyboardInterrupt('test-only SDK cancellation')
-   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ={})),patch.object(q,'FIXED_ROOT',str(Path(owned)/'native')),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob',return_value=b'{}'),patch.object(q,'validate_grant',return_value={}),patch.object(q,'execute_build',side_effect=first),patch.object(q,'retain_build_evidence',side_effect=OSError('evidence fault')),patch.object(q.sys.stderr,'write',side_effect=SystemExit('report fault')),self.assertRaises(KeyboardInterrupt) as caught:q.main()
+   with patch.object(sys,'argv',argv),patch.object(q,'os',SimpleNamespace(name='nt',environ={})),patch.object(q,'FIXED_ROOT',str(Path(owned)/'native')),patch.object(q,'load_policy',return_value=self.policy),patch.object(q,'load_intake_policy'),patch.object(q,'verify_git_provenance'),patch.object(q,'install_supervisor'),patch.object(q,'source_controls'),patch.object(q,'run_smoke',return_value=self.receipt),patch.object(q,'fetch_git_blob',return_value=b'{}'),patch.object(q,'validate_grant',return_value={}),patch.object(q,'execute_build',side_effect=first),patch.object(q,'retain_build_evidence',side_effect=OSError('evidence fault')),patch.object(q.sys.stderr,'write',side_effect=SystemExit('report fault')),self.assertRaises(KeyboardInterrupt) as caught:q.main()
    self.assertIs(caught.exception,first)
 
 class InstallerControls(unittest.TestCase):
@@ -153,5 +153,31 @@ class DispatchControls(unittest.TestCase):
  def test_blob_raw_hash_and_size_rejected(self):
   for row in [{'gitBlob':'a'*40,'bytes':3,'sha256':digest(b'good')},{'gitBlob':'a'*40,'bytes':4,'sha256':digest(b'bad')}]:
    with patch.object(q,'fetch_git_blob',return_value=b'bad'),self.assertRaises(ValueError):q.verified_blob(row)
+
+class GitProvenanceControls(unittest.TestCase):
+ def test_actual_missing_git_projection_rejected_with_receipt(self):
+  with tempfile.TemporaryDirectory() as owned:
+   root=Path(owned);(root/'work/file-literal-upload-mutation-v8').mkdir(parents=True)
+   with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q.subprocess,'run') as git,self.assertRaisesRegex(RuntimeError,'metadata-missing'):q.verify_git_provenance(root/'evidence')
+   git.assert_not_called();receipt=json.loads((root/'evidence/git-provenance.json').read_bytes());self.assertFalse(receipt['sdkStarted'])
+ def test_actual_detached_git_projection_passes(self):
+  with tempfile.TemporaryDirectory() as owned:
+   root=Path(owned);repo=root/'work/file-literal-upload-mutation-v8';repo.mkdir(parents=True)
+   def git(*args):return q.subprocess.run(['git','-C',str(repo),*args],capture_output=True,check=True,timeout=5)
+   git('init');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-m','fixture')
+   head=git('rev-parse','HEAD').stdout.decode().strip();git('checkout','--detach',head)
+   with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q,'BASE',head):receipt=q.verify_git_provenance(root/'evidence')
+   self.assertEqual(receipt['actualHead'],head);self.assertEqual(receipt['category'],'verified')
+ def test_ownership_failure_is_coarse_and_never_overridden(self):
+  with tempfile.TemporaryDirectory() as owned:
+   root=Path(owned);metadata=root/'work/file-literal-upload-mutation-v8/.git';metadata.mkdir(parents=True);(metadata/'HEAD').write_bytes(q.BASE.encode())
+   result=SimpleNamespace(returncode=128,stdout=b'',stderr=b'fatal: detected dubious ownership SECRET_URL')
+   with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q.subprocess,'run',return_value=result) as git,self.assertRaisesRegex(RuntimeError,'dubious-ownership'):q.verify_git_provenance(root/'evidence')
+   self.assertEqual(git.call_count,1);self.assertNotIn('safe.directory',str(git.call_args));self.assertNotIn('SECRET_URL',(root/'evidence/git-provenance.json').read_text())
+ def test_mismatched_metadata_head_never_invokes_git(self):
+  with tempfile.TemporaryDirectory() as owned:
+   root=Path(owned);metadata=root/'work/file-literal-upload-mutation-v8/.git';metadata.mkdir(parents=True);(metadata/'HEAD').write_bytes(b'foreign')
+   with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q.subprocess,'run') as git,self.assertRaisesRegex(RuntimeError,'metadata-head-mismatch'):q.verify_git_provenance(root/'evidence')
+   git.assert_not_called()
 
 if __name__=='__main__':unittest.main()
