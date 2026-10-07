@@ -1,0 +1,19 @@
+# File sealed-source Windows qualification
+
+The V8 candidate and build supervisor V2 have passed independent source review. Their C# postimages remain uncommitted. This transport reconstructs the exact reviewed source from a bounded same-repository Git blob and runs an owned Python lifecycle smoke on Windows before any SDK phase can be considered.
+
+The protected-main dispatch accepts one Git blob ID. Its decoded ZIP must match SHA256 `e9e6ce8a3e521aa2cc9cef4fab77e3bd6f8500b1f4eb8520ac28c6f15e3f4385`, 375358 bytes and every one of the 178 raw hashes and canonical ZIP headers in `scripts/file-candidate-policy.json`. It rejects extra/missing/duplicate entries, Windows aliases, path escapes, symlink/directory members, reparse parents, CRC failures and altered raw bytes. The shared decoder has no owner, phase or grant authority; this File adapter fixes the repository, base, path graph and seals.
+
+A separate checkout fixes File base `07f0b5b721e3df758a9ec742c6f167491f899e44`. All 179 baseline files must match the declared checkout hashes and no extra source files are accepted. The baseline's `.gitattributes` declares CRLF for PowerShell and LF otherwise; those Windows checkout bytes have explicit projection hashes. The 21 frozen candidate postimages and 130 pinned dependency files are copied verbatim. The ordinary Git directory is copied only from the clean pinned checkout, never accepted from the capsule. Original source history, credentials and customer data are excluded.
+
+The fixed isolated root is `D:/codex-temp/2026-10-03/legacy-code-files-20261003`. It must not already exist or have a reparse/symlink ancestor. Intake recreates the original frozen manifest and helper paths under that root. It never rewrites the frozen manifests or mints an SDK grant.
+
+The Windows job runs only owned Python helpers. It checks fresh available memory of at least 4096 MiB and an empty SDK census. It queries the actual job's 2 GiB aggregate memory, 50% CPU hard cap and eight-process limit before resuming the child. Success, elapsed-time expiry and a partial-start fault must settle the exact processes, reader and handles. A final raw-handle retry witness exercises the source-cleared supervisor's final-owner recovery. Records retain actual process start times, executable identities, admission, job limits and verified absence/release.
+
+The inherited supervisor controller calls its generic allocation flag `sdkStarted`; inside a Python smoke case this denotes its owned process allocation only. Each case explicitly records `nativeSdkSpawned=false` and the exact Python executable. The overall receipt makes no C# or File service execution claim.
+
+The first dispatch performs intake, controls and actual Windows smoke only. It contains no SDK command, image publication, deployment, provider write, database or container allocation. Root must inspect the actual smoke/admission/identity receipts and issue a separately bound finite SDK phase grant before a build-stage successor can run. Focused 95 and full 1116 remain forecasts until appropriate real resource envelopes and suites execute.
+
+The transport PR's ordinary protected baseline CI remains mandatory before merging or dispatching. Transport source validation compiles the Python scripts, runs their focused/relevant suite, checks the workflow and scans source for secrets. The app C# is unchanged in this PR; its native baseline is verified by the existing PR workflow.
+
+The File caller binds the exact policy bytes by SHA256 before any fetch or write. HTTPS reads consume a single deadline; an owned Python fetch worker also bounds DNS and connection setup to that deadline, is terminated through its retained process handle on timeout, and is waited to exit before pipe handles close. Windows reserved superscript device names and illegal filename characters are rejected.
