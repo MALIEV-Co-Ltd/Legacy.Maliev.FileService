@@ -11,7 +11,7 @@ from materialize_file_candidate import FIXED_ROOT, OWNER, COORDINATOR, load_poli
 from sealed_source_capsule import digest, fetch_git_blob, parse_json, reject_links, write_new
 from smoke_file_windows_job import run_smoke, EXPECTED_LIMITS
 
-POLICY_SHA256 = 'b7f51bf7eb446a90f7ad74142715a075ef53fee04f7c91cf3e1a91f31dd8e299'
+POLICY_SHA256 = '4c2af9939441775c6e4366201b26e56e78fb8b490cccd2d9503932507c27a154'
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 MAX_GRANT_BYTES = 16384
 
@@ -75,7 +75,7 @@ def install_supervisor(policy):
         if target.exists() and target.read_bytes() != raw: raise ValueError('Existing helper differs; preserved')
     for name, raw in files.items():
         if not (root/name).exists(): write_new(root, name, raw)
-    write_new(root/'file-build-supervisor-source-v4', 'manifest.json', manifest_raw)
+    write_new(root/'file-build-supervisor-source-v5', 'manifest.json', manifest_raw)
     sys.path.insert(0, str(root))
     spec = importlib.util.spec_from_file_location('file_sdk_supervisor_v4', root/'file_build_supervisor_draft_v4.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
@@ -84,7 +84,14 @@ def install_supervisor(policy):
 
 
 def source_controls(policy):
-    suite = unittest.defaultTestLoader.discover(str(Path(FIXED_ROOT)/'outputs'), pattern='test_file_build*_*v4.py')
+    suite = unittest.TestSuite()
+    for index,row in enumerate(policy['supervisorFiles']):
+        if not row['path'].startswith('test_'): continue
+        path=Path(FIXED_ROOT)/'outputs'/row['path'];reject_links(path)
+        if digest(path.read_bytes()) != row['sha256']:raise ValueError('Frozen control raw seal differs')
+        spec=importlib.util.spec_from_file_location('file_frozen_control_'+str(index),path)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     if not result.wasSuccessful() or result.testsRun != policy['sourceControlsExpected'] or result.skipped:
         raise RuntimeError('Frozen successor source controls failed or incomplete')
@@ -113,7 +120,7 @@ def execute_build(module, policy, grant_path):
                 '--dependency-root', str(root/'work/file-prefix-native-pinned-dependencies-20261008'),
                 '--dependency-manifest', str(root/'outputs/file-prefix-native-pinned-dependencies-20261008.json'),
                 '--sole-lane', str(grant_path),
-                '--supervisor-manifest', str(root/'outputs/file-build-supervisor-source-v4/manifest.json'),
+                '--supervisor-manifest', str(root/'outputs/file-build-supervisor-source-v5/manifest.json'),
                 '--supervisor-manifest-sha256', policy['supervisorManifestSha256']]
     try: module.main()
     finally: sys.argv = previous

@@ -120,6 +120,20 @@ class InstallerControls(unittest.TestCase):
    with patch.object(q,'FIXED_ROOT',str(native).replace('\\','/')),patch.object(q,'verified_blob',side_effect=lambda row:files[row['path']]),self.assertRaises(ValueError):q.install_supervisor(policy)
    self.assertEqual(existing.read_bytes(),b'foreign');self.assertEqual([p.name for p in output.iterdir()],[existing.name])
 
+class ControlSelectorTests(unittest.TestCase):
+ def test_only_declared_control_files_are_loaded(self):
+  with tempfile.TemporaryDirectory() as owned:
+   root=Path(owned);output=root/'outputs';output.mkdir()
+   good=output/'test_declared.py';good.write_text('import unittest\nclass Test(unittest.TestCase):\n def test_ok(self):self.assertTrue(True)\n',encoding='utf-8')
+   (output/'test_foreign_v4.py').write_text('raise RuntimeError("must not import undeclared old control")',encoding='utf-8')
+   policy={'sourceControlsExpected':1,'supervisorFiles':[{'path':good.name,'sha256':digest(good.read_bytes())}]}
+   with patch.object(q,'FIXED_ROOT',str(root)),contextlib.redirect_stderr(io.StringIO()):q.source_controls(policy)
+ def test_declared_control_raw_drift_rejected(self):
+  with tempfile.TemporaryDirectory() as owned:
+   root=Path(owned);output=root/'outputs';output.mkdir();control=output/'test_declared.py';control.write_bytes(b'raise RuntimeError("must not execute")')
+   policy={'sourceControlsExpected':1,'supervisorFiles':[{'path':control.name,'sha256':'0'*64}]}
+   with patch.object(q,'FIXED_ROOT',str(root)),self.assertRaises(ValueError):q.source_controls(policy)
+
 class DispatchControls(unittest.TestCase):
  def test_frozen_controller_receives_only_bound_build_arguments(self):
   calls=[]
