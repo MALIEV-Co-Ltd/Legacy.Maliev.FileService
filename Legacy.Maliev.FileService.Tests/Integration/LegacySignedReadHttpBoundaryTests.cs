@@ -572,7 +572,10 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
                             GetObjectNames.Add(alternative.Key);
                             return Task.FromResult(new StorageObject
                             {
-                                Bucket = "private", Name = alternative.Key, Generation = alternative.Value, Size = 7,
+                                Bucket = "private",
+                                Name = alternative.Key,
+                                Generation = alternative.Value,
+                                Size = 7,
                             });
                         });
                 }
