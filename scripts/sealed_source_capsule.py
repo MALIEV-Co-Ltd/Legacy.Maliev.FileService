@@ -122,18 +122,25 @@ def recover_fetch_owner(owned):
     20-second fetch phase budget never claims to bound failure recovery.
     """
     recovery_deadline = time.monotonic() + 60
+    cancellation = None
+    def retain_interruption(error):
+        nonlocal cancellation
+        if not isinstance(error, Exception) and cancellation is None:
+            cancellation = error
     reaped = False; readers_settled = False; closed = set(); announced = False
     while True:
         if not reaped:
             try:
                 if owned.poll() is None:
                     owned.kill()
-            except Exception:
+            except BaseException as error:
+                retain_interruption(error)
                 pass  # A kill fault never skips the independent reap attempt.
             try:
                 owned.wait(timeout=1)
                 reaped = True
-            except Exception:
+            except BaseException as error:
+                retain_interruption(error)
                 pass
         if reaped and not readers_settled:
             readers_settled = True
@@ -143,7 +150,8 @@ def recover_fetch_owner(owned):
                     try:
                         reader.join(timeout=1)
                         if reader.is_alive(): readers_settled = False
-                    except Exception:
+                    except BaseException as error:
+                        retain_interruption(error)
                         readers_settled = False
         if reaped and readers_settled:
             for name in ('stdout', 'stderr'):
@@ -154,15 +162,22 @@ def recover_fetch_owner(owned):
                 try:
                     stream.close()
                     if stream.closed: closed.add(name)
-                except Exception:
+                except BaseException as error:
+                    retain_interruption(error)
                     pass
             if closed == {'stdout', 'stderr'}:
-                return
+                return cancellation
         expired = time.monotonic() >= recovery_deadline
         if expired and not announced:
-            sys.stderr.write('Fetch phase ended; exact owned worker remains in cleanup-only containment.\n')
-            announced = True
-        time.sleep(1 if expired else 0.05)
+            try:
+                sys.stderr.write('Fetch phase ended; exact owned worker remains in cleanup-only containment.\n')
+                announced = True
+            except BaseException as error:
+                retain_interruption(error)
+        try:
+            time.sleep(1 if expired else 0.05)
+        except BaseException as error:
+            retain_interruption(error)
 
 
 def fetch_git_blob(repository, oid, maximum=MAX_ARCHIVE_BYTES):
@@ -183,7 +198,9 @@ def fetch_git_blob(repository, oid, maximum=MAX_ARCHIVE_BYTES):
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git blob total deadline exceeded') from None
     finally:
-        recover_fetch_owner(owned)
+        cancellation = recover_fetch_owner(owned)
+        if cancellation is not None:
+            raise cancellation
 
 
 def validate_zip(data, expected_sha256, expected_bytes, rows):

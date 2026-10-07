@@ -157,6 +157,38 @@ class RawCapsuleTests(unittest.TestCase):
         self.assertGreaterEqual(events.count('join'), 2)
         self.assertTrue(worker.stdout.closed and worker.stderr.closed)
         self.assertGreater(events.index('close'), events.index('wait'))
+    def test_actual_fetch_cancellation_and_reporting_faults_retain_owner(self):
+        for fault in ('kill', 'wait', 'join', 'close', 'report', 'sleep'):
+            with self.subTest(fault=fault):
+                events = []; injected = [False]
+                def inject(where):
+                    if fault == where and not injected[0]:
+                        injected[0] = True
+                        if where == 'report': raise OSError('report IO fault')
+                        if where == 'kill': raise SystemExit('cancelled')
+                        raise KeyboardInterrupt('cancelled')
+                class Pipe:
+                    closed = False
+                    def close(self): inject('close'); self.closed = True
+                class Reader:
+                    def join(self, timeout): inject('join')
+                    def is_alive(self): return False
+                class Worker:
+                    stdout = Pipe(); stderr = Pipe(); _stdout_thread = Reader()
+                    def communicate(self, timeout): raise s.subprocess.TimeoutExpired('owned', timeout)
+                    def poll(self): return None
+                    def kill(self): events.append('kill'); inject('kill')
+                    def wait(self, timeout):
+                        events.append('wait'); inject('wait')
+                        if fault in ('report', 'sleep') and len(events) < 4: raise OSError('retry')
+                        return 1
+                worker = Worker(); clock = iter([0,0,0,100,100,100,100,100,100])
+                expected = TimeoutError if fault == 'report' else (SystemExit if fault == 'kill' else KeyboardInterrupt)
+                with patch.object(s.subprocess, 'Popen', return_value=worker), patch.object(s.time, 'monotonic', side_effect=lambda: next(clock,100)), patch.object(s.time, 'sleep', side_effect=lambda _: inject('sleep')), patch.object(s.sys.stderr, 'write', side_effect=lambda _: inject('report')), self.assertRaises(expected):
+                    s.fetch_git_blob('owner/repository', 'a'*40)
+                self.assertTrue(injected[0])
+                self.assertTrue(worker.stdout.closed and worker.stderr.closed)
+                self.assertIn('wait',events)
     def test_fetch_trickle_cannot_extend_total_deadline(self):
         now = [0.0]; timeouts = []
         class Response:
