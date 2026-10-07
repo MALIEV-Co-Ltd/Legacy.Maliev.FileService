@@ -271,7 +271,8 @@ public sealed class FileApplicationService(
     {
         runtimeGate.EnsureStorageEnabled();
         names.RequireBucket(bucket);
-        objectName = names.RequireObjectName(objectName);
+        var safetyName = names.RequireObjectName(objectName);
+        if (objectName.Any(char.IsControl)) throw new FileUploadValidationException("Object name is invalid");
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken))
         {
             return null;
@@ -279,8 +280,8 @@ public sealed class FileApplicationService(
 
         var authority = await readJournal.FindReadEvidenceAsync(bucket, objectName, cancellationToken);
         if (authority.State is not (StorageReadState.Absent or StorageReadState.Confirmed)
-            || objectName.StartsWith("_quarantine/", StringComparison.Ordinal)
-            || objectName.StartsWith(options.Value.QuarantinePrefix.TrimEnd('/') + "/", StringComparison.Ordinal))
+            || safetyName.StartsWith("_quarantine/", StringComparison.Ordinal)
+            || safetyName.StartsWith(options.Value.QuarantinePrefix.TrimEnd('/') + "/", StringComparison.Ordinal))
             throw new SignedReadEvidenceUnavailableException();
         var live = await storage.GetEvidenceAsync(bucket, objectName, cancellationToken);
         if (live is null) return null;

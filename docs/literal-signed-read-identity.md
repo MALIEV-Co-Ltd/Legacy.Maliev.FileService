@@ -1,0 +1,11 @@
+# Literal signed-read object identity
+
+Employee signature metadata preserves object-name padding, and Accounting forwards it unchanged through the signed-read query. Current File read admission normalizes that name before metadata, journal, live-object and generation-bound signing checks. Binding a generation after selecting a normalized name cannot establish the caller's requested object identity.
+
+Three authenticated normal Production HTTP/PostgreSQL regressions distinguish literal-only metadata, literal metadata plus a normalized decoy, and a missing literal with a normalized decoy. Literal and decoy use separate committed journal rows and controlled live generations31 and47. Assertions require the requested literal coordinate, generation31, the actual SDK canonical signing digest, no decoy cloud lookup, no new journal/metadata writes, and404 without signing when the literal is missing.
+
+The test-only candidate51094176 normal run37560526425 established actual behavioral RED after a zero-warning/error Release build: all1006 prior tests passed, and exactly these three controls failed. Literal-only returned404; a missing literal selected the normalized decoy; and literal plus decoy looked up the decoy SDK coordinate. No build/setup failure is treated as behavioral RED.
+
+The repair changes only signed-read admission: the requested literal name remains the metadata/journal/live-generation/signing coordinate; the existing normalization result is retained solely for validation and quarantine safety. Raw control characters are rejected before lookup because normalization can remove leading controls. Four authenticated HTTP controls verify that control prefixes never select safe decoys, and two verify quarantine padding/slash aliases remain blocked before cloud lookup/signing. Existing admission, uncertain/revoked/ambiguous journal and generation-replacement controls remain intact. Expected full inventory1015 retains all1006 prior cases plus the original three identity controls.
+
+Upload/move/delete normalization, ObjectNamePolicy, DTOs, authorization, resource pins and workflows remain unchanged. Corrected hosted build/full/raw/static acceptance remains required. Controlled SDK effects are not actual provider, IAM or cloud acceptance. No local SDK, persistent-data or deployment operation.
