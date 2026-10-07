@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import sys
+import subprocess
+from unittest.mock import patch
 import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -56,21 +58,21 @@ class FileIntakeTests(unittest.TestCase):
             with self.assertRaises(ValueError):m.materialize(root,{}, {},files,policy)
     def test_checkout_rejects_extra_ignored_source(self):
         with tempfile.TemporaryDirectory() as parent:
-            root=Path(parent);(root/'.git').mkdir();(root/'.git/HEAD').write_text(m.BASE+'\n');(root/'file.txt').write_bytes(b'baseline');(root/'ignored-extra.txt').write_bytes(b'extra')
+            root=Path(parent);(root/'.git').mkdir();(root/'.git/objects').mkdir();(root/'.git/refs').mkdir();(root/'.git/HEAD').write_text(m.BASE+'\n');(root/'file.txt').write_bytes(b'baseline');(root/'ignored-extra.txt').write_bytes(b'extra')
             policy={'baseFiles':[{'path':'file.txt','checkoutBytes':8,'checkoutSha256':s.digest(b'baseline')}]}
             with self.assertRaises(ValueError):m.read_base(root,policy)
     def test_checkout_exact_raw_projection(self):
         with tempfile.TemporaryDirectory() as parent:
-            root=Path(parent);(root/'.git').mkdir();(root/'.git/HEAD').write_text(m.BASE+'\n');(root/'file.ps1').write_bytes(b'baseline\r\n')
+            root=Path(parent);(root/'.git').mkdir();(root/'.git/objects').mkdir();(root/'.git/refs').mkdir();(root/'.git/HEAD').write_text(m.BASE+'\n');(root/'file.ps1').write_bytes(b'baseline\r\n')
             policy={'baseFiles':[{'path':'file.ps1','checkoutBytes':10,'checkoutSha256':s.digest(b'baseline\r\n')}]}
             source,metadata=m.read_base(root,policy);self.assertEqual(source['file.ps1'],b'baseline\r\n');self.assertIn('.git/HEAD',metadata)
     def test_checkout_wrong_head(self):
         with tempfile.TemporaryDirectory() as parent:
-            root=Path(parent);(root/'.git').mkdir();(root/'.git/HEAD').write_text('0'*40+'\n')
+            root=Path(parent);(root/'.git').mkdir();(root/'.git/objects').mkdir();(root/'.git/refs').mkdir();(root/'.git/HEAD').write_text('0'*40+'\n')
             with self.assertRaises(ValueError):m.read_base(root,{'baseFiles':[]})
     def test_checkout_credentials_not_copied(self):
         with tempfile.TemporaryDirectory() as parent:
-            root=Path(parent);(root/'.git').mkdir();(root/'.git/HEAD').write_text(m.BASE+'\n');(root/'.git/config').write_text('extraheader=synthetic')
+            root=Path(parent);(root/'.git').mkdir();(root/'.git/objects').mkdir();(root/'.git/refs').mkdir();(root/'.git/HEAD').write_text(m.BASE+'\n');(root/'.git/config').write_text('extraheader=synthetic')
             with self.assertRaises(ValueError):m.read_base(root,{'baseFiles':[]})
     def test_raw_policy_seal_rejects_semantically_identical_edit(self):
         original = Path(__file__).resolve().parents[1]/'file-candidate-policy.json'
@@ -86,5 +88,32 @@ class FileIntakeTests(unittest.TestCase):
     def test_committed_profile_has_no_sdk_authority(self):
         policy=s.parse_json((Path(__file__).resolve().parents[1]/'file-candidate-policy.json').read_bytes());m.validate_profile(policy)
         self.assertFalse(policy['nativeTestsAuthorized']);self.assertEqual(len(policy['entries']),178)
+
+class GitDirectoryProjectionTests(unittest.TestCase):
+    def test_actual_empty_refs_projection_preserves_plain_git_identity(self):
+        with tempfile.TemporaryDirectory() as owned:
+            parent=Path(owned);original=parent/'original';original.mkdir()
+            def git(repo,*args):return subprocess.run(['git','-C',str(repo),*args],capture_output=True,timeout=5,check=True)
+            git(original,'init');git(original,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-m','fixture')
+            branch=git(original,'symbolic-ref','HEAD').stdout.decode().strip();head=git(original,'rev-parse','HEAD').stdout.decode().strip()
+            git(original,'checkout','--detach',head);git(original,'update-ref','-d',branch)
+            self.assertFalse(any(path.is_file() for path in (original/'.git/refs').rglob('*')))
+            with patch.object(m,'BASE',head):source,metadata=m.read_base(original,{'baseFiles':[]})
+            broken=parent/'file-only'
+            for name,raw in metadata.items():
+                target=broken/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
+            self.assertFalse((broken/'.git/refs').exists())
+            failed=subprocess.run(['git','-C',str(broken),'rev-parse','HEAD'],capture_output=True,timeout=5)
+            self.assertEqual(failed.returncode,128);self.assertIn(b'not a git repository',failed.stderr)
+            files,policy=fixture();projection=m.materialize(parent/'fresh',source,metadata,files,policy)
+            self.assertEqual(git(projection,'rev-parse','HEAD').stdout.decode().strip(),head)
+            self.assertTrue((projection/'.git/refs').is_dir())
+            for name,raw in metadata.items():self.assertEqual((projection/name).read_bytes(),raw)
+    def test_original_missing_required_directory_rejected(self):
+        for missing in ('objects','refs'):
+            with self.subTest(missing=missing),tempfile.TemporaryDirectory() as owned:
+                root=Path(owned);metadata=root/'.git';metadata.mkdir();(metadata/'HEAD').write_bytes(m.BASE.encode())
+                (metadata/('refs' if missing=='objects' else 'objects')).mkdir()
+                with self.assertRaisesRegex(ValueError,'Required original Git directory missing'):m.read_base(root,{'baseFiles':[]})
 
 if __name__=='__main__':unittest.main()
