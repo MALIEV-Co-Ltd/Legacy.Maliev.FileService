@@ -122,6 +122,47 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         Assert.Equal(decoyExists, await context.Uploads.AnyAsync(row => row.Bucket == "private" && row.Name == normalized));
     }
 
+    [Theory]
+    [InlineData("\r")]
+    [InlineData("\n")]
+    [InlineData("\t")]
+    [InlineData("\u0085")]
+    public async Task LiteralRead_ControlPrefixNeverSelectsSafeNormalizedDecoy(string prefix)
+    {
+        await using var context = await ContextAsync();
+        var decoy = Name();
+        await SeedAsync(context, decoy);
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, decoy);
+        using var client = factory.Client();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.GetAsync(Query("/uploads/SignedUrl", prefix + decoy), deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+        Assert.Empty(factory.GetObjectNames);
+    }
+
+    [Theory]
+    [InlineData("padding")]
+    [InlineData("slash-alias")]
+    public async Task LiteralRead_QuarantineSafetyNamespaceStillBlocksAliases(string alias)
+    {
+        await using var context = await ContextAsync();
+        var suffix = Name();
+        var literal = alias == "padding" ? "  _quarantine/" + suffix + "  " : "///_quarantine//" + suffix;
+        await SeedAsync(context, literal);
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, literal);
+        using var client = factory.Client();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.GetAsync(Query("/uploads/SignedUrl", literal), deadline.Token);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+        Assert.Empty(factory.GetObjectNames);
+    }
+
     [Fact]
     public async Task MissingMetadata_Returns404WithoutSigningOrCloudLookup()
     {
