@@ -1,0 +1,87 @@
+name: File sealed-source Windows qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/file-candidate-qualification.yml
+      - scripts/sealed_source_capsule.py
+      - scripts/materialize_file_candidate.py
+      - scripts/smoke_file_windows_job.py
+      - scripts/file-candidate-policy.json
+      - scripts/tests/test_file_*.py
+      - docs/file-candidate-qualification.md
+  workflow_dispatch:
+    inputs:
+      capsule_blob:
+        description: Same-repository Git blob of the exact reviewed V8 capsule
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: file-sealed-source-qualification-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  transport-controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build Python source into temporary owned output
+        run: |
+          python3 -B - <<'PY'
+          import pathlib, py_compile, tempfile
+          with tempfile.TemporaryDirectory(prefix='file-transport-build-') as owned:
+              for source in [pathlib.Path('scripts/sealed_source_capsule.py'), pathlib.Path('scripts/materialize_file_candidate.py'), pathlib.Path('scripts/smoke_file_windows_job.py'), *pathlib.Path('scripts/tests').glob('test_file_*.py')]:
+                  py_compile.compile(str(source), cfile=str(pathlib.Path(owned)/(source.name+'.pyc')), doraise=True)
+          PY
+      - name: Run transport and lifecycle controller suite
+        run: python3 -B -m unittest discover -s scripts/tests -p 'test_file_*.py'
+
+  windows-intake-smoke:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: transport-controls
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Check out protected transport
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out exact immutable File base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 07f0b5b721e3df758a9ec742c6f167491f899e44
+          path: native-base
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Verify raw capsule and reconstruct fixed reviewed Windows paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAPSULE_BLOB: ${{ inputs.capsule_blob }}
+        shell: pwsh
+        run: |
+          python -B scripts/materialize_file_candidate.py --policy scripts/file-candidate-policy.json --base-checkout native-base --capsule-blob $env:CAPSULE_BLOB --receipt evidence/source-materialization.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify actual owned Windows Python job and cleanup
+        shell: pwsh
+        run: |
+          python -B scripts/smoke_file_windows_job.py --policy scripts/file-candidate-policy.json --evidence evidence/windows-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain source and actual lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: file-windows-source-smoke-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
