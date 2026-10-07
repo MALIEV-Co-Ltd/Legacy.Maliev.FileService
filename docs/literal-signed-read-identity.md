@@ -1,0 +1,7 @@
+# Literal signed-read object identity
+
+Employee signature metadata preserves object-name padding, and Accounting forwards it unchanged through the signed-read query. Current File read admission normalizes that name before metadata, journal, live-object and generation-bound signing checks. Binding a generation after selecting a normalized name cannot establish the caller's requested object identity.
+
+Three authenticated normal Production HTTP/PostgreSQL regressions distinguish literal-only metadata, literal metadata plus a normalized decoy, and a missing literal with a normalized decoy. Literal and decoy use separate committed journal rows and controlled live generations31 and47. Assertions require the requested literal coordinate, generation31, the actual SDK canonical signing digest, no decoy cloud lookup, no new journal/metadata writes, and404 without signing when the literal is missing.
+
+This first source slice adds tests only. Existing admission, quarantine, uncertain/revoked/ambiguous journal and generation-replacement controls remain intact. Expected full inventory1009 retains all1006 prior cases. A hosted behavioral failure is required before a narrowly scoped signed-read validation repair; no global upload/move/delete normalization change is proposed. Controlled SDK effects are not actual provider, IAM or cloud acceptance. No local SDK, persistent-data or deployment operation.

@@ -62,6 +62,66 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         Assert.IsType<DisabledStorageMoveJournal>(scope.ServiceProvider.GetRequiredService<IStorageMoveJournal>());
     }
 
+    [Theory]
+    [InlineData("literal-only", true, false)]
+    [InlineData("literal-and-decoy", true, true)]
+    [InlineData("missing-literal-with-decoy", false, true)]
+    public async Task PaddedObjectIdentity_SelectsOnlyRequestedMetadataJournalAndGeneration(
+        string scenario, bool literalExists, bool decoyExists)
+    {
+        await using var context = await ContextAsync();
+        var normalized = Name();
+        var literal = "  " + normalized + "  ";
+        if (literalExists) await SeedAsync(context, literal);
+        if (decoyExists) await SeedAsync(context, normalized, generation: 47);
+        var before = await context.StorageMoveJournals.AsNoTracking()
+            .Where(row => row.DestinationObjectName == literal || row.DestinationObjectName == normalized)
+            .OrderBy(row => row.OperationId).ToArrayAsync();
+        var uploadsBefore = await context.Uploads.AsNoTracking()
+            .Where(row => row.Bucket == "private" && (row.Name == literal || row.Name == normalized))
+            .OrderBy(row => row.Id).ToArrayAsync();
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, literal)
+        {
+            AdditionalLiveObjects = decoyExists
+                ? new Dictionary<string, long> { [normalized] = 47 }
+                : new Dictionary<string, long>(),
+        };
+        using var client = factory.Client();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.GetAsync(Query("/uploads/SignedUrl", literal), deadline.Token);
+
+        var expectedStatus = literalExists ? HttpStatusCode.OK : HttpStatusCode.NotFound;
+        Assert.True(response.StatusCode == expectedStatus,
+            $"{scenario}: expected {expectedStatus}, observed {response.StatusCode}.");
+        Assert.Equal(literalExists ? 1 : 0, factory.GetCalls);
+        Assert.Equal(literalExists ? 1 : 0, factory.SignCalls);
+        Assert.DoesNotContain(normalized, factory.GetObjectNames);
+        if (literalExists)
+        {
+            Assert.Equal(literal, Assert.Single(factory.GetObjectNames));
+            var uri = await response.Content.ReadFromJsonAsync<Uri>(deadline.Token);
+            Assert.NotNull(uri);
+            Assert.Equal("/private/" + literal, Uri.UnescapeDataString(uri.AbsolutePath));
+            Assert.Contains("generation=31", uri.Query, StringComparison.Ordinal);
+            Assert.DoesNotContain("generation=47", uri.Query, StringComparison.Ordinal);
+            AssertSignedCanonicalDigest(factory, uri);
+        }
+        else
+        {
+            Assert.Empty(factory.GetObjectNames);
+        }
+        var after = await context.StorageMoveJournals.AsNoTracking()
+            .Where(row => row.DestinationObjectName == literal || row.DestinationObjectName == normalized)
+            .OrderBy(row => row.OperationId).ToArrayAsync();
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(before), System.Text.Json.JsonSerializer.Serialize(after));
+        var uploadsAfter = await context.Uploads.AsNoTracking()
+            .Where(row => row.Bucket == "private" && (row.Name == literal || row.Name == normalized))
+            .OrderBy(row => row.Id).ToArrayAsync();
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(uploadsBefore), System.Text.Json.JsonSerializer.Serialize(uploadsAfter));
+        Assert.Equal(literalExists, await context.Uploads.AnyAsync(row => row.Bucket == "private" && row.Name == literal));
+        Assert.Equal(decoyExists, await context.Uploads.AnyAsync(row => row.Bucket == "private" && row.Name == normalized));
+    }
+
     [Fact]
     public async Task MissingMetadata_Returns404WithoutSigningOrCloudLookup()
     {
@@ -362,7 +422,7 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
     private static string Name() => "orders/" + Guid.NewGuid().ToString("N") + "/ชิ้นงาน.step";
     private static string Query(string route, string name) => route + "?bucket=private&objectName=" + Uri.EscapeDataString(name);
 
-    private static async Task SeedAsync(FileDbContext context, string name, string state = "clean")
+    private static async Task SeedAsync(FileDbContext context, string name, string state = "clean", long generation = 31)
     {
         context.Uploads.Add(new Upload { Bucket = "private", Name = name, ContentType = "application/octet-stream", Size = 7 });
         if (state != "name-only") context.StorageMoveJournals.Add(new StorageMoveJournal
@@ -374,7 +434,7 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
             SourceGeneration = 17,
             DestinationBucket = "private",
             DestinationObjectName = name,
-            DestinationGeneration = state == "invalid-generation" ? null : 31,
+            DestinationGeneration = state == "invalid-generation" ? null : generation,
             State = state switch
             {
                 "revoked-journal" => "CompensatedRemoved",
@@ -415,6 +475,8 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         public bool FailSigning { get; init; }
         public int GetCalls { get; private set; }
         public int SignCalls { get; private set; }
+        public List<string> GetObjectNames { get; } = [];
+        public IReadOnlyDictionary<string, long> AdditionalLiveObjects { get; init; } = new Dictionary<string, long>();
 
         public HttpClient Client(string identity = "read")
         {
@@ -452,12 +514,27 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
                     .Returns(() =>
                     {
                         GetCalls++;
+                        GetObjectNames.Add(name);
                         if (ReadFailure == "forbidden") return Task.FromException<StorageObject>(new GoogleApiException("storage", "private-read-fixture") { HttpStatusCode = HttpStatusCode.Forbidden });
                         if (ReadFailure == "io") return Task.FromException<StorageObject>(new IOException("private-read-fixture"));
                         if (ReadFailure == "invalid-object") return Task.FromResult(new StorageObject { Generation = 0, Size = 7 });
                         return LiveMissing ? Task.FromException<StorageObject>(new GoogleApiException("storage", "controlled absent object") { HttpStatusCode = HttpStatusCode.NotFound })
                             : Task.FromResult(new StorageObject { Bucket = "private", Name = name, Generation = LiveGeneration, Size = 7 });
                     });
+                foreach (var alternative in AdditionalLiveObjects)
+                {
+                    sdk.Setup(value => value.GetObjectAsync("private", alternative.Key,
+                            It.IsAny<GetObjectOptions>(), It.IsAny<CancellationToken>()))
+                        .Returns(() =>
+                        {
+                            GetCalls++;
+                            GetObjectNames.Add(alternative.Key);
+                            return Task.FromResult(new StorageObject
+                            {
+                                Bucket = "private", Name = alternative.Key, Generation = alternative.Value, Size = 7,
+                            });
+                        });
+                }
                 var signer = new Mock<UrlSigner.IBlobSigner>(MockBehavior.Strict);
                 signer.SetupGet(value => value.Id).Returns("controlled@example.invalid");
                 signer.SetupGet(value => value.Algorithm).Returns("GOOG4-RSA-SHA256");
