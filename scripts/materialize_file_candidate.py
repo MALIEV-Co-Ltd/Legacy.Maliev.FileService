@@ -1,4 +1,4 @@
-"""File-specific sealed V8 intake. No SDK, tests, deployment, or permit generation."""
+"""File-specific sealed V9 intake. No SDK, tests, deployment, or permit generation."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ from sealed_source_capsule import canonical_path, digest, fetch_git_blob, parse_
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 BASE = '07f0b5b721e3df758a9ec742c6f167491f899e44'
 FIXED_ROOT = 'D:/codex-temp/2026-10-03/legacy-code-files-20261003'
-POLICY_SHA256 = 'ddc5244633ed6763c5699a1bca270a3aab55c634ed3d610503aeefd2a926c0fc'
+POLICY_SHA256 = 'c3bc70da0d8c3666f2169a5ce1bbd329f54f0d1011b5568c49b2f54f581f0636'
 OWNER = '01a1009d-1c8e-7821-a1f2-fded3ac6928d'
 COORDINATOR = '019fc21e-50f0-7112-834f-9fb3b35b9dfe'
 MAX_METADATA_BYTES = 16*1024*1024
@@ -75,7 +75,7 @@ def validate_bindings(files,policy):
         if digest(files[path])!=policy[key]:raise ValueError('Nested reviewed manifest differs')
     candidate=parse_json(files['candidate/manifest.json'])
     if candidate['base']!=BASE:raise ValueError('Frozen candidate base differs')
-    if str(candidate['worktree']).replace('\\','/')!=FIXED_ROOT+'/work/file-literal-upload-mutation-v8':raise ValueError('Frozen candidate path differs')
+    if str(candidate['worktree']).replace('\\','/')!=FIXED_ROOT+'/work/file-literal-upload-mutation-v9':raise ValueError('Frozen candidate path differs')
     if len(candidate['files'])!=21:raise ValueError('Candidate inventory differs')
     for row in candidate['files']:
         if digest(files['candidate/raw/'+canonical_path(row['path'])])!=row['preparedSha256']:raise ValueError('Candidate raw seal differs')
@@ -96,7 +96,7 @@ def materialize(root,base_source,git_files,files,policy):
     if root.exists():raise ValueError('Fresh isolated qualification root required')
     candidate,supervisor=validate_bindings(files,policy)
     root.mkdir(parents=True)
-    candidate_root=root/'work/file-literal-upload-mutation-v8'
+    candidate_root=root/'work/file-literal-upload-mutation-v9'
     replacements={row['path'] for row in candidate['files']}
     for path,raw in base_source.items():
         if path not in replacements:write_new(candidate_root,path,raw)
@@ -113,9 +113,9 @@ def materialize(root,base_source,git_files,files,policy):
     for row in candidate['files']:write_new(candidate_root,row['path'],files['candidate/raw/'+row['path']])
     for path,raw in files.items():
         if path.startswith('dependencies/'):write_new(root/'work/file-prefix-native-pinned-dependencies-20261008',path[len('dependencies/'):],raw)
-        elif path.startswith('candidate/'):write_new(root/'outputs/file-literal-upload-mutation-source-v8',path[len('candidate/'):],raw)
+        elif path.startswith('candidate/'):write_new(root/'outputs/file-literal-upload-mutation-source-v9',path[len('candidate/'):],raw)
         elif path.startswith('supervisor/'):write_new(root/'outputs/file-build-supervisor-source-v2',path[len('supervisor/'):],raw)
-        else:write_new(root/'outputs/file-v8-native-transport-20261008',path,raw)
+        else:write_new(root/'outputs/file-v9-native-transport-20261008',path,raw)
     write_new(root/'outputs','file-prefix-native-pinned-dependencies-20261008.json',files['dependency-manifest.json'])
     for row in supervisor['files']:write_new(root/'outputs',row['sealedCopy'],files['supervisor/'+row['sealedCopy']])
     return candidate_root

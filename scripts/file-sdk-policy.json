@@ -4,15 +4,15 @@
   "owner": "01a1009d-1c8e-7821-a1f2-fded3ac6928d",
   "coordinator": "019fc21e-50f0-7112-834f-9fb3b35b9dfe",
   "root": "D:/codex-temp/2026-10-03/legacy-code-files-20261003",
-  "candidateManifestSha256": "44ea9b182c074686c3e8e026b209b738b7101cad1768ff93d2cd96fcb3dd3917",
+  "candidateManifestSha256": "1da5e0e1bf5ad5fe48789c3a5831dd5ac2ea2e58467a966ece85c936f3997fe0",
   "dependencyManifestSha256": "71660f6c390872486e1ffd821816ee85966eddcbbf9c8318edc48e97c01889c7",
-  "supervisorManifestSha256": "dc3f71925f377fd314afaef3ba36af64d2137a3a8b7ca6a3540338a0f06de7fd",
+  "supervisorManifestSha256": "0a7d49f736bc8fbf2d4f51af626f7a92b84dda8d6cd822ea1f733250f311eb74",
   "sourceControlsExpected": 27,
   "supervisorManifest": {
     "path": "manifest.json",
-    "gitBlob": "665ca05fbc07a5e0b9cbaa6a0343180023cd012c",
+    "gitBlob": "ac1af501a6ba6004d2878646fa6a530534aac688",
     "bytes": 3009,
-    "sha256": "dc3f71925f377fd314afaef3ba36af64d2137a3a8b7ca6a3540338a0f06de7fd"
+    "sha256": "0a7d49f736bc8fbf2d4f51af626f7a92b84dda8d6cd822ea1f733250f311eb74"
   },
   "supervisorFiles": [
     {

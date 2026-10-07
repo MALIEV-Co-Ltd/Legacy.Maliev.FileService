@@ -12,13 +12,13 @@ from materialize_file_candidate import BASE, FIXED_ROOT, OWNER, COORDINATOR, loa
 from sealed_source_capsule import digest, fetch_git_blob, parse_json, reject_links, write_new
 from smoke_file_windows_job import run_smoke, EXPECTED_LIMITS
 
-POLICY_SHA256 = '4c2af9939441775c6e4366201b26e56e78fb8b490cccd2d9503932507c27a154'
+POLICY_SHA256 = 'ad3495063723fef3524a5ad210d5f0634b4634a287c7b1c47d56984a3329c27b'
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 MAX_GRANT_BYTES = 16384
 
 
 def verify_git_provenance(evidence):
-    candidate = Path(FIXED_ROOT)/'work/file-literal-upload-mutation-v8'
+    candidate = Path(FIXED_ROOT)/'work/file-literal-upload-mutation-v9'
     metadata = candidate/'.git'; reject_links(metadata)
     receipt = {'schemaVersion': 1, 'expectedHead': BASE, 'sdkStarted': False,
                'metadataDirectoryPresent': metadata.is_dir(), 'category': 'metadata-missing'}
@@ -110,11 +110,11 @@ def install_supervisor(policy):
         if target.exists() and target.read_bytes() != raw: raise ValueError('Existing helper differs; preserved')
     for name, raw in files.items():
         if not (root/name).exists(): write_new(root, name, raw)
-    write_new(root/'file-build-supervisor-source-v5', 'manifest.json', manifest_raw)
+    write_new(root/'file-build-supervisor-source-v6', 'manifest.json', manifest_raw)
     sys.path.insert(0, str(root))
     spec = importlib.util.spec_from_file_location('file_sdk_supervisor_v4', root/'file_build_supervisor_draft_v4.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    module.REPO = Path(FIXED_ROOT)/'work/file-literal-upload-mutation-v8'
+    module.REPO = Path(FIXED_ROOT)/'work/file-literal-upload-mutation-v9'
     return module
 
 
@@ -150,12 +150,12 @@ def validate_smoke(receipt, policy):
 def execute_build(module, policy, grant_path):
     root = Path(FIXED_ROOT); previous = sys.argv
     sys.argv = [str(root/'outputs/file_build_supervisor_draft_v4.py'),
-                '--manifest', str(root/'outputs/file-literal-upload-mutation-source-v8/manifest.json'),
+                '--manifest', str(root/'outputs/file-literal-upload-mutation-source-v9/manifest.json'),
                 '--manifest-sha256', policy['candidateManifestSha256'],
                 '--dependency-root', str(root/'work/file-prefix-native-pinned-dependencies-20261008'),
                 '--dependency-manifest', str(root/'outputs/file-prefix-native-pinned-dependencies-20261008.json'),
                 '--sole-lane', str(grant_path),
-                '--supervisor-manifest', str(root/'outputs/file-build-supervisor-source-v5/manifest.json'),
+                '--supervisor-manifest', str(root/'outputs/file-build-supervisor-source-v6/manifest.json'),
                 '--supervisor-manifest-sha256', policy['supervisorManifestSha256']]
     try: module.main()
     finally: sys.argv = previous
