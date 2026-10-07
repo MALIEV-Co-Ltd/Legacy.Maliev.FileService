@@ -5,15 +5,50 @@ import importlib.util
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import unittest
-from materialize_file_candidate import FIXED_ROOT, OWNER, COORDINATOR, load_policy as load_intake_policy
+from materialize_file_candidate import BASE, FIXED_ROOT, OWNER, COORDINATOR, load_policy as load_intake_policy
 from sealed_source_capsule import digest, fetch_git_blob, parse_json, reject_links, write_new
 from smoke_file_windows_job import run_smoke, EXPECTED_LIMITS
 
 POLICY_SHA256 = '4c2af9939441775c6e4366201b26e56e78fb8b490cccd2d9503932507c27a154'
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 MAX_GRANT_BYTES = 16384
+
+
+def verify_git_provenance(evidence):
+    candidate = Path(FIXED_ROOT)/'work/file-literal-upload-mutation-v8'
+    metadata = candidate/'.git'; reject_links(metadata)
+    receipt = {'schemaVersion': 1, 'expectedHead': BASE, 'sdkStarted': False,
+               'metadataDirectoryPresent': metadata.is_dir(), 'category': 'metadata-missing'}
+    if metadata.is_dir():
+        head = metadata/'HEAD'; reject_links(head)
+        if head.is_file() and head.stat().st_size <= 256:
+            raw = head.read_bytes(); receipt['metadataHeadSha256'] = digest(raw)
+            receipt['metadataHeadMatches'] = raw.decode('ascii', errors='replace').strip() == BASE
+        else: receipt['metadataHeadMatches'] = False
+        receipt['category'] = 'metadata-head-mismatch'
+        if receipt['metadataHeadMatches']:
+            # Plain Git, exactly as the frozen controller uses it. No ownership override.
+            try:
+                result = subprocess.run(['git', '-C', str(candidate), 'rev-parse', 'HEAD'],
+                                        capture_output=True, timeout=5, check=False)
+                receipt['exitCode'] = result.returncode
+                if result.returncode == 0 and result.stdout.strip() == BASE.encode('ascii'):
+                    receipt['category'] = 'verified'; receipt['actualHead'] = BASE
+                elif result.returncode == 0: receipt['category'] = 'resolved-head-mismatch'
+                elif b'detected dubious ownership' in result.stderr[:16384]: receipt['category'] = 'dubious-ownership'
+                elif b'not a git repository' in result.stderr[:16384]: receipt['category'] = 'not-repository'
+                else: receipt['category'] = 'git-refusal'
+            except subprocess.TimeoutExpired: receipt['category'] = 'git-timeout'
+            except OSError: receipt['category'] = 'git-unavailable'
+    # Only fixed categories and identity facts; never publish arbitrary stderr or URLs.
+    import json
+    write_new(evidence, 'git-provenance.json', json.dumps(receipt, indent=2).encode('utf-8'))
+    if receipt['category'] != 'verified':
+        raise RuntimeError('Candidate Git provenance refused: '+receipt['category'])
+    return receipt
 
 
 def load_policy(path):
@@ -147,6 +182,7 @@ def main():
     if args.mode == 'restore-build' and not (args.grant_blob and args.grant_sha256): raise ValueError('Root grant transport required')
     if args.mode == 'smoke-only' and (args.grant_blob or args.grant_sha256): raise ValueError('Smoke does not consume an SDK grant')
     evidence=Path(args.evidence); reject_links(evidence); evidence.mkdir(parents=True,exist_ok=True)
+    verify_git_provenance(evidence)
     module=install_supervisor(policy); source_controls(policy)
     smoke=run_smoke(module,evidence/'successor-windows-smoke',policy); validate_smoke(smoke,policy)
     if args.mode == 'smoke-only':
