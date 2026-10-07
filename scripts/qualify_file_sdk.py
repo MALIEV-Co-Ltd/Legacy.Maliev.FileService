@@ -11,7 +11,7 @@ from materialize_file_candidate import FIXED_ROOT, OWNER, COORDINATOR, load_poli
 from sealed_source_capsule import digest, fetch_git_blob, parse_json, reject_links, write_new
 from smoke_file_windows_job import run_smoke, EXPECTED_LIMITS
 
-POLICY_SHA256 = 'b560b0c6c5b3099d15542ad18f72de626e2bd1bc115f679dc95c1b37010461de'
+POLICY_SHA256 = 'b7f51bf7eb446a90f7ad74142715a075ef53fee04f7c91cf3e1a91f31dd8e299'
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 MAX_GRANT_BYTES = 16384
 
