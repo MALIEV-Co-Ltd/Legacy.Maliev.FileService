@@ -1,0 +1,9 @@
+# Explicit form admission adaptation
+
+Legacy ServiceExtensions assigned 200 * 1024 * 1024 to ValueCountLimit, ValueLengthLimit, and MultipartBodyLengthLimit. The current extraction deliberately retains 1024 form entries and 4194304 bytes per URL-encoded value, now explicit in Program, with the unchanged 200 MiB request and multipart-section ceilings. This is bounded security adaptation, not complete legacy admission parity.
+
+Uploads binds only files; bucket/path are query parameters. Inspected Accounting receipt and Intranet order/purchase-order FileService producers send file parts and no scalar form values. Requests with more than 1024 multipart sections, including file sections, are rejected during binding before upload effects; legacy could accept more. No claim all possible external callers fit this bound.
+
+ASP.NET Core10 FormFeature counts all multipart sections against ValueCountLimit. ValueLengthLimit applies to FormPipeReader URL-encoded forms, not multipart scalar GetValueAsync. Multipart scalar values still share the 200 MiB section/request limits and can allocate large strings; this change does not add a lower multipart scalar cap. Raising the section count to 209715200 would allow excessive tiny-part allocations. See official source https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Http/Http/src/Features/FormFeature.cs.
+
+Six actual Production RS256 HTTP cases use the existing PostgreSQL fixture and real application/storage registrations with controlled external effects: 1024/1025 file-only and mixed sections; URL-encoded ASCII value4194304/4194305. Allowed-bound malformed payloads reach existing controller validation; excess produces parser problem response. Each checks no SDK/scanner/sign/idempotency/database write effects. Full expected suite1021. These cases do not claim valid file cloud delivery or Kestrel aggregate enforcement under TestServer.

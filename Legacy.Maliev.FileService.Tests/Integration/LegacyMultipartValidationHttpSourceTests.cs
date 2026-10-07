@@ -71,6 +71,70 @@ public sealed class LegacyMultipartValidationHttpSourceTests(PostgreSqlFixture f
         await AssertRealBoundaryWithoutEffectsAsync(factory, context);
     }
 
+    [Theory]
+    [InlineData(1024, false, false)]
+    [InlineData(1025, true, false)]
+    [InlineData(1024, false, true)]
+    [InlineData(1025, true, true)]
+    public async Task MultipartSectionCount_HasExplicitBoundBeforeStorageEffects(int count, bool parserRejects, bool mixed)
+    {
+        await using var context = fixture.CreateContext();
+        await context.Database.MigrateAsync();
+        await using var factory = new MultipartFactory(context.Database.GetConnectionString()!);
+        using var client = factory.Client();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        var options = factory.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Http.Features.FormOptions>>().Value;
+        Assert.Equal(1024, options.ValueCountLimit);
+        Assert.Equal(4 * 1024 * 1024, options.ValueLengthLimit);
+        Assert.Equal(FileApplicationService.MaximumRequestBytes, options.MultipartBodyLengthLimit);
+        using var body = new MultipartFormDataContent();
+        for (var index = 0; index < count; index++)
+        {
+            if (mixed && index % 2 == 1)
+            {
+                body.Add(new StringContent("ignored"), "description");
+            }
+            else
+            {
+                body.Add(new ByteArrayContent([]), "files", "empty.step");
+            }
+        }
+
+        using var response = await client.PostAsync("/Uploads?bucket=private", body);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(parserRejects ? JsonValueKind.Object : JsonValueKind.Array, json.RootElement.ValueKind);
+        if (!parserRejects)
+        {
+            Assert.Contains("File have length", json.RootElement.ToString(), StringComparison.Ordinal);
+        }
+
+        await AssertRealBoundaryWithoutEffectsAsync(factory, context);
+    }
+
+    [Theory]
+    [InlineData(4194304, false)]
+    [InlineData(4194305, true)]
+    public async Task UrlEncodedValueLength_HasExplicitBoundBeforeStorageEffects(int length, bool parserRejects)
+    {
+        await using var context = fixture.CreateContext();
+        await context.Database.MigrateAsync();
+        await using var factory = new MultipartFactory(context.Database.GetConnectionString()!);
+        using var client = factory.Client();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        using var body = new FormUrlEncodedContent([new KeyValuePair<string, string>("description", new string('a', length))]);
+        using var response = await client.PostAsync("/Uploads?bucket=private", body);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(parserRejects ? JsonValueKind.Object : JsonValueKind.Array, json.RootElement.ValueKind);
+        if (!parserRejects)
+        {
+            Assert.Contains("Files must not be empty", json.RootElement.ToString(), StringComparison.Ordinal);
+        }
+
+        await AssertRealBoundaryWithoutEffectsAsync(factory, context);
+    }
+
     private static MultipartFormDataContent Multipart(string shape)
     {
         var body = new MultipartFormDataContent();
