@@ -39,6 +39,9 @@ def read_base(checkout, policy):
     reject_links(metadata)
     if not metadata.is_dir() or (metadata/'HEAD').read_text(encoding='ascii').strip() != BASE:
         raise ValueError('Exact detached File checkout required')
+    for name in ('objects', 'refs'):
+        directory=metadata/name;reject_links(directory)
+        if not directory.is_dir():raise ValueError('Required original Git directory missing')
     expected={row['path']:row for row in policy['baseFiles']}
     source={}; git_files={}; metadata_size=0
     for directory,folders,names in os.walk(checkout,followlinks=False):
@@ -102,6 +105,11 @@ def materialize(root,base_source,git_files,files,policy):
         target=candidate_root/path;reject_links(target);target.parent.mkdir(parents=True,exist_ok=True)
         with target.open('xb') as stream:stream.write(raw)
         if digest(target.read_bytes())!=digest(raw):raise ValueError('Git metadata copy differs')
+    # Detached SHA checkouts can have no refs files. Git still requires this
+    # original directory (and objects) even when the file inventory is exact.
+    for name in ('objects', 'refs'):
+        directory=candidate_root/'.git'/name;reject_links(directory)
+        directory.mkdir(parents=True,exist_ok=True)
     for row in candidate['files']:write_new(candidate_root,row['path'],files['candidate/raw/'+row['path']])
     for path,raw in files.items():
         if path.startswith('dependencies/'):write_new(root/'work/file-prefix-native-pinned-dependencies-20261008',path[len('dependencies/'):],raw)
