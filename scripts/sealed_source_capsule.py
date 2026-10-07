@@ -114,29 +114,76 @@ def _fetch_response(repository, oid):
     return data
 
 
+def recover_fetch_owner(owned):
+    """Retain exact child and pipes until reap/readers/close are proven.
+
+    Each settlement attempt is bounded. After 60 seconds this function remains
+    cleanup-only containment; it cannot release an unknown-live child. Thus the
+    20-second fetch phase budget never claims to bound failure recovery.
+    """
+    recovery_deadline = time.monotonic() + 60
+    reaped = False; readers_settled = False; closed = set(); announced = False
+    while True:
+        if not reaped:
+            try:
+                if owned.poll() is None:
+                    owned.kill()
+            except Exception:
+                pass  # A kill fault never skips the independent reap attempt.
+            try:
+                owned.wait(timeout=1)
+                reaped = True
+            except Exception:
+                pass
+        if reaped and not readers_settled:
+            readers_settled = True
+            for name in ('_stdout_thread', '_stderr_thread'):
+                reader = getattr(owned, name, None)
+                if reader is not None:
+                    try:
+                        reader.join(timeout=1)
+                        if reader.is_alive(): readers_settled = False
+                    except Exception:
+                        readers_settled = False
+        if reaped and readers_settled:
+            for name in ('stdout', 'stderr'):
+                if name in closed: continue
+                stream = getattr(owned, name, None)
+                if stream is None:
+                    closed.add(name); continue
+                try:
+                    stream.close()
+                    if stream.closed: closed.add(name)
+                except Exception:
+                    pass
+            if closed == {'stdout', 'stderr'}:
+                return
+        expired = time.monotonic() >= recovery_deadline
+        if expired and not announced:
+            sys.stderr.write('Fetch phase ended; exact owned worker remains in cleanup-only containment.\n')
+            announced = True
+        time.sleep(1 if expired else 0.05)
+
+
 def fetch_git_blob(repository, oid, maximum=MAX_ARCHIVE_BYTES):
     if not re.fullmatch('[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) or not re.fullmatch('[0-9a-f]{40}', oid):
         raise ValueError('invalid Git blob address')
     deadline = time.monotonic() + 20
-    # Retain the exact Popen process handle until exit. The child receives no
-    # token argument, writes bounded API bytes only, and has no descendants.
-    with subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()),
-                           '--fetch-response', repository, oid],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as owned:
-        try:
-            response, _ = owned.communicate(timeout=max(0.001, deadline-time.monotonic()))
-            if time.monotonic() >= deadline:
-                raise TimeoutError('Git blob total deadline exceeded')
-            if owned.returncode != 0:
-                raise ValueError('Git blob fetch worker failed')
-            return decode_git_blob(response, oid, maximum)
-        except subprocess.TimeoutExpired:
-            raise TimeoutError('Git blob total deadline exceeded') from None
-        finally:
-            if owned.poll() is None:
-                owned.kill()
-            owned.wait()
-            # Popen context closes both pipe handles after verified exit.
+    # No Popen context manager: its implicit unbounded wait cannot own recovery.
+    owned = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()),
+                              '--fetch-response', repository, oid],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        response, _ = owned.communicate(timeout=max(0.001, deadline-time.monotonic()))
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Git blob total deadline exceeded')
+        if owned.returncode != 0:
+            raise ValueError('Git blob fetch worker failed')
+        return decode_git_blob(response, oid, maximum)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError('Git blob total deadline exceeded') from None
+    finally:
+        recover_fetch_owner(owned)
 
 
 def validate_zip(data, expected_sha256, expected_bytes, rows):

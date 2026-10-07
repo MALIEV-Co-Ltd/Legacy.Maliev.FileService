@@ -89,10 +89,10 @@ class RawCapsuleTests(unittest.TestCase):
                 raise s.subprocess.TimeoutExpired('owned', timeout)
             def poll(self): return None
             def kill(self): events.append('exact-handle-kill')
-            def wait(self): events.append('exit-verified'); return 1
+            def wait(self, timeout): events.append('exit-verified'); return 1
         with patch.object(s.subprocess, 'Popen', return_value=Worker()), self.assertRaises(TimeoutError):
             s.fetch_git_blob('owner/repository', 'a'*40)
-        self.assertEqual(events, ['exact-handle-kill', 'exit-verified', 'handles-closed'])
+        self.assertEqual(events, ['exact-handle-kill', 'exit-verified'])
     def test_fetch_worker_failure_never_decodes_provider_output(self):
         class Worker:
             returncode = 1
@@ -100,7 +100,7 @@ class RawCapsuleTests(unittest.TestCase):
             def __exit__(self, *args): pass
             def communicate(self, timeout): return b'provider failure', b'sensitive synthetic header'
             def poll(self): return 1
-            def wait(self): return 1
+            def wait(self, timeout): return 1
         with patch.object(s.subprocess, 'Popen', return_value=Worker()), self.assertRaisesRegex(ValueError, '^Git blob fetch worker failed$'):
             s.fetch_git_blob('owner/repository', 'a'*40)
     def test_actual_http_response_fixed_chunked_and_connection_eof(self):
@@ -120,6 +120,43 @@ class RawCapsuleTests(unittest.TestCase):
                         self.assertTrue(response.isclosed())
                 finally:
                     reader.close(); writer.close()
+    def test_actual_fetch_function_recovers_kill_wait_reader_and_pipe_faults(self):
+        events = []; faults = {'kill':1, 'wait':1, 'join':1, 'close':1}
+        class Pipe:
+            closed = False
+            def close(self):
+                events.append('close')
+                if faults['close']:
+                    faults['close'] -= 1; raise OSError('close fault')
+                self.closed = True
+        class Reader:
+            def join(self, timeout):
+                events.append('join')
+                if faults['join']:
+                    faults['join'] -= 1; raise OSError('reader fault')
+            def is_alive(self): return False
+        class Worker:
+            stdout = Pipe(); stderr = Pipe(); _stdout_thread = Reader()
+            def communicate(self, timeout): raise s.subprocess.TimeoutExpired('owned', timeout)
+            def poll(self): return None
+            def kill(self):
+                events.append('kill')
+                if faults['kill']:
+                    faults['kill'] -= 1; raise OSError('kill fault')
+            def wait(self, timeout):
+                self.assert_timeout = timeout; events.append('wait')
+                if faults['wait']:
+                    faults['wait'] -= 1; raise OSError('wait fault')
+                return 1
+        worker = Worker()
+        with patch.object(s.subprocess, 'Popen', return_value=worker), patch.object(s.time, 'sleep'), self.assertRaises(TimeoutError):
+            s.fetch_git_blob('owner/repository', 'a'*40)
+        self.assertEqual(events[:2], ['kill', 'wait'])
+        self.assertEqual(worker.assert_timeout, 1)
+        self.assertGreaterEqual(events.count('wait'), 2)
+        self.assertGreaterEqual(events.count('join'), 2)
+        self.assertTrue(worker.stdout.closed and worker.stderr.closed)
+        self.assertGreater(events.index('close'), events.index('wait'))
     def test_fetch_trickle_cannot_extend_total_deadline(self):
         now = [0.0]; timeouts = []
         class Response:
