@@ -24,7 +24,7 @@ class Controls(unittest.TestCase):
         self.assertEqual(36,policy['candidateFiles'])
         self.assertEqual(204,len(policy['entries']))
         self.assertEqual(179,len(policy['baseFiles']))
-        self.assertEqual('/tmp/maliev-file-native-v18-20261008',policy['root'])
+        self.assertEqual('/tmp/maliev-file-native-v19-20261008',policy['root'])
         self.assertIs(False,policy['sdkAuthorizedWithoutOriginalRootGrant'])
         self.assertEqual((600,900,2147483648,64,'100000 100000',4096),
             tuple(policy[key] for key in ('sdkSeconds','rootSecondsMaximum','sdkMemoryBytes','sdkTasks','sdkCpuMax','memoryFloorMiB')))
