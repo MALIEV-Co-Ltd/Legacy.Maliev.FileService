@@ -16,7 +16,7 @@ on:
         options: [preflight-only, qualification]
         default: preflight-only
         required: true
-        description: Read-only preflight, or five original Root-granted ordered phases
+        description: Read-only provider preflight; qualification disabled until provider hashes are sealed
       capsule_blob:
         type: string
         required: true

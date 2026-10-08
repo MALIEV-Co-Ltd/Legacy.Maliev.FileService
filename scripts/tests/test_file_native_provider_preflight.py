@@ -68,6 +68,16 @@ class ProviderPreflightControls(unittest.TestCase):
         changed=copy.deepcopy(self.provider);changed['files'][0]['sha256']='f'*64
         self.refuse([self.provider,changed])
 
+    def test_actual_qualification_rejects_unsealed_provider_before_policy_or_grant_fetch(self):
+        arguments=['qualifier','--policy','unused','--evidence','unused','--mode','qualification',
+            '--grant-bundle-blob','original-placeholder','--grant-bundle-sha256','a'*64]
+        with patch.object(qualifier.sys,'platform','linux'),patch.object(qualifier.os,'geteuid',return_value=0,create=True),\
+             patch.object(qualifier.sys,'argv',arguments),patch.object(qualifier,'load_policy') as policy,\
+             patch.object(qualifier,'fetch_git_blob') as grants,patch.object(qualifier.shutil,'which') as sdk,\
+             patch.object(qualifier.subprocess,'Popen') as popen:
+            with self.assertRaisesRegex(ValueError,'provider hashes are sealed'):qualifier.main()
+            policy.assert_not_called();grants.assert_not_called();sdk.assert_not_called();popen.assert_not_called()
+
     def test_actual_main_observes_provider_before_preflight_success_and_return(self):
         tree=ast.parse(Path(qualifier.__file__).read_bytes())
         main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')

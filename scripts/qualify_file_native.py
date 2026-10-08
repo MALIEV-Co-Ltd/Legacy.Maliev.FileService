@@ -194,6 +194,8 @@ def main():
     if sys.platform!='linux' or os.geteuid()!=0:raise RuntimeError('Reviewed root-owned Linux cgroup boundary required')
     if args.mode=='qualification' and not(args.grant_bundle_blob and args.grant_bundle_sha256):raise ValueError('Original Root phase bundle required')
     if args.mode=='preflight-only' and(args.grant_bundle_blob or args.grant_bundle_sha256):raise ValueError('Read-only preflight never consumes authority')
+    if args.mode=='qualification':
+        raise ValueError('Qualification disabled until Root-reviewed provider hashes are sealed')
     policy=load_policy(args.policy);candidate=sealed_sources(policy);evidence=Path(args.evidence).resolve();reject_links(evidence);evidence.mkdir(parents=True,exist_ok=True)
     sys.path.insert(0,str(candidate/'scripts'))
     import file_native_admission as authority_source
