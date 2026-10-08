@@ -104,7 +104,7 @@ class InstallerControls(unittest.TestCase):
    old_path=list(sys.path)
    try:
     with patch.object(q,'FIXED_ROOT',str(native).replace('\\','/')),patch.object(q,'verified_blob',side_effect=lambda row:files[row['path']]):module=q.install_supervisor(policy)
-    self.assertEqual(existing.read_bytes(),files[existing.name]);self.assertEqual(module.REPO,native/'work/file-literal-upload-mutation-v8')
+    self.assertEqual(existing.read_bytes(),files[existing.name]);self.assertEqual(module.REPO,native/'work/file-literal-upload-mutation-v9')
    finally:sys.path[:]=old_path
  def test_missing_last_blob_leaves_no_partial_writes(self):
   with tempfile.TemporaryDirectory() as owned:
@@ -157,12 +157,12 @@ class DispatchControls(unittest.TestCase):
 class GitProvenanceControls(unittest.TestCase):
  def test_actual_missing_git_projection_rejected_with_receipt(self):
   with tempfile.TemporaryDirectory() as owned:
-   root=Path(owned);(root/'work/file-literal-upload-mutation-v8').mkdir(parents=True)
+   root=Path(owned);(root/'work/file-literal-upload-mutation-v9').mkdir(parents=True)
    with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q.subprocess,'run') as git,self.assertRaisesRegex(RuntimeError,'metadata-missing'):q.verify_git_provenance(root/'evidence')
    git.assert_not_called();receipt=json.loads((root/'evidence/git-provenance.json').read_bytes());self.assertFalse(receipt['sdkStarted'])
  def test_actual_detached_git_projection_passes(self):
   with tempfile.TemporaryDirectory() as owned:
-   root=Path(owned);repo=root/'work/file-literal-upload-mutation-v8';repo.mkdir(parents=True)
+   root=Path(owned);repo=root/'work/file-literal-upload-mutation-v9';repo.mkdir(parents=True)
    def git(*args):return q.subprocess.run(['git','-C',str(repo),*args],capture_output=True,check=True,timeout=5)
    git('init');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-m','fixture')
    head=git('rev-parse','HEAD').stdout.decode().strip();git('checkout','--detach',head)
@@ -170,13 +170,13 @@ class GitProvenanceControls(unittest.TestCase):
    self.assertEqual(receipt['actualHead'],head);self.assertEqual(receipt['category'],'verified')
  def test_ownership_failure_is_coarse_and_never_overridden(self):
   with tempfile.TemporaryDirectory() as owned:
-   root=Path(owned);metadata=root/'work/file-literal-upload-mutation-v8/.git';metadata.mkdir(parents=True);(metadata/'HEAD').write_bytes(q.BASE.encode())
+   root=Path(owned);metadata=root/'work/file-literal-upload-mutation-v9/.git';metadata.mkdir(parents=True);(metadata/'HEAD').write_bytes(q.BASE.encode())
    result=SimpleNamespace(returncode=128,stdout=b'',stderr=b'fatal: detected dubious ownership SECRET_URL')
    with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q.subprocess,'run',return_value=result) as git,self.assertRaisesRegex(RuntimeError,'dubious-ownership'):q.verify_git_provenance(root/'evidence')
    self.assertEqual(git.call_count,1);self.assertNotIn('safe.directory',str(git.call_args));self.assertNotIn('SECRET_URL',(root/'evidence/git-provenance.json').read_text())
  def test_mismatched_metadata_head_never_invokes_git(self):
   with tempfile.TemporaryDirectory() as owned:
-   root=Path(owned);metadata=root/'work/file-literal-upload-mutation-v8/.git';metadata.mkdir(parents=True);(metadata/'HEAD').write_bytes(b'foreign')
+   root=Path(owned);metadata=root/'work/file-literal-upload-mutation-v9/.git';metadata.mkdir(parents=True);(metadata/'HEAD').write_bytes(b'foreign')
    with patch.object(q,'FIXED_ROOT',str(root)),patch.object(q.subprocess,'run') as git,self.assertRaisesRegex(RuntimeError,'metadata-head-mismatch'):q.verify_git_provenance(root/'evidence')
    git.assert_not_called()
 

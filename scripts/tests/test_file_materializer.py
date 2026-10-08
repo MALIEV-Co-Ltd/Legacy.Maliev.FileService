@@ -14,7 +14,7 @@ def fixture():
     files={};rows=[]
     for i in range(21):
         path=f'part-{i}.txt';raw=f'raw-{i}\r\n'.encode();files['candidate/raw/'+path]=raw;rows.append({'path':path,'preparedSha256':s.digest(raw)})
-    candidate={'base':m.BASE,'worktree':m.FIXED_ROOT+'/work/file-literal-upload-mutation-v8','files':rows}
+    candidate={'base':m.BASE,'worktree':m.FIXED_ROOT+'/work/file-literal-upload-mutation-v9','files':rows}
     raw=(json.dumps(candidate)+'\n').encode();files['candidate/manifest.json']=raw
     supervisor_rows=[]
     for i in range(5):
