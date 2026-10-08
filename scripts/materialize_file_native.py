@@ -9,7 +9,7 @@ from sealed_source_capsule import canonical_path, digest, fetch_git_blob, parse_
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 BASE = '07f0b5b721e3df758a9ec742c6f167491f899e44'
 ROOT = '/tmp/maliev-file-native-v12-20261008'
-POLICY_SHA256 = 'fc7cb9125b6b6e0426533c80ded694800cdb10c86f8cbd35ec692b9544c550a4'
+POLICY_SHA256 = '9300e467e5a5f14dc1aff4048a2d76d21bd2101a38ad77fb6a4daab122660df1'
 
 
 def load_policy(path):

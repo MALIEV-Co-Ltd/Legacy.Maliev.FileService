@@ -26,7 +26,8 @@ class Controls(unittest.TestCase):
         self.assertEqual(179,len(policy['baseFiles']))
         self.assertEqual('/tmp/maliev-file-native-v12-20261008',policy['root'])
         self.assertIs(False,policy['sdkAuthorizedWithoutOriginalRootGrant'])
-        self.assertTrue(all(row['checkoutSha256']==row['sha256'] and row['checkoutBytes']==row['bytes'] for row in policy['baseFiles']))
+        self.assertTrue(all(row['checkoutSha256']==row['sha256'] and row['checkoutBytes']==row['bytes'] for row in policy['baseFiles'] if not row['path'].endswith('.ps1')))
+        self.assertEqual(7, sum(row['path'].endswith('.ps1') for row in policy['baseFiles']))
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'altered.json';path.write_bytes((SCRIPTS/'file-native-policy.json').read_bytes()+b' ')
             with self.assertRaises(ValueError):intake.load_policy(path)
@@ -44,6 +45,21 @@ class Controls(unittest.TestCase):
         files['supervisor/manifest.json'] = json.dumps(supervisor).encode()
         policy['supervisorManifestSha256'] = hashlib.sha256(files['supervisor/manifest.json']).hexdigest()
         self.assertEqual(candidate, intake.validate_bindings(files, policy))
+
+    def test_checkout_reader_accepts_explicit_crlf_projection_and_rejects_raw_lf(self):
+        # Synthetic detached metadata exercises read_base only, not Git authenticity.
+        from materialize_file_candidate import read_base
+        raw=b'Write-Output example\n'; projected=b'Write-Output example\r\n'
+        policy={'baseFiles':[{'path':'sample.ps1','bytes':len(raw),
+            'sha256':hashlib.sha256(raw).hexdigest(),'checkoutBytes':len(projected),
+            'checkoutSha256':hashlib.sha256(projected).hexdigest()}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout=Path(temporary);(checkout/'.git/objects').mkdir(parents=True);(checkout/'.git/refs').mkdir()
+            (checkout/'.git/HEAD').write_text(intake.BASE);(checkout/'.git/config').write_text('[core]\n')
+            path=checkout/'sample.ps1';path.write_bytes(projected)
+            self.assertEqual(projected,read_base(checkout,policy)[0]['sample.ps1'])
+            path.write_bytes(raw)
+            with self.assertRaisesRegex(ValueError,'Base source size differs'):read_base(checkout,policy)
 
     def bundle(self):
         # Deliberately NOT Root's nine-field grant shape; the validator is a pure stub.
