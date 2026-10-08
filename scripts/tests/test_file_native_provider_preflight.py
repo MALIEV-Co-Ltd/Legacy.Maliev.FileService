@@ -105,17 +105,17 @@ class ProviderPreflightControls(unittest.TestCase):
     def test_projected_observer_uses_trusted_binder_twice_without_host_fallback(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);exe=root/'dotnet';exe.write_bytes(b'fixture');projection={'fixture':'context'}
-            owner=SimpleNamespace(bind_trusted_projected_provider=Mock(return_value=self.provider),bind_vstest_provider=Mock())
+            owner=SimpleNamespace(bind_qualification_projected_provider=Mock(return_value=self.provider),bind_vstest_provider=Mock())
             receipt=qualifier.observe_vstest_provider(owner,str(exe),root,self.policy,projection)
             self.assertFalse(receipt['SDKStarted']);owner.bind_vstest_provider.assert_not_called()
-            self.assertEqual(2,owner.bind_trusted_projected_provider.call_count)
-            owner.bind_trusted_projected_provider.assert_called_with(exe.resolve(),projection)
+            self.assertEqual(2,owner.bind_qualification_projected_provider.call_count)
+            owner.bind_qualification_projected_provider.assert_called_with(exe.resolve(),projection)
 
     def test_projected_refusal_preserves_failure_and_no_success(self):
         primary=RuntimeError('untrusted fullSDK')
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);exe=root/'dotnet';exe.write_bytes(b'fixture')
-            owner=SimpleNamespace(bind_trusted_projected_provider=Mock(side_effect=primary),bind_vstest_provider=Mock())
+            owner=SimpleNamespace(bind_qualification_projected_provider=Mock(side_effect=primary),bind_vstest_provider=Mock())
             with self.assertRaises(RuntimeError) as caught:qualifier.observe_vstest_provider(owner,str(exe),root,self.policy,{})
             self.assertIs(primary,caught.exception);owner.bind_vstest_provider.assert_not_called()
             self.assertFalse((root/'provider-preflight.json').exists())
@@ -124,7 +124,7 @@ class ProviderPreflightControls(unittest.TestCase):
         actual=json.loads(Path(qualifier.__file__).with_name('file-native-policy.json').read_bytes())['trustedSDKProjection']
         owner=SimpleNamespace(VSTEST_SDK_VERSION=actual['sdkVersion'],SDK_ARCHIVE_URL=actual['archiveURL'],
             SDK_ARCHIVE_SHA512=actual['archiveSha512'],SDK_PROJECTION_ANCHOR=Path(actual['anchor']),
-            SDK_ARCHIVE_MAX=actual['archiveMaxBytes'],SDK_EXPANDED_MAX=actual['expandedMaxBytes'],
+            QUALIFICATION_SDK_ARCHIVE_BYTES=actual['exactArchiveBytes'],QUALIFICATION_SDK_CONTENT_ROWS=actual['contentRows'],QUALIFICATION_SDK_CONTENT_SHA256=actual['contentSha256'],SDK_ARCHIVE_MAX=actual['archiveMaxBytes'],SDK_EXPANDED_MAX=actual['expandedMaxBytes'],
             SDK_FILE_MAX=actual['fileMaxBytes'],SDK_ENTRIES_MAX=actual['entriesMax'])
         qualifier.validate_sdk_projection_policy(owner,{'trustedSDKProjection':actual})
         for field,value in [('archiveSha512','0'*128),('lifetimeSeconds',301),('SDKStarted',True),('anchor','/tmp')]:
@@ -143,5 +143,27 @@ class ProviderPreflightControls(unittest.TestCase):
         function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='observe_vstest_provider')
         self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr in
             {'Popen','run','execve','system'} for n in ast.walk(function)))
+
+class IndependentArchiveControls(unittest.TestCase):
+    def test_second_physical_archive_read_exact_bytes_hash_identity_and_cleanup(self):
+        import hashlib
+        for variant in ['ok','size','hash','identity','deadline']:
+            with tempfile.TemporaryDirectory() as d:
+                root=Path(d);archive=root/'official-sdk.tar.gz';raw=b'bounded synthetic archive bytes';archive.write_bytes(raw)
+                evidence=root/'evidence';evidence.mkdir();before=archive.stat()
+                owner=SimpleNamespace(QUALIFICATION_SDK_ARCHIVE_BYTES=len(raw)+(1 if variant=='size' else 0),SDK_ARCHIVE_SHA512='0'*128 if variant=='hash' else hashlib.sha512(raw).hexdigest(),projection_check_deadline=Mock(side_effect=RuntimeError('expired') if variant=='deadline' else None),projection_trust=Mock(return_value=before))
+                if variant=='identity':owner.projection_trust.side_effect=[before,SimpleNamespace(st_dev=before.st_dev,st_ino=before.st_ino+1,st_ctime_ns=before.st_ctime_ns,st_size=before.st_size,st_mode=before.st_mode,st_uid=before.st_uid)]
+                projection={'root':str(root),'deadline':123}
+                with patch.object(qualifier.subprocess,'run') as run,patch.object(qualifier.subprocess,'Popen') as popen:
+                    if variant=='ok':
+                        receipt=qualifier.independently_read_official_archive(owner,projection,evidence)
+                        self.assertEqual((len(raw),hashlib.sha512(raw).hexdigest()),(receipt['archiveBytes'],receipt['archiveSha512']))
+                        self.assertTrue(receipt['independentPhysicalRead']);self.assertTrue(receipt['handlesReleased']);self.assertFalse(receipt['SDKStarted'])
+                    else:
+                        with self.assertRaises((ValueError,RuntimeError)):qualifier.independently_read_official_archive(owner,projection,evidence)
+                        self.assertFalse((evidence/'independent-sdk-archive.json').exists())
+                    run.assert_not_called();popen.assert_not_called()
+                archive.unlink();self.assertFalse(archive.exists())
+
 
 if __name__=='__main__':unittest.main()
