@@ -16,11 +16,11 @@ on:
         options: [preflight-only, qualification]
         default: preflight-only
         required: true
-        description: Read-only provider preflight; qualification disabled until provider hashes are sealed
+        description: No-SDK trusted archive observation; qualification disabled until provider hashes are sealed
       capsule_blob:
         type: string
         required: true
-        description: Same-repository blob of the exact reviewed V28 capsule
+        description: Same-repository blob of the exact reviewed V29 capsule
       grant_bundle_blob:
         type: string
         required: false
@@ -76,7 +76,7 @@ jobs:
           CAPSULE_BLOB: ${{ inputs.capsule_blob }}
         run: |
           python3 -B scripts/materialize_file_native.py --policy scripts/file-native-policy.json --base-checkout native-base --capsule-blob "$CAPSULE_BLOB" --receipt evidence/intake.json
-      - name: Read-only preflight or original Root-bound fixed phases
+      - name: No-SDK trusted projection preflight or disabled qualification
         env:
           GH_TOKEN: ${{ github.token }}
           FILE_NATIVE_MODE: ${{ inputs.mode }}

@@ -172,13 +172,14 @@ def run_control(command, evidence, name):
     if failure is not None:raise failure
 
 
-def observe_vstest_provider(owner, sdk, evidence, policy):
+def observe_vstest_provider(owner, sdk, evidence, policy, projection=None):
     if sdk is None:
         raise RuntimeError('Exact provider host unavailable; no installation or SDK invocation')
     executable=Path(sdk).resolve(strict=True)
+    bind=(lambda:owner.bind_trusted_projected_provider(executable,projection)) if projection is not None else (lambda:owner.bind_vstest_provider(executable))
     try:
-        provider=owner.bind_vstest_provider(executable)
-        if owner.bind_vstest_provider(executable)!=provider:
+        provider=bind()
+        if bind()!=provider:
             raise RuntimeError('Provider changed during read-only preflight')
     except BaseException as failure:
         try:
@@ -199,6 +200,17 @@ def observe_vstest_provider(owner, sdk, evidence, policy):
         'dependencyManifestSha256':policy['dependencyManifestSha256']}
     write_new(evidence,'provider-preflight.json',(json.dumps(receipt,sort_keys=True)+'\n').encode())
     return receipt
+
+
+def validate_sdk_projection_policy(owner,policy):
+    expected={'sdkVersion':owner.VSTEST_SDK_VERSION,'runtimeVersion':'10.0.12',
+        'archiveURL':owner.SDK_ARCHIVE_URL,'archiveSha512':owner.SDK_ARCHIVE_SHA512,
+        'anchor':owner.SDK_PROJECTION_ANCHOR.as_posix(),'lifetimeSeconds':300,
+        'archiveMaxBytes':owner.SDK_ARCHIVE_MAX,'expandedMaxBytes':owner.SDK_EXPANDED_MAX,
+        'fileMaxBytes':owner.SDK_FILE_MAX,'entriesMax':owner.SDK_ENTRIES_MAX,
+        'diskFloorBytes':3*1024**3,'SDKStarted':False}
+    if policy.get('trustedSDKProjection') != expected:
+        raise ValueError('Exact official SDK projection policy differs')
 
 
 def main():
@@ -223,13 +235,14 @@ def main():
         run_control([sys.executable,'-B',str(candidate/'scripts'/name)],evidence,name)
     spec=importlib.util.spec_from_file_location('file_linux_owner',candidate/'scripts/run-file-owned-qualification.py')
     owner=importlib.util.module_from_spec(spec);spec.loader.exec_module(owner)
+    validate_sdk_projection_policy(owner,policy)
     owner.RPC_DEADLINE=owner.time.monotonic()+10
     status,daemon=owner.docker('GET','/info')
     if status!=200 or daemon.get('OSType')!='linux' or not daemon.get('ID'):raise RuntimeError('Existing local Linux Docker daemon unavailable; no setup/restart authorized')
     memory=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())
     if int(memory['MemAvailable'].split()[0])<4096*1024 or not Path('/sys/fs/cgroup/cgroup.controllers').is_file():raise RuntimeError('Linux memory/cgroup admission unavailable')
-    sdk=shutil.which('dotnet')
-    observe_vstest_provider(owner,sdk,evidence,policy)
+    with owner.trusted_sdk_projection(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT'),evidence) as projection:
+        observe_vstest_provider(owner,str(Path(projection['sdkRoot'])/'dotnet'),evidence,policy,projection)
     write_new(evidence,'preflight.json',(json.dumps({'state':'LinuxReadOnlyPreflightPassed','plainGitHead':head,
         'candidateManifestSha256':policy['candidateManifestSha256'],'supervisorManifestSha256':policy['supervisorManifestSha256'],
         'daemonId':daemon['ID'],'memoryFloorMiB':4096,'SDKStarted':False,'nativeTestsExecuted':False})+'\n').encode())
