@@ -172,6 +172,21 @@ def run_control(command, evidence, name):
     if failure is not None:raise failure
 
 
+def observe_vstest_provider(owner, sdk, evidence, policy):
+    if sdk is None:
+        raise RuntimeError('Exact provider host unavailable; no installation or SDK invocation')
+    executable=Path(sdk).resolve(strict=True)
+    provider=owner.bind_vstest_provider(executable)
+    if owner.bind_vstest_provider(executable)!=provider:
+        raise RuntimeError('Provider changed during read-only preflight')
+    receipt={'schemaVersion':1,'SDKStarted':False,'nativeTestsExecuted':False,
+        'provider':provider,'candidateManifestSha256':policy['candidateManifestSha256'],
+        'supervisorManifestSha256':policy['supervisorManifestSha256'],
+        'dependencyManifestSha256':policy['dependencyManifestSha256']}
+    write_new(evidence,'provider-preflight.json',(json.dumps(receipt,sort_keys=True)+'\n').encode())
+    return receipt
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--policy',required=True);parser.add_argument('--evidence',required=True)
     parser.add_argument('--mode',choices=('preflight-only','qualification'),default='preflight-only')
@@ -179,6 +194,8 @@ def main():
     if sys.platform!='linux' or os.geteuid()!=0:raise RuntimeError('Reviewed root-owned Linux cgroup boundary required')
     if args.mode=='qualification' and not(args.grant_bundle_blob and args.grant_bundle_sha256):raise ValueError('Original Root phase bundle required')
     if args.mode=='preflight-only' and(args.grant_bundle_blob or args.grant_bundle_sha256):raise ValueError('Read-only preflight never consumes authority')
+    if args.mode=='qualification':
+        raise ValueError('Qualification disabled until Root-reviewed provider hashes are sealed')
     policy=load_policy(args.policy);candidate=sealed_sources(policy);evidence=Path(args.evidence).resolve();reject_links(evidence);evidence.mkdir(parents=True,exist_ok=True)
     sys.path.insert(0,str(candidate/'scripts'))
     import file_native_admission as authority_source
@@ -197,6 +214,8 @@ def main():
     if status!=200 or daemon.get('OSType')!='linux' or not daemon.get('ID'):raise RuntimeError('Existing local Linux Docker daemon unavailable; no setup/restart authorized')
     memory=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())
     if int(memory['MemAvailable'].split()[0])<4096*1024 or not Path('/sys/fs/cgroup/cgroup.controllers').is_file():raise RuntimeError('Linux memory/cgroup admission unavailable')
+    sdk=shutil.which('dotnet')
+    observe_vstest_provider(owner,sdk,evidence,policy)
     write_new(evidence,'preflight.json',(json.dumps({'state':'LinuxReadOnlyPreflightPassed','plainGitHead':head,
         'candidateManifestSha256':policy['candidateManifestSha256'],'supervisorManifestSha256':policy['supervisorManifestSha256'],
         'daemonId':daemon['ID'],'memoryFloorMiB':4096,'SDKStarted':False,'nativeTestsExecuted':False})+'\n').encode())
