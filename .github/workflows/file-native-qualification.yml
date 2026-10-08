@@ -1,0 +1,105 @@
+name: File exact-source Linux native qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/file-native-qualification.yml
+      - scripts/materialize_file_native.py
+      - scripts/qualify_file_native.py
+      - scripts/file-native-policy.json
+      - scripts/tests/test_file_native_*.py
+      - docs/file-native-qualification.md
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [preflight-only, qualification]
+        default: preflight-only
+        required: true
+        description: Read-only preflight, or five original Root-granted ordered phases
+      capsule_blob:
+        type: string
+        required: true
+        description: Same-repository blob of the exact reviewed V12 capsule
+      grant_bundle_blob:
+        type: string
+        required: false
+        description: Original Root bundle containing five distinct unchanged phase grants
+      grant_bundle_sha256:
+        type: string
+        required: false
+        description: Root-provided raw SHA256 of that original bundle
+
+permissions:
+  contents: read
+
+concurrency:
+  group: file-native-qualification
+  cancel-in-progress: false
+
+jobs:
+  transport-controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build protected Python source into owned temporary output
+        run: |
+          python3 -B - <<'PY'
+          import pathlib, py_compile, tempfile
+          with tempfile.TemporaryDirectory(prefix='file-native-transport-compile-') as owned:
+              for path in [*pathlib.Path('scripts').glob('*.py'), *pathlib.Path('scripts/tests').glob('test_file_*.py')]:
+                  py_compile.compile(str(path), cfile=str(pathlib.Path(owned)/(path.name+'.pyc')), doraise=True)
+          PY
+      - name: Run protected source/transport control suite
+        run: python3 -B -m unittest discover -s scripts/tests -p 'test_file_*.py'
+  native:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: transport-controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out original detached public File base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 07f0b5b721e3df758a9ec742c6f167491f899e44
+          path: native-base
+          persist-credentials: false
+      - name: Verify and materialize exact candidate source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAPSULE_BLOB: ${{ inputs.capsule_blob }}
+        run: |
+          python3 -B scripts/materialize_file_native.py --policy scripts/file-native-policy.json --base-checkout native-base --capsule-blob "$CAPSULE_BLOB" --receipt evidence/intake.json
+      - name: Read-only preflight or original Root-bound fixed phases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILE_NATIVE_MODE: ${{ inputs.mode }}
+          ROOT_BUNDLE_BLOB: ${{ inputs.grant_bundle_blob }}
+          ROOT_BUNDLE_SHA256: ${{ inputs.grant_bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          export MALIEV_FILE_EVIDENCE_UID="$(id -u)"
+          export MALIEV_FILE_EVIDENCE_GID="$(id -g)"
+          arguments=(--policy scripts/file-native-policy.json --evidence evidence/qualification --mode "$FILE_NATIVE_MODE")
+          if [[ "$FILE_NATIVE_MODE" == qualification ]]; then
+            test -n "$ROOT_BUNDLE_BLOB" && test -n "$ROOT_BUNDLE_SHA256"
+            arguments+=(--grant-bundle-blob "$ROOT_BUNDLE_BLOB" --grant-bundle-sha256 "$ROOT_BUNDLE_SHA256")
+          elif [[ -n "$ROOT_BUNDLE_BLOB" || -n "$ROOT_BUNDLE_SHA256" ]]; then
+            echo 'Read-only preflight cannot consume an SDK grant.' >&2
+            exit 1
+          fi
+          sudo --preserve-env=PATH,DOTNET_ROOT,GH_TOKEN,GITHUB_ACTIONS,GITHUB_REPOSITORY,GITHUB_SHA,GITHUB_WORKSPACE,GITHUB_WORKFLOW_REF,GITHUB_WORKFLOW_SHA,GITHUB_EVENT_NAME,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,MALIEV_FILE_EVIDENCE_UID,MALIEV_FILE_EVIDENCE_GID \
+            python3 -B scripts/qualify_file_native.py "${arguments[@]}"
+      - name: Retain original source intake and owned qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: file-native-${{ github.run_id }}
+          path: evidence/
+          retention-days: 14
