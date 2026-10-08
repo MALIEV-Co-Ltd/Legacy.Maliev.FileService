@@ -1,6 +1,6 @@
 # Exact-source File Linux qualification
 
-The protected Linux consumer materializes the frozen V14r4 candidate, four exact runtime helpers and130 pinned dependency files from one bounded same-repository Git blob. Its private source root is fixed. Original candidate, supervisor and dependency manifests remain unchanged; a receipt records the Linux materialization mapping and actual plain Git base identity.
+The protected Linux consumer materializes the frozen V15 candidate, four exact runtime helpers and130 pinned dependency files from one bounded same-repository Git blob. Its private source root is fixed. Original candidate, supervisor and dependency manifests remain unchanged; a receipt records the Linux materialization mapping and actual plain Git base identity.
 
 The default dispatch is read-only preflight. It compiles/runs pure source controls and reads existing Linux Docker/cgroup/memory availability. It never starts an SDK, installs Docker/WSL/SDKs, restarts a daemon, publishes an image or writes an original database.
 
