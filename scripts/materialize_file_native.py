@@ -1,4 +1,4 @@
-"""Exact V22 Linux source intake. No SDK, Docker mutation or Root authority minting."""
+"""Exact V24 Linux source intake. No SDK, Docker mutation or Root authority minting."""
 import argparse
 import json
 from pathlib import Path
@@ -8,8 +8,8 @@ from sealed_source_capsule import canonical_path, digest, fetch_git_blob, parse_
 
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 BASE = '07f0b5b721e3df758a9ec742c6f167491f899e44'
-ROOT = '/tmp/maliev-file-native-v22-20261008'
-POLICY_SHA256 = '237c81659046e9d3e2b78cd19d18a186c41a131ad126266bbba89eb4ffefd181'
+ROOT = '/tmp/maliev-file-native-v24-20261008'
+POLICY_SHA256 = 'cb955de5b97a9605e6adee66cb12f89169b5a9a5f1056d77e2ec3b721944d05a'
 
 
 def load_policy(path):
