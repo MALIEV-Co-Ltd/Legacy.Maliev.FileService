@@ -1,6 +1,6 @@
 # Exact-source File Linux qualification
 
-The protected Linux consumer materializes the frozen V24 candidate, four exact runtime helpers and130 pinned dependency files from one bounded same-repository Git blob. Its private source root is fixed. Original candidate, supervisor and dependency manifests remain unchanged; a receipt records the Linux materialization mapping and actual plain Git base identity.
+The protected Linux consumer materializes the frozen V25 V2 candidate, four exact runtime helpers and130 pinned dependency files from one bounded same-repository Git blob. Its private source root is fixed. Frozen manifests are consumed as sealed bytes; a receipt records the Linux materialization mapping and actual plain Git base identity. All four runtime helper files retain their V24 bytes.
 
 The default dispatch is read-only preflight. It compiles/runs pure source controls and reads existing Linux Docker/cgroup/memory availability. It never starts an SDK, installs Docker/WSL/SDKs, restarts a daemon, publishes an image or writes an original database.
 
@@ -13,3 +13,7 @@ The child environment excludes the read-only GitHub fetch credential. PostgreSQL
 Normal committed-source CI has a separate explicit admission profile bound to its actual clean head, run/attempt, event, workspace and immutable workflow source. Dispatches and uncommitted candidates cannot use that profile. Neither route uses the removed self-issued20-minute PowerShell test lease.
 
 A successful read-only preflight or pure source control run is not native application acceptance. The candidate remains uncommitted until actual build, focused/full tests, coverage, format and audit pass under Root-authorized qualification.
+
+V25 V2 adds a separate first-failure snapshot under each owned phase root's `test-failures` directory. It records closed numeric exception kinds and parent/child relations, with at most12 visits/nodes and depth four. It never records exception messages, stacks or arbitrary type names. A later watchdog cancellation cannot replace the first attempted failure, and diagnostic writer faults preserve the original exception and cleanup. Existing stage event fields, test cases, assertions and scheduling remain unchanged. This supplies missing diagnostic evidence; it does not establish the failed thread creator or fix the native HostClient failure.
+
+The additional failure budget is at most512 cases times16384 bytes, or8MiB. Existing stage and failure snapshots together are bounded by16MiB, excluding bounded atomic pending files. The existing recursive evidence collector retains these siblings under `native/owned-<phase>-<run>/test-failures/`; its64MiB per-file,256MiB aggregate and2048-file artifact guards remain unchanged. The actual protected collector and immutable writer passed portable synthetic retention/readback and closed numeric schema controls. An actual hosted V25 failure artifact and the new C# controls remain unverified until fresh native qualification. Review146 grants are spent and cannot be reused.
