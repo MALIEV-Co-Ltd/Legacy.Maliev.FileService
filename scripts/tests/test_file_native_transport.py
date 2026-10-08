@@ -21,11 +21,13 @@ import qualify_file_native as qualifier
 class Controls(unittest.TestCase):
     def test_exact_policy_profile_is_linux_source_only_without_authority(self):
         policy=intake.load_policy(SCRIPTS/'file-native-policy.json')
-        self.assertEqual(35,policy['candidateFiles'])
-        self.assertEqual(203,len(policy['entries']))
+        self.assertEqual(36,policy['candidateFiles'])
+        self.assertEqual(204,len(policy['entries']))
         self.assertEqual(179,len(policy['baseFiles']))
-        self.assertEqual('/tmp/maliev-file-native-v13-20261008',policy['root'])
+        self.assertEqual('/tmp/maliev-file-native-v14r4-20261008',policy['root'])
         self.assertIs(False,policy['sdkAuthorizedWithoutOriginalRootGrant'])
+        self.assertEqual((600,900,2147483648,64,'100000 100000',4096),
+            tuple(policy[key] for key in ('sdkSeconds','rootSecondsMaximum','sdkMemoryBytes','sdkTasks','sdkCpuMax','memoryFloorMiB')))
         self.assertTrue(all(row['checkoutSha256']==row['sha256'] and row['checkoutBytes']==row['bytes'] for row in policy['baseFiles'] if not row['path'].endswith('.ps1')))
         self.assertEqual(7, sum(row['path'].endswith('.ps1') for row in policy['baseFiles']))
         with tempfile.TemporaryDirectory() as temporary:
@@ -174,7 +176,7 @@ class Controls(unittest.TestCase):
 
     def fixture(self):
         policy=intake.load_policy(SCRIPTS/'file-native-policy.json');files={};rows=[]
-        for number in range(35):
+        for number in range(36):
             path='probe/file'+str(number)+'.txt';raw=('public'+str(number)).encode();files['candidate/raw/'+path]=raw
             rows.append({'path':path,'preparedSha256':hashlib.sha256(raw).hexdigest()})
         policy['supervisorFiles']=[]
@@ -204,6 +206,30 @@ class Controls(unittest.TestCase):
     def test_nested_source_and_runtime_helper_tampering_reject(self):
         for key in ('candidate/raw/probe/file0.txt','supervisor/helper0.py','dependencies/PublicDependency/file0.txt'):
             files,policy=self.fixture();files[key]+=b'altered'
+            with self.assertRaises(ValueError):intake.validate_bindings(files,policy)
+
+    def test_new_checkpoint_source_missing_duplicate_or_changed_rejects(self):
+        for change in ('missing','duplicate','changed'):
+            files,policy=self.fixture()
+            candidate=json.loads(files['candidate/manifest.json'])
+            row=candidate['files'][-1]
+            oldpath='candidate/raw/'+row['path']
+            path='Legacy.Maliev.FileService.Tests/Infrastructure/FileStageCheckpoint.cs'
+            row['path']=path
+            files['candidate/raw/'+path]=files.pop(oldpath)
+            files['candidate/manifest.json']=json.dumps(candidate).encode()
+            policy['candidateManifestSha256']=hashlib.sha256(files['candidate/manifest.json']).hexdigest()
+            supervisor=json.loads(files['supervisor/manifest.json'])
+            supervisor['candidateManifestSha256']=policy['candidateManifestSha256']
+            files['supervisor/manifest.json']=json.dumps(supervisor).encode()
+            policy['supervisorManifestSha256']=hashlib.sha256(files['supervisor/manifest.json']).hexdigest()
+            intake.validate_bindings(files,policy)
+            if change=='changed':files['candidate/raw/'+path]+=b'changed'
+            else:
+                if change=='missing':candidate['files'].pop()
+                else:candidate['files'][-1]=copy.deepcopy(candidate['files'][-2])
+                files['candidate/manifest.json']=json.dumps(candidate).encode()
+                policy['candidateManifestSha256']=hashlib.sha256(files['candidate/manifest.json']).hexdigest()
             with self.assertRaises(ValueError):intake.validate_bindings(files,policy)
 
     def test_evidence_does_not_copy_private_package_home(self):

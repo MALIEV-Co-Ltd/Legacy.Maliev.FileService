@@ -1,4 +1,4 @@
-"""Exact V13 Linux source intake. No SDK, Docker mutation or Root authority minting."""
+"""Exact V14r4 Linux source intake. No SDK, Docker mutation or Root authority minting."""
 import argparse
 import json
 from pathlib import Path
@@ -8,8 +8,8 @@ from sealed_source_capsule import canonical_path, digest, fetch_git_blob, parse_
 
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 BASE = '07f0b5b721e3df758a9ec742c6f167491f899e44'
-ROOT = '/tmp/maliev-file-native-v13-20261008'
-POLICY_SHA256 = '3aa1e3116f40ccc340f1be0898f6f87ffe9a648ecea8792a342d0f57eb3a7d3d'
+ROOT = '/tmp/maliev-file-native-v14r4-20261008'
+POLICY_SHA256 = '961d68114d41c93b94c6ba45adc034bc1bc290427bbf090f6ad0aaec1499eeff'
 
 
 def load_policy(path):
@@ -23,7 +23,7 @@ def load_policy(path):
     value = parse_json(raw)
     if value['repository'] != REPOSITORY or value['acceptedBase'] != BASE or value['root'] != ROOT:
         raise ValueError('Fixed Linux source profile differs')
-    if value['candidateFiles'] != 35 or len(value['entries']) != 203 or len(value['baseFiles']) != 179:
+    if value['candidateFiles'] != 36 or len(value['entries']) != 204 or len(value['baseFiles']) != 179:
         raise ValueError('Closed source inventory differs')
     if value['phases'] != ['build','focused','full','format','audit'] or value['sdkAuthorizedWithoutOriginalRootGrant'] is not False:
         raise ValueError('Closed phase and original authority profile differs')
@@ -35,7 +35,7 @@ def validate_bindings(files, policy):
                       ('dependency-manifest.json','dependencyManifestSha256'), ('transport-index.json','transportIndexSha256')]:
         if digest(files[path]) != policy[key]: raise ValueError('Original nested source seal differs')
     candidate = parse_json(files['candidate/manifest.json'])
-    if candidate['base'] != BASE or str(candidate['worktree']).replace(chr(92),'/') != policy['frozenCandidateWorktree'] or len(candidate['files']) != 35:
+    if candidate['base'] != BASE or str(candidate['worktree']).replace(chr(92),'/') != policy['frozenCandidateWorktree'] or len(candidate['files']) != 36:
         raise ValueError('Frozen source identity differs')
     seen = set()
     for row in candidate['files']:
@@ -100,7 +100,7 @@ def main():
     target=materialize(ROOT,source,metadata,files,policy)
     receipt={'state':'LinuxSourceMaterialized','root':ROOT,'candidate':str(target),'candidateManifestSha256':policy['candidateManifestSha256'],
         'supervisorManifestSha256':policy['supervisorManifestSha256'],'dependencyManifestSha256':policy['dependencyManifestSha256'],
-        'sourceEntries':len(files),'candidateFiles':35,'baselineFiles':179,'dependencyFiles':130,'sdkStarted':False,'nativeTestsExecuted':False}
+        'sourceEntries':len(files),'candidateFiles':36,'baselineFiles':179,'dependencyFiles':130,'sdkStarted':False,'nativeTestsExecuted':False}
     path=Path(args.receipt);reject_links(path);path.parent.mkdir(parents=True,exist_ok=True)
     with path.open('xb') as stream:stream.write((json.dumps(receipt,indent=2)+'\n').encode())
     print('Exact Linux File source materialized; no SDK or native test executed')
