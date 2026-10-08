@@ -78,6 +78,30 @@ class ProviderPreflightControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'provider hashes are sealed'):qualifier.main()
             policy.assert_not_called();grants.assert_not_called();sdk.assert_not_called();popen.assert_not_called()
 
+    def test_closed_trust_witness_retained_without_masking_primary(self):
+        primary=RuntimeError('private primary');witness={'reasonBits':2,'componentIndex':1,'uid':0,'mode':0o40777}
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);exe=root/'dotnet';exe.write_bytes(b'fixture')
+            owner=SimpleNamespace(bind_vstest_provider=Mock(side_effect=primary),project_vstest_trust_failure=Mock(return_value=witness))
+            with self.assertRaises(RuntimeError) as caught:qualifier.observe_vstest_provider(owner,str(exe),root,self.policy)
+            self.assertIs(primary,caught.exception);receipt=json.loads((root/'provider-trust-failure.json').read_bytes())
+            self.assertEqual(witness,receipt['witness']);self.assertFalse(receipt['SDKStarted']);self.assertFalse(receipt['nativeTestsExecuted'])
+            for key,value in self.policy.items():self.assertEqual(value,receipt[key])
+            self.assertNotIn('private primary',json.dumps(receipt));self.assertFalse((root/'provider-preflight.json').exists())
+
+    def test_diagnostic_projection_publish_and_byte_cap_faults_preserve_primary(self):
+        for variant in ['projection','publish','quota']:
+            primary=RuntimeError('primary')
+            with tempfile.TemporaryDirectory() as d:
+                root=Path(d);exe=root/'dotnet';exe.write_bytes(b'fixture')
+                project=Mock(side_effect=ValueError()) if variant=='projection' else Mock(return_value={'x':'x'*5000} if variant=='quota' else {'reasonBits':2})
+                owner=SimpleNamespace(bind_vstest_provider=Mock(side_effect=primary),project_vstest_trust_failure=project)
+                with patch.object(qualifier,'write_new',side_effect=KeyboardInterrupt()) as writer:
+                    with self.assertRaises(RuntimeError) as caught:qualifier.observe_vstest_provider(owner,str(exe),root,self.policy)
+                    self.assertIs(primary,caught.exception)
+                    if variant!='publish':writer.assert_not_called()
+                self.assertFalse((root/'provider-preflight.json').exists())
+
     def test_actual_main_observes_provider_before_preflight_success_and_return(self):
         tree=ast.parse(Path(qualifier.__file__).read_bytes())
         main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
