@@ -176,9 +176,23 @@ def observe_vstest_provider(owner, sdk, evidence, policy):
     if sdk is None:
         raise RuntimeError('Exact provider host unavailable; no installation or SDK invocation')
     executable=Path(sdk).resolve(strict=True)
-    provider=owner.bind_vstest_provider(executable)
-    if owner.bind_vstest_provider(executable)!=provider:
-        raise RuntimeError('Provider changed during read-only preflight')
+    try:
+        provider=owner.bind_vstest_provider(executable)
+        if owner.bind_vstest_provider(executable)!=provider:
+            raise RuntimeError('Provider changed during read-only preflight')
+    except BaseException as failure:
+        try:
+            witness=owner.project_vstest_trust_failure(failure)
+            diagnostic={'schemaVersion':1,'SDKStarted':False,'nativeTestsExecuted':False,
+                'candidateManifestSha256':policy['candidateManifestSha256'],
+                'supervisorManifestSha256':policy['supervisorManifestSha256'],
+                'dependencyManifestSha256':policy['dependencyManifestSha256'],'witness':witness}
+            raw=(json.dumps(diagnostic,sort_keys=True)+'\n').encode()
+            if len(raw)>4096:raise ValueError('Provider trust diagnostic exceeds quota')
+            write_new(evidence,'provider-trust-failure.json',raw)
+        except BaseException:
+            pass  # Optional observation cannot replace the original trust refusal.
+        raise
     receipt={'schemaVersion':1,'SDKStarted':False,'nativeTestsExecuted':False,
         'provider':provider,'candidateManifestSha256':policy['candidateManifestSha256'],
         'supervisorManifestSha256':policy['supervisorManifestSha256'],
