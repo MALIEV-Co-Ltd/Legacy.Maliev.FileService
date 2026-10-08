@@ -1,0 +1,106 @@
+name: File finite Windows supervisor qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/file-sdk-qualification.yml
+      - scripts/qualify_file_sdk.py
+      - scripts/file-sdk-policy.json
+      - scripts/tests/test_file_sdk.py
+      - docs/file-sdk-qualification.md
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Successor smoke first; restore/build requires Root's live grant
+        type: choice
+        options: [smoke-only, restore-build]
+        default: smoke-only
+        required: true
+      capsule_blob:
+        description: Exact reviewed same-repository V8 source capsule blob
+        type: string
+        required: true
+      grant_blob:
+        description: Root-issued same-repository finite build grant blob
+        type: string
+        required: false
+      grant_sha256:
+        description: Root-reviewed exact raw grant SHA256
+        type: string
+        required: false
+
+permissions:
+  contents: read
+concurrency:
+  group: file-finite-sdk-qualification-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  source-controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Compile transport source into owned temporary output
+        run: |
+          python3 -B - <<'PY'
+          import pathlib, py_compile, tempfile
+          with tempfile.TemporaryDirectory(prefix='file-sdk-source-build-') as owned:
+              for source in [pathlib.Path('scripts/sealed_source_capsule.py'), pathlib.Path('scripts/materialize_file_candidate.py'), pathlib.Path('scripts/smoke_file_windows_job.py'), pathlib.Path('scripts/qualify_file_sdk.py'), *pathlib.Path('scripts/tests').glob('test_file_*.py')]:
+                  py_compile.compile(str(source), cfile=str(pathlib.Path(owned)/(source.name+'.pyc')), doraise=True)
+          PY
+      - name: Run relevant transport and grant controls
+        run: python3 -B -m unittest discover -s scripts/tests -p 'test_file_*.py'
+
+  windows-qualification:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: source-controls
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out exact immutable File base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 07f0b5b721e3df758a9ec742c6f167491f899e44
+          path: native-base
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Verify raw source and reconstruct reviewed fixed Windows paths
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAPSULE_BLOB: ${{ inputs.capsule_blob }}
+        run: |
+          python -B scripts/materialize_file_candidate.py --policy scripts/file-candidate-policy.json --base-checkout native-base --capsule-blob $env:CAPSULE_BLOB --receipt evidence/source-materialization.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify successor and consume Root grant only in build mode
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILE_STAGE_MODE: ${{ inputs.mode }}
+          ROOT_GRANT_BLOB: ${{ inputs.grant_blob }}
+          ROOT_GRANT_SHA256: ${{ inputs.grant_sha256 }}
+        run: |
+          $fileStageArgs = @('-B', 'scripts/qualify_file_sdk.py', '--policy', 'scripts/file-sdk-policy.json', '--intake-policy', 'scripts/file-candidate-policy.json', '--evidence', 'evidence/sdk-stage', '--mode', $env:FILE_STAGE_MODE)
+          if ($env:FILE_STAGE_MODE -eq 'restore-build') {
+            $fileStageArgs += @('--grant-blob', $env:ROOT_GRANT_BLOB, '--grant-sha256', $env:ROOT_GRANT_SHA256)
+          } elseif ($env:ROOT_GRANT_BLOB -or $env:ROOT_GRANT_SHA256) {
+            throw 'Smoke-only mode must not consume an SDK grant.'
+          }
+          python @fileStageArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain source, actual successor smoke and owned SDK evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: file-finite-stage-${{ github.run_id }}
+          path: evidence/
+          retention-days: 14

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "repository": "MALIEV-Co-Ltd/Legacy.Maliev.FileService",
+  "owner": "01a1009d-1c8e-7821-a1f2-fded3ac6928d",
+  "coordinator": "019fc21e-50f0-7112-834f-9fb3b35b9dfe",
+  "root": "D:/codex-temp/2026-10-03/legacy-code-files-20261003",
+  "candidateManifestSha256": "1da5e0e1bf5ad5fe48789c3a5831dd5ac2ea2e58467a966ece85c936f3997fe0",
+  "dependencyManifestSha256": "71660f6c390872486e1ffd821816ee85966eddcbbf9c8318edc48e97c01889c7",
+  "supervisorManifestSha256": "0a7d49f736bc8fbf2d4f51af626f7a92b84dda8d6cd822ea1f733250f311eb74",
+  "sourceControlsExpected": 27,
+  "supervisorManifest": {
+    "path": "manifest.json",
+    "gitBlob": "ac1af501a6ba6004d2878646fa6a530534aac688",
+    "bytes": 3009,
+    "sha256": "0a7d49f736bc8fbf2d4f51af626f7a92b84dda8d6cd822ea1f733250f311eb74"
+  },
+  "supervisorFiles": [
+    {
+      "path": "file_build_supervisor_draft_v4.py",
+      "gitBlob": "a1534d2778b0604c7d8096c41e5487751c878eae",
+      "bytes": 27501,
+      "sha256": "c908861fd83ade28625a6efa6f120c93013cf00e4f13f15e132ec7c4ede4c3cf"
+    },
+    {
+      "path": "file_native_windows_v1.py",
+      "gitBlob": "bd1ea7c97ddd924d762c8da263851f8f8c546bf1",
+      "bytes": 4233,
+      "sha256": "2c1aa365244511a601d7fa9f9aa33ff19b46958142e5b18c3d0ba1cc3e65de24"
+    },
+    {
+      "path": "document_native_controls_v3.py",
+      "gitBlob": "031359b4496e79e9fa0b1523b546349f7561b5e3",
+      "bytes": 4161,
+      "sha256": "5cfc8e8cce62a46aa211ced77dd539999f05576e7a0ae6d53992bb9361a1df5d"
+    },
+    {
+      "path": "test_file_build_supervisor_draft_v5.py",
+      "gitBlob": "0b1a9084820fabfe4f4f9e8702be8c0f1b93d272",
+      "bytes": 1295,
+      "sha256": "d9a8a374b116bb2a7969b928dfb2f72857ef197a5d70874f9a183733d65a1bfe"
+    },
+    {
+      "path": "test_file_build_controller_v4.py",
+      "gitBlob": "c85d5ee2896eb5914929827a23a099084d159e1d",
+      "bytes": 11423,
+      "sha256": "fa9b2c05bf8cc6b56b12b696b934bce367a9c14c7d6210c656be643e9d95ccf1"
+    }
+  ]
+}
