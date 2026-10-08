@@ -3,6 +3,7 @@ import argparse
 import base64
 from datetime import datetime, timezone
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -176,7 +177,7 @@ def observe_vstest_provider(owner, sdk, evidence, policy, projection=None):
     if sdk is None:
         raise RuntimeError('Exact provider host unavailable; no installation or SDK invocation')
     executable=Path(sdk).resolve(strict=True)
-    bind=(lambda:owner.bind_trusted_projected_provider(executable,projection)) if projection is not None else (lambda:owner.bind_vstest_provider(executable))
+    bind=(lambda:owner.bind_qualification_projected_provider(executable,projection)) if projection is not None else (lambda:owner.bind_vstest_provider(executable))
     try:
         provider=bind()
         if bind()!=provider:
@@ -202,10 +203,41 @@ def observe_vstest_provider(owner, sdk, evidence, policy, projection=None):
     return receipt
 
 
+def independently_read_official_archive(owner, projection, evidence):
+    """Second physical bounded archive read, independent of supplier stream hash."""
+    path=Path(projection['root'])/'official-sdk.tar.gz'
+    owner.projection_check_deadline(projection['deadline'])
+    before=owner.projection_trust(path)
+    if before.st_size != owner.QUALIFICATION_SDK_ARCHIVE_BYTES:
+        raise ValueError('Independent official archive exact byte count differs')
+    digest512=hashlib.sha512();count=0
+    with path.open('rb') as stream:
+        held=os.fstat(stream.fileno())
+        fields=lambda value:(value.st_dev,value.st_ino,value.st_ctime_ns,value.st_size,value.st_mode,value.st_uid)
+        if fields(held)!=fields(before):raise ValueError('Independent archive held identity differs')
+        while True:
+            owner.projection_check_deadline(projection['deadline'])
+            chunk=stream.read(1024*1024)
+            if not chunk:break
+            count+=len(chunk)
+            if count>owner.QUALIFICATION_SDK_ARCHIVE_BYTES:raise ValueError('Independent archive read quota differs')
+            digest512.update(chunk)
+        if fields(os.fstat(stream.fileno()))!=fields(before):raise ValueError('Independent archive changed while read')
+    after=owner.projection_trust(path)
+    if fields(after)!=fields(before) or count!=owner.QUALIFICATION_SDK_ARCHIVE_BYTES or digest512.hexdigest()!=owner.SDK_ARCHIVE_SHA512:
+        raise ValueError('Independent official archive identity, bytes or SHA512 differs')
+    receipt={'schemaVersion':1,'archiveBytes':count,'archiveSha512':digest512.hexdigest(),
+        'archiveIdentity':list(fields(after)),'independentPhysicalRead':True,'handlesReleased':True,'SDKStarted':False}
+    write_new(evidence,'independent-sdk-archive.json',(json.dumps(receipt,sort_keys=True)+'\n').encode())
+    return receipt
+
+
 def validate_sdk_projection_policy(owner,policy):
     expected={'sdkVersion':owner.VSTEST_SDK_VERSION,'runtimeVersion':'10.0.12',
         'archiveURL':owner.SDK_ARCHIVE_URL,'archiveSha512':owner.SDK_ARCHIVE_SHA512,
-        'anchor':owner.SDK_PROJECTION_ANCHOR.as_posix(),'lifetimeSeconds':300,
+        'anchor':'/','qualifiedAccess':True,'lifetimeSeconds':300,
+        'exactArchiveBytes':owner.QUALIFICATION_SDK_ARCHIVE_BYTES,
+        'contentRows':owner.QUALIFICATION_SDK_CONTENT_ROWS,'contentSha256':owner.QUALIFICATION_SDK_CONTENT_SHA256,
         'archiveMaxBytes':owner.SDK_ARCHIVE_MAX,'expandedMaxBytes':owner.SDK_EXPANDED_MAX,
         'fileMaxBytes':owner.SDK_FILE_MAX,'entriesMax':owner.SDK_ENTRIES_MAX,
         'diskFloorBytes':3*1024**3,'SDKStarted':False}
@@ -241,7 +273,8 @@ def main():
     if status!=200 or daemon.get('OSType')!='linux' or not daemon.get('ID'):raise RuntimeError('Existing local Linux Docker daemon unavailable; no setup/restart authorized')
     memory=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())
     if int(memory['MemAvailable'].split()[0])<4096*1024 or not Path('/sys/fs/cgroup/cgroup.controllers').is_file():raise RuntimeError('Linux memory/cgroup admission unavailable')
-    with owner.trusted_sdk_projection(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT'),evidence) as projection:
+    with owner.trusted_sdk_projection(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT'),evidence,qualified_access=True) as projection:
+        independently_read_official_archive(owner,projection,evidence)
         observe_vstest_provider(owner,str(Path(projection['sdkRoot'])/'dotnet'),evidence,policy,projection)
     write_new(evidence,'preflight.json',(json.dumps({'state':'LinuxReadOnlyPreflightPassed','plainGitHead':head,
         'candidateManifestSha256':policy['candidateManifestSha256'],'supervisorManifestSha256':policy['supervisorManifestSha256'],
