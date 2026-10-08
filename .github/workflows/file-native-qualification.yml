@@ -20,7 +20,7 @@ on:
       capsule_blob:
         type: string
         required: true
-        description: Same-repository blob of the exact reviewed V13 capsule
+        description: Same-repository blob of the exact reviewed V14r4 capsule
       grant_bundle_blob:
         type: string
         required: false
