@@ -102,11 +102,40 @@ class ProviderPreflightControls(unittest.TestCase):
                     if variant!='publish':writer.assert_not_called()
                 self.assertFalse((root/'provider-preflight.json').exists())
 
+    def test_projected_observer_uses_trusted_binder_twice_without_host_fallback(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);exe=root/'dotnet';exe.write_bytes(b'fixture');projection={'fixture':'context'}
+            owner=SimpleNamespace(bind_trusted_projected_provider=Mock(return_value=self.provider),bind_vstest_provider=Mock())
+            receipt=qualifier.observe_vstest_provider(owner,str(exe),root,self.policy,projection)
+            self.assertFalse(receipt['SDKStarted']);owner.bind_vstest_provider.assert_not_called()
+            self.assertEqual(2,owner.bind_trusted_projected_provider.call_count)
+            owner.bind_trusted_projected_provider.assert_called_with(exe.resolve(),projection)
+
+    def test_projected_refusal_preserves_failure_and_no_success(self):
+        primary=RuntimeError('untrusted fullSDK')
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);exe=root/'dotnet';exe.write_bytes(b'fixture')
+            owner=SimpleNamespace(bind_trusted_projected_provider=Mock(side_effect=primary),bind_vstest_provider=Mock())
+            with self.assertRaises(RuntimeError) as caught:qualifier.observe_vstest_provider(owner,str(exe),root,self.policy,{})
+            self.assertIs(primary,caught.exception);owner.bind_vstest_provider.assert_not_called()
+            self.assertFalse((root/'provider-preflight.json').exists())
+
+    def test_projection_policy_requires_exact_official_seals_and_limits(self):
+        actual=json.loads(Path(qualifier.__file__).with_name('file-native-policy.json').read_bytes())['trustedSDKProjection']
+        owner=SimpleNamespace(VSTEST_SDK_VERSION=actual['sdkVersion'],SDK_ARCHIVE_URL=actual['archiveURL'],
+            SDK_ARCHIVE_SHA512=actual['archiveSha512'],SDK_PROJECTION_ANCHOR=Path(actual['anchor']),
+            SDK_ARCHIVE_MAX=actual['archiveMaxBytes'],SDK_EXPANDED_MAX=actual['expandedMaxBytes'],
+            SDK_FILE_MAX=actual['fileMaxBytes'],SDK_ENTRIES_MAX=actual['entriesMax'])
+        qualifier.validate_sdk_projection_policy(owner,{'trustedSDKProjection':actual})
+        for field,value in [('archiveSha512','0'*128),('lifetimeSeconds',301),('SDKStarted',True),('anchor','/tmp')]:
+            forged=copy.deepcopy(actual);forged[field]=value
+            with self.assertRaises(ValueError):qualifier.validate_sdk_projection_policy(owner,{'trustedSDKProjection':forged})
+
     def test_actual_main_observes_provider_before_preflight_success_and_return(self):
         tree=ast.parse(Path(qualifier.__file__).read_bytes())
         main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
         texts=[ast.unparse(n) for n in main.body]
-        observe=next(i for i,s in enumerate(texts) if s.startswith('observe_vstest_provider('))
+        observe=next(i for i,s in enumerate(texts) if s.startswith('with owner.trusted_sdk_projection(') and 'observe_vstest_provider(' in s)
         success=next(i for i,s in enumerate(texts) if "'preflight.json'" in s)
         stop=next(i for i,s in enumerate(texts) if "args.mode == 'preflight-only'" in s and 'return' in s)
         grants=next(i for i,s in enumerate(texts) if s.startswith('bundle = fetch_git_blob'))
