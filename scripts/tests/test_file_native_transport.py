@@ -24,7 +24,7 @@ class Controls(unittest.TestCase):
         self.assertEqual(35,policy['candidateFiles'])
         self.assertEqual(203,len(policy['entries']))
         self.assertEqual(179,len(policy['baseFiles']))
-        self.assertEqual('/tmp/maliev-file-native-v12-20261008',policy['root'])
+        self.assertEqual('/tmp/maliev-file-native-v13-20261008',policy['root'])
         self.assertIs(False,policy['sdkAuthorizedWithoutOriginalRootGrant'])
         self.assertTrue(all(row['checkoutSha256']==row['sha256'] and row['checkoutBytes']==row['bytes'] for row in policy['baseFiles'] if not row['path'].endswith('.ps1')))
         self.assertEqual(7, sum(row['path'].endswith('.ps1') for row in policy['baseFiles']))
