@@ -40,7 +40,7 @@ The legacy service-account resource is not present in this repository.
 | Scalar UI | `GET` | `/file/scalar` | anonymous documentation |
 
 `POST /Uploads` keeps multipart field `files`, the optional custom `path`, the
-200 MB aggregate limit, `201 Created` with location `Google Cloud Storage`, and
+100 MiB aggregate file-payload limit, `201 Created` with location `Google Cloud Storage`, and
 the PascalCase response shape:
 
 ```json
@@ -103,7 +103,7 @@ remains write-disabled.
 `MalwareScanner__Host`, `MalwareScanner__Port`, and
 `MalwareScanner__TimeoutSeconds` configure ClamAV. Enabled writes require an
 available scanner whose `StreamMaxLength` and request timeout safely cover the
-200 MiB upload policy. Scanner timeout, error, malformed response, or unknown
+100 MiB file-payload policy. Scanner timeout, error, malformed response, or unknown
 verdict fails closed; no object becomes final or readable.
 
 The temporary and final buckets must have Uniform Bucket-Level Access enabled and
@@ -150,7 +150,10 @@ GCS object privacy is enforced by private bucket IAM with Uniform Bucket-Level
 Access (UBLA). The service does not set per-object ACLs; enabled instant-quotation
 buckets must be distinct, lowercase DNS-compatible GCS names.
 
-ClamAV must be configured for at least the legacy 200 MB request ceiling. Leaving
+The legacy HTTP multipart request ceiling is 101 MiB: 100 MiB of aggregate file
+payload plus a 1 MiB multipart envelope allowance. ClamAV's `StreamMaxLength`
+must accommodate an individual file of up to 100 MiB; the multipart envelope is
+not sent to the scanner. Leaving
 `MalwareScanner__Host` empty is safe for local startup, but all upload requests fail
 closed with `503` until a scanner is available.
 
