@@ -10,10 +10,12 @@ using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Services;
+using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Tests.OpenApi;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -150,6 +152,122 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
             factory.Service.Verify(service => service.MoveAsync("source-bucket", "folder/source +ไทย.txt",
                 "destination-bucket", "folder/destination +ไทย.txt", It.IsAny<CancellationToken>()), Times.Once);
         factory.Service.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("DELETE", "bucket", "same")]
+    [InlineData("DELETE", "Bucket", "different")]
+    [InlineData("DELETE", "BUCKET", "empty")]
+    [InlineData("DELETE", "objectName", "same")]
+    [InlineData("DELETE", "ObjectName", "different")]
+    [InlineData("DELETE", "OBJECTNAME", "empty")]
+    [InlineData("PUT", "sourceBucket", "same")]
+    [InlineData("PUT", "SourceBucket", "different")]
+    [InlineData("PUT", "SOURCEBUCKET", "empty")]
+    [InlineData("PUT", "sourceObjectName", "same")]
+    [InlineData("PUT", "SourceObjectName", "different")]
+    [InlineData("PUT", "SOURCEOBJECTNAME", "empty")]
+    [InlineData("PUT", "destinationBucket", "same")]
+    [InlineData("PUT", "DestinationBucket", "different")]
+    [InlineData("PUT", "DESTINATIONBUCKET", "empty")]
+    [InlineData("PUT", "destinationObjectName", "same")]
+    [InlineData("PUT", "DestinationObjectName", "different")]
+    [InlineData("PUT", "DESTINATIONOBJECTNAME", "empty")]
+    public async Task RepeatedMutationCoordinate_RejectsBeforeApplication(string method, string field, string variant)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString);
+        using var client = AuthorizedClient(factory, method);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), RepeatedQuery(method, field, variant)), deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(method == "DELETE" ? "Bucket and object name is required" : "Bucket and object names are required",
+            await response.Content.ReadFromJsonAsync<string>());
+        factory.Service.VerifyNoOtherCalls();
+        Assert.Null(factory.Services.GetService<StorageClient>());
+    }
+
+    [Theory]
+    [InlineData("DELETE", "bucket")]
+    [InlineData("DELETE", "objectName")]
+    [InlineData("PUT", "sourceBucket")]
+    [InlineData("PUT", "sourceObjectName")]
+    [InlineData("PUT", "destinationBucket")]
+    [InlineData("PUT", "destinationObjectName")]
+    public async Task RepeatedMutationCoordinate_RejectsBeforeActualDisabledApplication(string method, string field)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, useActualApplication: true);
+        using var client = AuthorizedClient(factory, method);
+        using var scope = factory.Services.CreateScope();
+        Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
+        var context = scope.ServiceProvider.GetRequiredService<FileDbContext>();
+        await context.Database.MigrateAsync();
+        var objectName = "folder/source-" + Guid.NewGuid().ToString("N") + " +ไทย.txt";
+        context.Uploads.Add(new()
+        {
+            Bucket = "source-bucket",
+            Name = objectName,
+            Size = 7,
+            ContentType = "text/plain",
+        });
+        context.StorageMoveJournals.Add(new()
+        {
+            OperationId = Guid.NewGuid(),
+            ScanClean = true,
+            SourceBucket = "source-bucket",
+            SourceObjectName = "_quarantine/" + objectName,
+            SourceGeneration = 17,
+            DestinationBucket = "source-bucket",
+            DestinationObjectName = objectName,
+            DestinationGeneration = 31,
+            State = "MetadataCommitted",
+            CreatedAt = DateTimeOffset.UtcNow,
+            ModifiedAt = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+        var uploadsBefore = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
+        var journalsBefore = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var query = RepeatedQuery(method, field, "different").Replace(Uri.EscapeDataString("folder/source +ไทย.txt"),
+            Uri.EscapeDataString(objectName), StringComparison.Ordinal);
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), query), deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        factory.Service.VerifyNoOtherCalls();
+        Assert.Null(factory.Services.GetService<StorageClient>());
+        var uploadsAfter = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
+        var journalsAfter = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
+        Assert.Equal(JsonSerializer.Serialize(uploadsBefore), JsonSerializer.Serialize(uploadsAfter));
+        Assert.Equal(JsonSerializer.Serialize(journalsBefore), JsonSerializer.Serialize(journalsAfter));
+    }
+
+    [Theory]
+    [InlineData("DELETE", "anonymous", HttpStatusCode.Unauthorized)]
+    [InlineData("DELETE", "wrong-signature", HttpStatusCode.Unauthorized)]
+    [InlineData("DELETE", "without-required-permission", HttpStatusCode.Forbidden)]
+    [InlineData("PUT", "anonymous", HttpStatusCode.Unauthorized)]
+    [InlineData("PUT", "wrong-signature", HttpStatusCode.Unauthorized)]
+    [InlineData("PUT", "without-required-permission", HttpStatusCode.Forbidden)]
+    public async Task RepeatedMutationCoordinate_RetainsPermissionPrecedence(string method, string identity, HttpStatusCode expected)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString);
+        using var client = factory.CreateClient();
+        if (identity != "anonymous") client.DefaultRequestHeaders.Authorization = new("Bearer", factory.Token(identity, method));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method),
+            RepeatedQuery(method, method == "DELETE" ? "bucket" : "sourceBucket", "different")), deadline.Token);
+
+        Assert.Equal(expected, response.StatusCode);
+        factory.Service.VerifyNoOtherCalls();
+    }
+
+    private static string RepeatedQuery(string method, string field, string variant)
+    {
+        var original = field.EndsWith("Bucket", StringComparison.OrdinalIgnoreCase)
+            ? field.StartsWith("destination", StringComparison.OrdinalIgnoreCase) ? "destination-bucket" : "source-bucket"
+            : field.StartsWith("destination", StringComparison.OrdinalIgnoreCase) ? "folder/destination +ไทย.txt" : "folder/source +ไทย.txt";
+        var value = variant == "same" ? original : variant == "empty" ? "" : "different-coordinate";
+        return LegacyQuery(method) + "&" + field + "=" + Uri.EscapeDataString(value);
     }
 
     private static HttpClient AuthorizedClient(AdmissionFactory factory, string method)
