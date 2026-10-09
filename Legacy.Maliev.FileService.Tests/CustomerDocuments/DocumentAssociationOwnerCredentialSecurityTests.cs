@@ -62,10 +62,16 @@ public sealed class DocumentAssociationOwnerCredentialSecurityTests
         {
             TokenValidationParameters = new()
             {
-                ValidateIssuer = true, ValidIssuer = "https://isolated-issuer.invalid/", ValidateAudience = true,
-                ValidAudience = "isolated-owner-audience", ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new RsaSecurityKey(signer) { KeyId = "isolated-rsa-key" }, RequireSignedTokens = true,
-                RequireExpirationTime = true, ValidateLifetime = true, ClockSkew = TimeSpan.Zero
+                ValidateIssuer = true,
+                ValidIssuer = "https://isolated-issuer.invalid/",
+                ValidateAudience = true,
+                ValidAudience = "isolated-owner-audience",
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new RsaSecurityKey(signer) { KeyId = "isolated-rsa-key" },
+                RequireSignedTokens = true,
+                RequireExpirationTime = true,
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.Zero
             }
         };
         var monitor = new Mock<IOptionsMonitor<JwtBearerOptions>>();
@@ -75,8 +81,13 @@ public sealed class DocumentAssociationOwnerCredentialSecurityTests
     }
     private static Dictionary<string, object> Payload(long issued, long expires) => new()
     {
-        ["iss"] = "https://isolated-issuer.invalid/", ["aud"] = "isolated-owner-audience", ["sub"] = "service:legacy-file",
-        ["identity_kind"] = "service", ["name"] = "legacy-file", ["iat"] = issued, ["exp"] = expires
+        ["iss"] = "https://isolated-issuer.invalid/",
+        ["aud"] = "isolated-owner-audience",
+        ["sub"] = "service:legacy-file",
+        ["identity_kind"] = "service",
+        ["name"] = "legacy-file",
+        ["iat"] = issued,
+        ["exp"] = expires
     };
     private static string Sign(Dictionary<string, object> header, string body, RSA signer)
     {

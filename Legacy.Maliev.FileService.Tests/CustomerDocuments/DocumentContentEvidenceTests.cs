@@ -144,13 +144,32 @@ public sealed class DocumentContentEvidenceTests(CustomerDocumentPostgreSqlFixtu
     {
         await using var db = fixture.CreateContext();
         await db.Database.MigrateAsync();
-        var document = new CustomerDocument { Id = Guid.NewGuid(), CustomerId = 23, Kind = DocumentKind.Nda,
-            Title = "Synthetic evidence", Visibility = DocumentVisibility.Customer };
-        var version = new CustomerDocumentVersion { Id = Guid.NewGuid(), DocumentId = document.Id,
-            CustomerId = 23, Kind = document.Kind, VersionNumber = 1, ContentSha256 = Digest,
-            ActorSubject = "synthetic-uploader", CreatedAtUtc = DateTimeOffset.UtcNow,
-            StorageBucket = "synthetic-private", StorageGeneration = 109, ScanSourceGeneration = 103,
-            ScanOperationId = Guid.NewGuid(), ContentSize = Bytes.Length, ContentType = "application/pdf", OriginalFileName = "agreement.pdf" };
+        var document = new CustomerDocument
+        {
+            Id = Guid.NewGuid(),
+            CustomerId = 23,
+            Kind = DocumentKind.Nda,
+            Title = "Synthetic evidence",
+            Visibility = DocumentVisibility.Customer
+        };
+        var version = new CustomerDocumentVersion
+        {
+            Id = Guid.NewGuid(),
+            DocumentId = document.Id,
+            CustomerId = 23,
+            Kind = document.Kind,
+            VersionNumber = 1,
+            ContentSha256 = Digest,
+            ActorSubject = "synthetic-uploader",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            StorageBucket = "synthetic-private",
+            StorageGeneration = 109,
+            ScanSourceGeneration = 103,
+            ScanOperationId = Guid.NewGuid(),
+            ContentSize = Bytes.Length,
+            ContentType = "application/pdf",
+            OriginalFileName = "agreement.pdf"
+        };
         version.StorageObjectName = $"customer-documents/{(crossCustomerCoordinates ? 24 : 23)}/{document.Id:N}/{version.Id:N}/original";
         db.AddRange(document, version);
         db.Associations.Add(new() { VersionId = version.Id, CustomerId = 23, Kind = DocumentResourceKind.Customer, ResourceId = 23 });

@@ -6,6 +6,7 @@ using Legacy.Maliev.FileService.Domain.CustomerDocuments;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 [Collection(CustomerDocumentPostgreSqlCollection.Name)]
 public sealed class ProtectedDocumentPersistenceTests(CustomerDocumentPostgreSqlFixture fixture)
 {

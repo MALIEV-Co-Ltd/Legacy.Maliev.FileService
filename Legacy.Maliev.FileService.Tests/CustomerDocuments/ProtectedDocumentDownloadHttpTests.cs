@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 public sealed class ProtectedDocumentDownloadHttpTests
 {
     [Fact]

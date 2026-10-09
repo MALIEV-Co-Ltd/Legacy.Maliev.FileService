@@ -1,6 +1,7 @@
 using Legacy.Maliev.FileService.Application.CustomerDocuments;
 using Legacy.Maliev.FileService.Application.Models;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 public sealed class ProtectedDocumentUploadTests
 {
     [Theory]

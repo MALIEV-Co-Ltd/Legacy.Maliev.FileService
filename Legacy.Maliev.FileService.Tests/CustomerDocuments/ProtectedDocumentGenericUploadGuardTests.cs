@@ -133,8 +133,14 @@ public sealed class ProtectedDocumentGenericUploadGuardTests
         boundaries.Intent.Setup(x => x.PrepareAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>())).ThrowsAsync(boundaries.Sentinel);
         boundaries.Journal.Setup(x => x.FindAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ThrowsAsync(boundaries.Sentinel);
-        var options = Options.Create(new FileStorageOptions { Enabled = true, WritesEnabled = true,
-            AllowedBuckets = ["synthetic"], QuarantinePrefix = "_quarantine", SignedUrlHours = 1 });
+        var options = Options.Create(new FileStorageOptions
+        {
+            Enabled = true,
+            WritesEnabled = true,
+            AllowedBuckets = ["synthetic"],
+            QuarantinePrefix = "_quarantine",
+            SignedUrlHours = 1
+        });
         boundaries.Service = new FileApplicationService(boundaries.Objects.Object, boundaries.Scanner.Object,
             boundaries.Repository.Object, boundaries.Journal.Object, new ObjectNamePolicy(options, TimeProvider.System),
             options, new LegacyFileRuntimeGate(options), NullLogger<FileApplicationService>.Instance,

@@ -43,11 +43,23 @@ public sealed class NdaVerificationService(INdaAuthority authority, INdaReposito
         if (target.Revision != request.ExpectedRevision) throw new NdaRevisionConflictException();
         NdaAuthorityGuard.Require(await evidence.ValidateAsync(target.VersionId, target.ContentSha256, token));
         var now = clock.GetUtcNow();
-        var record = new NdaRecord { Id = Guid.NewGuid(), DocumentId = documentId, VersionId = request.VersionId, CustomerId = customerId,
-            PartyOne = request.PartyOne.Trim(), PartyTwo = request.PartyTwo.Trim(), EffectiveAtUtc = request.EffectiveAtUtc,
-            ExpiresAtUtc = request.ExpiresAtUtc, RenewalAtUtc = request.RenewalAtUtc, SurvivalKind = request.SurvivalKind,
-            SurvivalEndsAtUtc = request.SurvivalEndsAtUtc, ResponsibleEmployeeSubject = request.ResponsibleEmployeeSubject,
-            VerifiedBySubject = verifier, VerifiedAtUtc = now };
+        var record = new NdaRecord
+        {
+            Id = Guid.NewGuid(),
+            DocumentId = documentId,
+            VersionId = request.VersionId,
+            CustomerId = customerId,
+            PartyOne = request.PartyOne.Trim(),
+            PartyTwo = request.PartyTwo.Trim(),
+            EffectiveAtUtc = request.EffectiveAtUtc,
+            ExpiresAtUtc = request.ExpiresAtUtc,
+            RenewalAtUtc = request.RenewalAtUtc,
+            SurvivalKind = request.SurvivalKind,
+            SurvivalEndsAtUtc = request.SurvivalEndsAtUtc,
+            ResponsibleEmployeeSubject = request.ResponsibleEmployeeSubject,
+            VerifiedBySubject = verifier,
+            VerifiedAtUtc = now
+        };
         record = await repository.AppendVerificationAsync(record, legalScope.Resources, request.ExpectedRevision, request.Reason.Trim(), token);
         return new(record.Id, record.DocumentId, record.VersionId, record.VerificationRevision,
             NdaLifecycle.CalendarStatus(record, now, false), NdaLifecycle.ObligationStatus(record, now));

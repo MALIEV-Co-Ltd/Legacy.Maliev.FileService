@@ -115,8 +115,19 @@ public sealed class NdaReminderPostgreSqlTests(CustomerDocumentPostgreSqlFixture
         await using var db = fixture.CreateContext();
         return await new NdaRepository(db).AppendVerificationAsync(Record(identity.Document, identity.Version), [new(DocumentResourceKind.Order, 81)], 1, "Synthetic review", default);
     }
-    private static NdaRecord Record(Guid document, Guid version) => new() { Id = Guid.NewGuid(), DocumentId = document, VersionId = version,
-        CustomerId = 23, PartyOne = "Synthetic A", PartyTwo = "Synthetic B", EffectiveAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
-        ExpiresAtUtc = DateTimeOffset.UtcNow.AddMonths(1), SurvivalKind = NdaSurvivalKind.Unknown,
-        ResponsibleEmployeeSubject = "synthetic-responsible", VerifiedBySubject = "synthetic-verifier", VerifiedAtUtc = DateTimeOffset.UtcNow };
+    private static NdaRecord Record(Guid document, Guid version) => new()
+    {
+        Id = Guid.NewGuid(),
+        DocumentId = document,
+        VersionId = version,
+        CustomerId = 23,
+        PartyOne = "Synthetic A",
+        PartyTwo = "Synthetic B",
+        EffectiveAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+        ExpiresAtUtc = DateTimeOffset.UtcNow.AddMonths(1),
+        SurvivalKind = NdaSurvivalKind.Unknown,
+        ResponsibleEmployeeSubject = "synthetic-responsible",
+        VerifiedBySubject = "synthetic-verifier",
+        VerifiedAtUtc = DateTimeOffset.UtcNow
+    };
 }

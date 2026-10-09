@@ -40,19 +40,43 @@ public sealed class NdaRepository(CustomerDocumentDbContext context) : INdaRepos
         if (record.CoverageSealed) throw new ArgumentException("Coverage must be sealed by atomic verification.");
         record.VerificationRevision = nextRevision;
         record.SupersedesNdaId = prior?.Id;
-        context.Verifications.Add(new DocumentVerificationEvidence { VersionId = record.VersionId, Revision = nextRevision,
-            Status = VerificationStatus.Verified, VerifiedBySubject = record.VerifiedBySubject, VerifiedAtUtc = record.VerifiedAtUtc });
+        context.Verifications.Add(new DocumentVerificationEvidence
+        {
+            VersionId = record.VersionId,
+            Revision = nextRevision,
+            Status = VerificationStatus.Verified,
+            VerifiedBySubject = record.VerifiedBySubject,
+            VerifiedAtUtc = record.VerifiedAtUtc
+        });
         context.Set<NdaRecord>().Add(record);
         context.Set<NdaCoverage>().AddRange(coverage.Select(x => new NdaCoverage { NdaId = record.Id, CustomerId = record.CustomerId, Kind = x.Kind, ResourceId = x.ResourceId }));
-        context.Audits.Add(new DocumentAudit { Id = Guid.NewGuid(), DocumentId = record.DocumentId, VersionId = record.VersionId,
-            ActorSubject = record.VerifiedBySubject, AtUtc = record.VerifiedAtUtc, Action = "NdaVerified", Reason = reason, Revision = nextRevision });
+        context.Audits.Add(new DocumentAudit
+        {
+            Id = Guid.NewGuid(),
+            DocumentId = record.DocumentId,
+            VersionId = record.VersionId,
+            ActorSubject = record.VerifiedBySubject,
+            AtUtc = record.VerifiedAtUtc,
+            Action = "NdaVerified",
+            Reason = reason,
+            Revision = nextRevision
+        });
         if (prior is not null)
         {
             await context.Set<InternalNdaReminder>().Where(x => x.NdaId == prior.Id && x.DueAtUtc > record.VerifiedAtUtc && x.State != InternalNdaReminderState.Cancelled)
                 .ExecuteUpdateAsync(x => x.SetProperty(r => r.State, InternalNdaReminderState.Cancelled)
                     .SetProperty(r => r.CancelledAtUtc, record.VerifiedAtUtc), token);
-            context.Audits.Add(new DocumentAudit { Id = Guid.NewGuid(), DocumentId = record.DocumentId, VersionId = prior.VersionId,
-                ActorSubject = record.VerifiedBySubject, AtUtc = record.VerifiedAtUtc, Action = "NdaFutureRemindersCancelled", Reason = reason, Revision = nextRevision });
+            context.Audits.Add(new DocumentAudit
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = record.DocumentId,
+                VersionId = prior.VersionId,
+                ActorSubject = record.VerifiedBySubject,
+                AtUtc = record.VerifiedAtUtc,
+                Action = "NdaFutureRemindersCancelled",
+                Reason = reason,
+                Revision = nextRevision
+            });
         }
         await context.SaveChangesAsync(token);
         record.CoverageSealed = true;
@@ -97,8 +121,16 @@ public sealed class NdaRepository(CustomerDocumentDbContext context) : INdaRepos
                 .ExecuteUpdateAsync(x => x.SetProperty(r => r.State, InternalNdaReminderState.Missed), token);
             if (updated > 0)
             {
-                context.Audits.Add(new DocumentAudit { Id = Guid.NewGuid(), DocumentId = current.DocumentId, VersionId = current.VersionId,
-                    ActorSubject = "system:nda-reminder-scheduler", AtUtc = now, Action = "NdaReminderMissed", Revision = current.VerificationRevision });
+                context.Audits.Add(new DocumentAudit
+                {
+                    Id = Guid.NewGuid(),
+                    DocumentId = current.DocumentId,
+                    VersionId = current.VersionId,
+                    ActorSubject = "system:nda-reminder-scheduler",
+                    AtUtc = now,
+                    Action = "NdaReminderMissed",
+                    Revision = current.VerificationRevision
+                });
                 await context.SaveChangesAsync(token);
             }
         }
@@ -110,9 +142,17 @@ public sealed class NdaRepository(CustomerDocumentDbContext context) : INdaRepos
             """, token);
         if (count == 1)
         {
-            context.Audits.Add(new DocumentAudit { Id = Guid.NewGuid(), DocumentId = current.DocumentId, VersionId = current.VersionId,
-                ActorSubject = "system:nda-reminder-scheduler", AtUtc = now, Action = "NdaReminderQueued", Revision = current.VerificationRevision,
-                Reason = $"NdaId={current.Id:D};ReminderId={id:D};LeadDays={leadDays}" });
+            context.Audits.Add(new DocumentAudit
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = current.DocumentId,
+                VersionId = current.VersionId,
+                ActorSubject = "system:nda-reminder-scheduler",
+                AtUtc = now,
+                Action = "NdaReminderQueued",
+                Revision = current.VerificationRevision,
+                Reason = $"NdaId={current.Id:D};ReminderId={id:D};LeadDays={leadDays}"
+            });
             await context.SaveChangesAsync(token);
         }
         await transaction.CommitAsync(token);

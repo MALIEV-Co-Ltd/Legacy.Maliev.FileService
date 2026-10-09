@@ -6,6 +6,7 @@ using Legacy.Maliev.FileService.Data.CustomerDocuments;
 using Microsoft.Extensions.Options;
 using Moq;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 public sealed class ProtectedDocumentUploadCustodyTests
 {
     [Fact]

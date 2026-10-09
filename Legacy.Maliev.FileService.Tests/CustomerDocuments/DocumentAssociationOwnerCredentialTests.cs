@@ -1,6 +1,7 @@
 using Legacy.Maliev.FileService.Api.CustomerDocuments;
 using Maliev.Aspire.ServiceDefaults.LegacyAuth;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 public sealed class DocumentAssociationOwnerCredentialTests
 {
     [Fact]

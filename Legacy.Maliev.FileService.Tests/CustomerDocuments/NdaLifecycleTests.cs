@@ -28,9 +28,13 @@ public sealed class NdaLifecycleTests
     [InlineData(NdaSurvivalKind.Finite)]
     public void ExpiredAgreementNeverReleasesObligation(NdaSurvivalKind survival)
     {
-        var record = new NdaRecord { EffectiveAtUtc = DateTimeOffset.UtcNow.AddYears(-2),
-            ExpiresAtUtc = DateTimeOffset.UtcNow.AddYears(-1), SurvivalKind = survival,
-            SurvivalEndsAtUtc = DateTimeOffset.UtcNow.AddMonths(-1) };
+        var record = new NdaRecord
+        {
+            EffectiveAtUtc = DateTimeOffset.UtcNow.AddYears(-2),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddYears(-1),
+            SurvivalKind = survival,
+            SurvivalEndsAtUtc = DateTimeOffset.UtcNow.AddMonths(-1)
+        };
         Assert.Equal(AgreementCalendarStatus.Expired, NdaLifecycle.CalendarStatus(record, DateTimeOffset.UtcNow, false));
         Assert.NotEqual(ConfidentialityObligationStatus.Released, NdaLifecycle.ObligationStatus(record, DateTimeOffset.UtcNow));
     }

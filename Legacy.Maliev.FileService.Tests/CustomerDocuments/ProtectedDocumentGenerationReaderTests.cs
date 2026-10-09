@@ -3,6 +3,7 @@ using Legacy.Maliev.FileService.Application.CustomerDocuments;
 using Legacy.Maliev.FileService.Data.CustomerDocuments;
 using Microsoft.Extensions.Options;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 public sealed class ProtectedDocumentGenerationReaderTests
 {
     [Fact]

@@ -4,6 +4,7 @@ using Legacy.Maliev.FileService.Domain.CustomerDocuments;
 using Microsoft.Extensions.Options;
 using Moq;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 public sealed class ProtectedDocumentAuthorityTests
 {
     [Fact]

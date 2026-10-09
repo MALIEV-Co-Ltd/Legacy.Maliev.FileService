@@ -76,10 +76,18 @@ public sealed class NdaReminderFilterPostgreSqlHttpTests(CustomerDocumentPostgre
         await using var db = fixture.CreateContext();
         return await new NdaRepository(db).AppendVerificationAsync(new NdaRecord
         {
-            Id = Guid.NewGuid(), DocumentId = identity.Document, VersionId = identity.Version, CustomerId = 23,
-            PartyOne = "Synthetic A", PartyTwo = "Synthetic B", EffectiveAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
-            ExpiresAtUtc = DateTimeOffset.UtcNow.AddMonths(1), SurvivalKind = NdaSurvivalKind.Unknown,
-            ResponsibleEmployeeSubject = subject, VerifiedBySubject = "synthetic-verifier", VerifiedAtUtc = DateTimeOffset.UtcNow
+            Id = Guid.NewGuid(),
+            DocumentId = identity.Document,
+            VersionId = identity.Version,
+            CustomerId = 23,
+            PartyOne = "Synthetic A",
+            PartyTwo = "Synthetic B",
+            EffectiveAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddMonths(1),
+            SurvivalKind = NdaSurvivalKind.Unknown,
+            ResponsibleEmployeeSubject = subject,
+            VerifiedBySubject = "synthetic-verifier",
+            VerifiedAtUtc = DateTimeOffset.UtcNow
         }, [new(DocumentResourceKind.Order, 81)], 1, "Synthetic filter review", default);
     }
 

@@ -66,10 +66,24 @@ public sealed class NdaFutureQuotationCoveragePostgreSqlHttpTests(CustomerDocume
         await using var db = fixture.CreateContext();
         await db.Database.MigrateAsync();
         var document = new CustomerDocument { Id = Guid.NewGuid(), CustomerId = customerId, Kind = DocumentKind.Nda, Title = "Synthetic quotation NDA", Visibility = DocumentVisibility.Customer };
-        var version = new CustomerDocumentVersion { Id = Guid.NewGuid(), DocumentId = document.Id, CustomerId = customerId, Kind = document.Kind,
-            VersionNumber = 1, ContentSha256 = new string('a', 64), ActorSubject = "synthetic-uploader", CreatedAtUtc = DateTimeOffset.UtcNow,
-            StorageBucket = "synthetic-private", StorageGeneration = 1, ContentSize = 5, ContentType = "application/pdf", OriginalFileName = "synthetic.pdf",
-            ScanOperationId = Guid.NewGuid(), ScanSourceGeneration = 1 };
+        var version = new CustomerDocumentVersion
+        {
+            Id = Guid.NewGuid(),
+            DocumentId = document.Id,
+            CustomerId = customerId,
+            Kind = document.Kind,
+            VersionNumber = 1,
+            ContentSha256 = new string('a', 64),
+            ActorSubject = "synthetic-uploader",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            StorageBucket = "synthetic-private",
+            StorageGeneration = 1,
+            ContentSize = 5,
+            ContentType = "application/pdf",
+            OriginalFileName = "synthetic.pdf",
+            ScanOperationId = Guid.NewGuid(),
+            ScanSourceGeneration = 1
+        };
         version.StorageObjectName = $"customer-documents/{customerId}/{document.Id:N}/{version.Id:N}/original";
         db.Documents.Add(document);
         await db.SaveChangesAsync();

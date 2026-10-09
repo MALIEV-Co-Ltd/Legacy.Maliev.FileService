@@ -4,6 +4,7 @@ using Legacy.Maliev.FileService.Data.CustomerDocuments;
 using Legacy.Maliev.FileService.Domain.CustomerDocuments;
 using Microsoft.EntityFrameworkCore;
 namespace Legacy.Maliev.FileService.Tests.CustomerDocuments;
+
 [Collection(CustomerDocumentPostgreSqlCollection.Name)]
 public sealed class NdaCoveragePersistencePostgreSqlTests(CustomerDocumentPostgreSqlFixture fixture)
 {
