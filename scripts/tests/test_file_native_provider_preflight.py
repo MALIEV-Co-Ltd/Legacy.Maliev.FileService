@@ -138,8 +138,11 @@ class ProviderPreflightControls(unittest.TestCase):
         observe=next(i for i,s in enumerate(texts) if s.startswith('with owner.trusted_sdk_projection(') and 'observe_vstest_provider(' in s)
         success=next(i for i,s in enumerate(texts) if "'preflight.json'" in s)
         stop=next(i for i,s in enumerate(texts) if "args.mode == 'preflight-only'" in s and 'return' in s)
-        grants=next(i for i,s in enumerate(texts) if s.startswith('bundle = fetch_git_blob'))
-        self.assertLess(observe,success);self.assertLess(success,stop);self.assertLess(stop,grants)
+        self.assertLess(observe,success);self.assertLess(success,stop)
+        context=main.body[observe]
+        branch=next(n for n in context.body if isinstance(n,ast.If))
+        self.assertEqual("args.mode == 'qualification'",ast.unparse(branch.test))
+        self.assertIn('run_qualified_phases(',ast.unparse(branch))
         function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='observe_vstest_provider')
         self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr in
             {'Popen','run','execve','system'} for n in ast.walk(function)))
@@ -151,7 +154,7 @@ class IndependentArchiveControls(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d:
                 root=Path(d);archive=root/'official-sdk.tar.gz';raw=b'bounded synthetic archive bytes';archive.write_bytes(raw)
                 evidence=root/'evidence';evidence.mkdir();before=archive.stat()
-                owner=SimpleNamespace(QUALIFICATION_SDK_ARCHIVE_BYTES=len(raw)+(1 if variant=='size' else 0),SDK_ARCHIVE_SHA512='0'*128 if variant=='hash' else hashlib.sha512(raw).hexdigest(),projection_check_deadline=Mock(side_effect=RuntimeError('expired') if variant=='deadline' else None),projection_trust=Mock(return_value=before))
+                owner=SimpleNamespace(QUALIFICATION_SDK_ARCHIVE_BYTES=len(raw)+(1 if variant=='size' else 0),SDK_ARCHIVE_SHA512='0'*128 if variant=='hash' else hashlib.sha512(raw).hexdigest(),projection_check_deadline=Mock(side_effect=RuntimeError('expired') if variant=='deadline' else None),projection_trust=Mock(side_effect=lambda path:Path(path).stat()))
                 if variant=='identity':owner.projection_trust.side_effect=[before,SimpleNamespace(st_dev=before.st_dev,st_ino=before.st_ino+1,st_ctime_ns=before.st_ctime_ns,st_size=before.st_size,st_mode=before.st_mode,st_uid=before.st_uid)]
                 projection={'root':str(root),'deadline':123}
                 with patch.object(qualifier.subprocess,'run') as run,patch.object(qualifier.subprocess,'Popen') as popen:
@@ -165,5 +168,48 @@ class IndependentArchiveControls(unittest.TestCase):
                     run.assert_not_called();popen.assert_not_called()
                 archive.unlink();self.assertFalse(archive.exists())
 
+
+class QualifiedPhaseIntegrationControls(unittest.TestCase):
+    def exercise(self,failure=None,binding_failure=None,deadline_failure=None):
+        import os
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);candidate=root/'candidate';candidate.mkdir();evidence=root/'evidence';evidence.mkdir()
+            projection={'sdkRoot':str(root/'qualified-sdk'),'deadline':300};calls=[]
+            def phase(**kwargs):
+                self.assertIs(projection,kwargs['projection']);self.assertEqual(str(root/'qualified-sdk/dotnet'),sys.argv[2]);calls.append(sys.argv[1])
+                self.assertNotIn('GH_TOKEN',os.environ)
+                if failure:raise failure
+            owner=SimpleNamespace(bind_qualification_projected_provider=Mock(side_effect=binding_failure),qualified_phase_deadline=Mock(side_effect=deadline_failure),main=Mock(side_effect=phase),time=SimpleNamespace(monotonic=lambda:100))
+            grants={p:(p.encode(),'a'*64) for p in qualifier.PHASES};policy={k:'b'*64 for k in ('candidateManifestSha256','supervisorManifestSha256','dependencyManifestSha256')}
+            validator=Mock(return_value=SimpleNamespace(remaining_seconds=lambda now:600));args=SimpleNamespace(grant_bundle_blob='fixture',grant_bundle_sha256='a'*64)
+            before=Path.cwd();argv=sys.argv
+            with patch.object(qualifier,'ROOT',str(root)),patch.object(qualifier,'fetch_git_blob',return_value=b'fixture'),patch.object(qualifier,'validate_grant_bundle',return_value=grants),patch.object(qualifier,'retain_evidence') as retain,patch.dict(os.environ,{'GH_TOKEN':'synthetic'},clear=True),patch.object(qualifier.shutil,'which') as ambient:
+                if failure or binding_failure or deadline_failure:
+                    with self.assertRaises(RuntimeError):qualifier.run_qualified_phases(owner,projection,policy,candidate,evidence,args,validator)
+                else:qualifier.run_qualified_phases(owner,projection,policy,candidate,evidence,args,validator)
+                ambient.assert_not_called()
+                self.assertEqual(before,Path.cwd());self.assertIs(argv,sys.argv)
+                if not binding_failure:retain.assert_called_once_with(candidate,evidence)
+            return calls,owner,validator
+    def test_same_qualified_provider_all_five_phases_in_order(self):
+        calls,owner,validator=self.exercise();self.assertEqual(list(qualifier.PHASES),calls);self.assertEqual(5,validator.call_count);self.assertEqual(5,owner.qualified_phase_deadline.call_count)
+    def test_phase_failure_stops_later_phases_and_retains_evidence(self):
+        calls,owner,_=self.exercise(failure=RuntimeError('phase'));self.assertEqual(['build'],calls);self.assertEqual(1,owner.main.call_count)
+    def test_changed_provider_refuses_before_any_sdk_phase(self):
+        calls,owner,_=self.exercise(binding_failure=RuntimeError('changed'));self.assertEqual([],calls);owner.main.assert_not_called()
+    def test_expired_custody_refuses_before_any_sdk_phase(self):
+        calls,owner,_=self.exercise(deadline_failure=RuntimeError('expired'));self.assertEqual([],calls);owner.main.assert_not_called()
+    def test_native_branch_is_inside_projection_context(self):
+        tree=ast.parse(Path(qualifier.__file__).read_bytes());main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+        ctx=next(n for n in main.body if isinstance(n,ast.With) and 'trusted_sdk_projection' in ast.unparse(n.items[0]))
+        self.assertIn('run_qualified_phases(',ast.unparse(ctx))
+        self.assertNotIn('run_qualified_phases(',''.join(ast.unparse(n) for n in main.body if n is not ctx))
+    def test_activation_gate_still_refuses_before_sources_or_projection(self):
+        tree=ast.parse(Path(qualifier.__file__).read_bytes());main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main');text=ast.unparse(main)
+        self.assertLess(text.index('Qualification disabled until Root-reviewed provider hashes are sealed'),text.index('policy = load_policy'))
+    def test_projection_and_native_caps_unchanged(self):
+        policy=json.loads((Path(qualifier.__file__).parent/'file-native-policy.json').read_bytes())
+        self.assertEqual(300,policy['trustedSDKProjection']['lifetimeSeconds']);self.assertEqual(600,policy['sdkSeconds']);self.assertEqual(900,policy['rootSecondsMaximum'])
 
 if __name__=='__main__':unittest.main()
