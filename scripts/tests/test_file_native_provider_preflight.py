@@ -68,14 +68,14 @@ class ProviderPreflightControls(unittest.TestCase):
         changed=copy.deepcopy(self.provider);changed['files'][0]['sha256']='f'*64
         self.refuse([self.provider,changed])
 
-    def test_actual_qualification_rejects_unsealed_provider_before_policy_or_grant_fetch(self):
+    def test_actual_qualification_rejects_malformed_root_identifiers_before_policy_or_grant_fetch(self):
         arguments=['qualifier','--policy','unused','--evidence','unused','--mode','qualification',
             '--grant-bundle-blob','original-placeholder','--grant-bundle-sha256','a'*64]
         with patch.object(qualifier.sys,'platform','linux'),patch.object(qualifier.os,'geteuid',return_value=0,create=True),\
              patch.object(qualifier.sys,'argv',arguments),patch.object(qualifier,'load_policy') as policy,\
              patch.object(qualifier,'fetch_git_blob') as grants,patch.object(qualifier.shutil,'which') as sdk,\
              patch.object(qualifier.subprocess,'Popen') as popen:
-            with self.assertRaisesRegex(ValueError,'provider hashes are sealed'):qualifier.main()
+            with self.assertRaisesRegex(ValueError,'Original Root bundle identifiers invalid'):qualifier.main()
             policy.assert_not_called();grants.assert_not_called();sdk.assert_not_called();popen.assert_not_called()
 
     def test_closed_trust_witness_retained_without_masking_primary(self):
@@ -149,12 +149,17 @@ class ProviderPreflightControls(unittest.TestCase):
 
 class IndependentArchiveControls(unittest.TestCase):
     def test_second_physical_archive_read_exact_bytes_hash_identity_and_cleanup(self):
-        import hashlib
+        import hashlib,os
+        def fixture_trust(path):
+            # Windows3.14 pathctime is birthtime; fdctime is mtime. This is fixture-only.
+            if os.name=='nt':
+                with Path(path).open('rb') as held:return os.fstat(held.fileno())
+            return Path(path).stat()
         for variant in ['ok','size','hash','identity','deadline']:
             with tempfile.TemporaryDirectory() as d:
                 root=Path(d);archive=root/'official-sdk.tar.gz';raw=b'bounded synthetic archive bytes';archive.write_bytes(raw)
-                evidence=root/'evidence';evidence.mkdir();before=archive.stat()
-                owner=SimpleNamespace(QUALIFICATION_SDK_ARCHIVE_BYTES=len(raw)+(1 if variant=='size' else 0),SDK_ARCHIVE_SHA512='0'*128 if variant=='hash' else hashlib.sha512(raw).hexdigest(),projection_check_deadline=Mock(side_effect=RuntimeError('expired') if variant=='deadline' else None),projection_trust=Mock(side_effect=lambda path:Path(path).stat()))
+                evidence=root/'evidence';evidence.mkdir();before=fixture_trust(archive)
+                owner=SimpleNamespace(QUALIFICATION_SDK_ARCHIVE_BYTES=len(raw)+(1 if variant=='size' else 0),SDK_ARCHIVE_SHA512='0'*128 if variant=='hash' else hashlib.sha512(raw).hexdigest(),projection_check_deadline=Mock(side_effect=RuntimeError('expired') if variant=='deadline' else None),projection_trust=Mock(side_effect=fixture_trust))
                 if variant=='identity':owner.projection_trust.side_effect=[before,SimpleNamespace(st_dev=before.st_dev,st_ino=before.st_ino+1,st_ctime_ns=before.st_ctime_ns,st_size=before.st_size,st_mode=before.st_mode,st_uid=before.st_uid)]
                 projection={'root':str(root),'deadline':123}
                 with patch.object(qualifier.subprocess,'run') as run,patch.object(qualifier.subprocess,'Popen') as popen:
@@ -205,11 +210,21 @@ class QualifiedPhaseIntegrationControls(unittest.TestCase):
         ctx=next(n for n in main.body if isinstance(n,ast.With) and 'trusted_sdk_projection' in ast.unparse(n.items[0]))
         self.assertIn('run_qualified_phases(',ast.unparse(ctx))
         self.assertNotIn('run_qualified_phases(',''.join(ast.unparse(n) for n in main.body if n is not ctx))
-    def test_activation_gate_still_refuses_before_sources_or_projection(self):
+    def test_native_authority_is_checked_before_compile_controls_or_projection(self):
         tree=ast.parse(Path(qualifier.__file__).read_bytes());main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main');text=ast.unparse(main)
-        self.assertLess(text.index('Qualification disabled until Root-reviewed provider hashes are sealed'),text.index('policy = load_policy'))
+        self.assertLess(text.index('validate_grant_bundle(original_bundle'),text.index('with tempfile.TemporaryDirectory'))
+        self.assertLess(text.index('validate_grant_bundle(original_bundle'),text.index('trusted_sdk_projection'))
+        self.assertIn("args.mode == 'qualification'",text)
+        self.assertIn('Original Root phase bundle required',text)
     def test_projection_and_native_caps_unchanged(self):
         policy=json.loads((Path(qualifier.__file__).parent/'file-native-policy.json').read_bytes())
         self.assertEqual(300,policy['trustedSDKProjection']['lifetimeSeconds']);self.assertEqual(600,policy['sdkSeconds']);self.assertEqual(900,policy['rootSecondsMaximum'])
+
+    def test_missing_root_bundle_refuses_before_source_or_resource_allocation(self):
+        with tempfile.TemporaryDirectory() as d:
+            argv=['qualifier','--policy',str(Path(d)/'unused.json'),'--evidence',d,'--mode','qualification']
+            with patch.object(sys,'argv',argv),patch.object(sys,'platform','linux'),patch.object(qualifier.os,'geteuid',return_value=0,create=True),patch.object(qualifier,'load_policy') as policy,patch.object(qualifier.subprocess,'Popen') as popen:
+                with self.assertRaisesRegex(ValueError,'Original Root phase bundle required'):qualifier.main()
+                policy.assert_not_called();popen.assert_not_called()
 
 if __name__=='__main__':unittest.main()
