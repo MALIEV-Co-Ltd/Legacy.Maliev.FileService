@@ -10,8 +10,8 @@ from sealed_source_capsule import digest, fetch_git_blob, parse_json, reject_lin
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
 BASE = '0d7a329f2360a6143314af8cce8c13ec1441232a'
 SOURCE = 'Legacy.Maliev.FileService.Tests/Data/RedisBootstrapDiscriminatorTests.cs'
-SOURCE_BYTES = 16220
-SOURCE_SHA256 = '850f2ea9e4d3a7dc6ddb85e1285f7c069bd163f8c9c44b6288d52fd12b839123'
+SOURCE_BYTES = 16784
+SOURCE_SHA256 = '98656c7e80e2869fbec33186bd0705d04623636fc0d9b9e399f4c103b8d4b29e'
 
 
 def decode(raw):
