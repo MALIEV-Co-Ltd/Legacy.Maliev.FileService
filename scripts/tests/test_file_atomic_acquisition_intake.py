@@ -215,7 +215,7 @@ def trx_fixture(kind):
     entries = ET.SubElement(root, q('TestEntries'))
     cases = [(gate.RED, None)] if kind == 'red' else [(method, operation if number == 4 else None)
             for method, number in gate.METHODS.items() for operation in (['renew', 'release', 'unknown', 'complete'] if number == 4 else [None])]
-    count = {'red': 1, 'focused': 16, 'full': 1080}[kind]
+    count = {'red': 1, 'focused': 16, 'full': 1562}[kind]
     cases.extend((f'Other{index}', None) for index in range(count - len(cases)))
     for index, (method, operation) in enumerate(cases):
         target = method in gate.METHODS

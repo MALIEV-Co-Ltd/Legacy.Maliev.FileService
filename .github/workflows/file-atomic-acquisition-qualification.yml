@@ -54,12 +54,12 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ba73e31d91780f6e5ecb8900f885beda38b40a63
+          ref: 37a08862831a78cd36c7459ab24dd0594d07cb47
           path: candidate/red
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ba73e31d91780f6e5ecb8900f885beda38b40a63
+          ref: 37a08862831a78cd36c7459ab24dd0594d07cb47
           path: candidate/green
           persist-credentials: false
       - name: Materialize exact reviewed source before dependency checkout

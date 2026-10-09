@@ -9,7 +9,7 @@ import tempfile
 from sealed_source_capsule import digest, fetch_git_blob, parse_json, reject_links
 
 REPOSITORY = 'MALIEV-Co-Ltd/Legacy.Maliev.FileService'
-BASE = 'ba73e31d91780f6e5ecb8900f885beda38b40a63'
+BASE = '37a08862831a78cd36c7459ab24dd0594d07cb47'
 SOURCES = {
     'Legacy.Maliev.FileService.Data/RedisUploadIdempotencyStore.cs':
         (8174, '78e58385d62a6c3cc5b37a177ba91b8545883d320fc9b43940b508f1060d35c7',
@@ -145,7 +145,7 @@ def main():
     with target.open('x', encoding='utf-8') as receipt:
         json.dump({'base': BASE, 'blob': args.blob, 'capsuleSha256': digest(raw), 'phase': args.phase,
                    'paths': selected, 'expectedFocused': 1 if args.phase == 'red' else 16,
-                   'expectedFull': 1080, 'runtimeLockCycleProven': False, 'nativeAcceptance': False}, receipt, indent=2)
+                   'expectedFull': 1562, 'runtimeLockCycleProven': False, 'nativeAcceptance': False}, receipt, indent=2)
 
 
 if __name__ == '__main__':
