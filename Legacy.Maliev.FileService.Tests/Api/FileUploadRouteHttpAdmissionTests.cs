@@ -261,6 +261,67 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
         factory.Service.VerifyNoOtherCalls();
     }
 
+    [Theory]
+    [InlineData("sourceBucket", false)]
+    [InlineData("sourceBucket", true)]
+    [InlineData("sourceObjectName", false)]
+    [InlineData("sourceObjectName", true)]
+    [InlineData("destinationBucket", false)]
+    [InlineData("destinationBucket", true)]
+    [InlineData("destinationObjectName", false)]
+    [InlineData("destinationObjectName", true)]
+    public async Task EnabledMove_MissingCoordinatePreservesStoredAuthority(string field, bool explicitEmpty)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, useActualApplication: true, enableWrites: true);
+        using var client = AuthorizedClient(factory, "PUT");
+        using var scope = factory.Services.CreateScope();
+        Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
+        scope.ServiceProvider.GetRequiredService<LegacyFileRuntimeGate>().EnsureWritesEnabled();
+        var context = scope.ServiceProvider.GetRequiredService<FileDbContext>();
+        await context.Database.MigrateAsync();
+        var objectName = "folder/source-" + Guid.NewGuid().ToString("N") + " +ไทย.txt";
+        context.Uploads.Add(new()
+        {
+            Bucket = "source-bucket",
+            Name = objectName,
+            Size = 7,
+            ContentType = "text/plain",
+        });
+        context.StorageMoveJournals.Add(new()
+        {
+            OperationId = Guid.NewGuid(),
+            ScanClean = true,
+            SourceBucket = "source-bucket",
+            SourceObjectName = "_quarantine/" + objectName,
+            SourceGeneration = 17,
+            DestinationBucket = "source-bucket",
+            DestinationObjectName = objectName,
+            DestinationGeneration = 31,
+            State = "MetadataCommitted",
+            CreatedAt = DateTimeOffset.UtcNow,
+            ModifiedAt = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+        var uploadsBefore = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
+        var journalsBefore = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
+        var query = LegacyQuery("PUT", field).Replace(Uri.EscapeDataString("folder/source +ไทย.txt"),
+            Uri.EscapeDataString(objectName), StringComparison.Ordinal);
+        if (explicitEmpty) query += "&" + field + "=";
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var request = new HttpRequestMessage(HttpMethod.Put, query);
+        using var response = await client.SendAsync(request, deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Bucket and object names are required", await response.Content.ReadFromJsonAsync<string>(deadline.Token));
+        factory.Service.VerifyNoOtherCalls();
+        factory.Storage.VerifyNoOtherCalls();
+        Assert.Null(factory.Services.GetService<StorageClient>());
+        var uploadsAfter = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
+        var journalsAfter = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
+        Assert.Equal(JsonSerializer.Serialize(uploadsBefore), JsonSerializer.Serialize(uploadsAfter));
+        Assert.Equal(JsonSerializer.Serialize(journalsBefore), JsonSerializer.Serialize(journalsAfter));
+    }
+
     private static string RepeatedQuery(string method, string field, string variant)
     {
         var original = field.EndsWith("Bucket", StringComparison.OrdinalIgnoreCase)
@@ -293,12 +354,13 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
             .Select(field => field.Key + "=" + Uri.EscapeDataString(field.Value)));
     }
 
-    private sealed class AdmissionFactory(string connectionString, bool useActualApplication = false) : WebApplicationFactory<Program>
+    private sealed class AdmissionFactory(string connectionString, bool useActualApplication = false, bool enableWrites = false) : WebApplicationFactory<Program>
     {
         private const string Issuer = "https://file-route-fixture.invalid";
         private const string Audience = "file-route-fixture";
         private readonly RSA signingKey = RSA.Create(2048);
         public Mock<IFileService> Service { get; } = new(MockBehavior.Strict);
+        public Mock<IObjectStorage> Storage { get; } = new(MockBehavior.Strict);
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -310,14 +372,27 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
                 ["Jwt:PublicKey"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(signingKey.ExportSubjectPublicKeyInfoPem())),
                 ["Jwt:Issuer"] = Issuer,
                 ["Jwt:Audience"] = Audience,
-                ["FileStorage:Enabled"] = "false",
-                ["FileStorage:WritesEnabled"] = "false",
+                ["FileStorage:Enabled"] = enableWrites ? "true" : "false",
+                ["FileStorage:WritesEnabled"] = enableWrites ? "true" : "false",
                 ["InstantQuoteFiles:Enabled"] = "false",
                 ["InstantQuoteFiles:WritesEnabled"] = "false",
                 ["InstantQuoteFiles:CleanupEnabled"] = "false",
             };
+            if (enableWrites)
+            {
+                settings["FileStorage:AllowedBuckets:0"] = "source-bucket";
+                settings["FileStorage:AllowedBuckets:1"] = "destination-bucket";
+            }
             foreach (var setting in settings) builder.UseSetting(setting.Key, setting.Value);
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(settings));
+            if (enableWrites)
+                builder.ConfigureTestServices(services =>
+                {
+                    services.RemoveAll<StorageClient>();
+                    services.RemoveAll<UrlSigner>();
+                    services.RemoveAll<IObjectStorage>();
+                    services.AddSingleton(Storage.Object);
+                });
             if (!useActualApplication)
                 builder.ConfigureTestServices(services =>
                 {
