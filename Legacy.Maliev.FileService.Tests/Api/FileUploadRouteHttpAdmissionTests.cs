@@ -9,6 +9,7 @@ using System.Text.Json;
 using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Application.Interfaces;
+using Legacy.Maliev.FileService.Application.Models;
 using Legacy.Maliev.FileService.Application.Services;
 using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Tests.OpenApi;
@@ -322,6 +323,199 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
         Assert.Equal(JsonSerializer.Serialize(journalsBefore), JsonSerializer.Serialize(journalsAfter));
     }
 
+    [Theory]
+    [InlineData("bucket", "same", false)]
+    [InlineData("bucket", "same", true)]
+    [InlineData("Bucket", "different", false)]
+    [InlineData("Bucket", "different", true)]
+    [InlineData("BUCKET", "empty", false)]
+    [InlineData("BUCKET", "empty", true)]
+    [InlineData("path", "same", false)]
+    [InlineData("path", "same", true)]
+    [InlineData("Path", "different", false)]
+    [InlineData("Path", "different", true)]
+    [InlineData("PATH", "empty", false)]
+    [InlineData("PATH", "empty", true)]
+    public async Task RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(string field, string variant, bool replayKey)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, useActualApplication: true, enableWrites: true);
+        using var client = AuthorizedClient(factory, "POST");
+        using var scope = factory.Services.CreateScope();
+        Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
+        scope.ServiceProvider.GetRequiredService<LegacyFileRuntimeGate>().EnsureWritesEnabled();
+        Assert.Same(factory.Storage.Object, scope.ServiceProvider.GetRequiredService<IObjectStorage>());
+        Assert.Same(factory.Checkpoints.Object, scope.ServiceProvider.GetRequiredService<IUploadIdempotencyStore>());
+        var context = scope.ServiceProvider.GetRequiredService<FileDbContext>();
+        await context.Database.MigrateAsync();
+        var objectName = "orders/source-" + Guid.NewGuid().ToString("N") + " +ไทย.txt";
+        context.Uploads.Add(new()
+        {
+            Bucket = "source-bucket",
+            Name = objectName,
+            Size = 7,
+            ContentType = "text/plain",
+        });
+        context.StorageMoveJournals.Add(new()
+        {
+            OperationId = Guid.NewGuid(),
+            ScanClean = true,
+            SourceBucket = "source-bucket",
+            SourceObjectName = "_quarantine/" + objectName,
+            SourceGeneration = 17,
+            DestinationBucket = "source-bucket",
+            DestinationObjectName = objectName,
+            DestinationGeneration = 31,
+            State = "MetadataCommitted",
+            CreatedAt = DateTimeOffset.UtcNow,
+            ModifiedAt = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+        var before = await UploadAuthoritySnapshotAsync(context);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var body = UploadMultipart();
+        using var request = new HttpRequestMessage(HttpMethod.Post, RepeatedUploadQuery(field, variant)) { Content = body };
+        if (replayKey) request.Headers.Add("Idempotency-Key", "ambiguous-" + Guid.NewGuid().ToString("N"));
+        using var response = await client.SendAsync(request, deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertLegacyUploadErrorAsync(response, field.Equals("bucket", StringComparison.OrdinalIgnoreCase)
+            ? "Bucket must be supplied once" : "Path must be supplied at most once", deadline.Token);
+        factory.Service.VerifyNoOtherCalls();
+        factory.Storage.VerifyNoOtherCalls();
+        factory.Checkpoints.VerifyNoOtherCalls();
+        Assert.Null(factory.Services.GetService<StorageClient>());
+        Assert.Equal(before, await UploadAuthoritySnapshotAsync(context));
+    }
+
+    [Theory]
+    [InlineData("bucket", "anonymous", true, HttpStatusCode.Unauthorized)]
+    [InlineData("path", "anonymous", true, HttpStatusCode.Unauthorized)]
+    [InlineData("bucket", "wrong-signature", true, HttpStatusCode.Unauthorized)]
+    [InlineData("path", "wrong-signature", true, HttpStatusCode.Unauthorized)]
+    [InlineData("bucket", "without-required-permission", true, HttpStatusCode.Forbidden)]
+    [InlineData("path", "without-required-permission", true, HttpStatusCode.Forbidden)]
+    [InlineData("bucket", "valid", false, HttpStatusCode.ServiceUnavailable)]
+    [InlineData("path", "valid", false, HttpStatusCode.ServiceUnavailable)]
+    public async Task RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(string field, string identity, bool enabled, HttpStatusCode expected)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, useActualApplication: true, enableWrites: enabled, observeReplay: true);
+        using var client = factory.CreateClient();
+        if (identity != "anonymous") client.DefaultRequestHeaders.Authorization = new("Bearer", factory.Token(identity, "POST"));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var request = new HttpRequestMessage(HttpMethod.Post, RepeatedUploadQuery(field, "different"));
+        request.Headers.Add("Idempotency-Key", "unadmitted-replay");
+        request.Content = new ByteArrayContent([1]);
+        request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=boundary");
+        using var response = await client.SendAsync(request, deadline.Token);
+
+        Assert.Equal(expected, response.StatusCode);
+        if (!enabled)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<JsonElement>(deadline.Token);
+            Assert.Equal("Legacy file service unavailable", problem.GetProperty("title").GetString());
+            Assert.Equal("File storage is temporarily unavailable.", problem.GetProperty("detail").GetString());
+        }
+        factory.Service.VerifyNoOtherCalls();
+        factory.Storage.VerifyNoOtherCalls();
+        factory.Checkpoints.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("orders +ไทย", "orders +ไทย")]
+    public async Task SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape(string? path, string? expectedPath)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, enableWrites: true);
+        var result = new UploadResultResponse([new("source-bucket", "orders/file.txt", new Uri("https://storage.example.invalid/file"))]);
+        factory.Service.Setup(service => service.UploadAsync("source-bucket", expectedPath,
+            It.IsAny<IReadOnlyList<IUploadFile>>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Returns((string bucket, string? folder, IReadOnlyList<IUploadFile> files, Guid operation, CancellationToken token) =>
+            {
+                var file = Assert.Single(files);
+                Assert.Equal("source +ไทย.txt", file.FileName);
+                Assert.Equal("text/plain", file.ContentType);
+                using var stream = file.OpenReadStream();
+                using var bytes = new MemoryStream();
+                stream.CopyTo(bytes);
+                Assert.Equal(new byte[] { 0, 255, 1 }, bytes.ToArray());
+                return Task.FromResult(result);
+            });
+        using var client = AuthorizedClient(factory, "POST");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var body = UploadMultipart();
+        var query = "/Uploads?bucket=source-bucket" + (path is null ? "" : "&path=" + Uri.EscapeDataString(path));
+        using var request = new HttpRequestMessage(HttpMethod.Post, query) { Content = body };
+        using var response = await client.SendAsync(request, deadline.Token);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal("Google Cloud Storage", response.Headers.Location?.OriginalString);
+        var wire = await response.Content.ReadFromJsonAsync<JsonElement>(deadline.Token);
+        var item = Assert.Single(wire.GetProperty("Object").EnumerateArray());
+        Assert.Equal("source-bucket", item.GetProperty("Bucket").GetString());
+        Assert.Equal("orders/file.txt", item.GetProperty("ObjectName").GetString());
+        Assert.Equal("https://storage.example.invalid/file", item.GetProperty("Uri").GetString());
+        Assert.False(wire.TryGetProperty("object", out _));
+        factory.Service.Verify(service => service.UploadAsync("source-bucket", expectedPath,
+            It.IsAny<IReadOnlyList<IUploadFile>>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Once);
+        factory.Service.VerifyNoOtherCalls();
+        factory.Storage.VerifyNoOtherCalls();
+        factory.Checkpoints.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("bucket")]
+    [InlineData("path")]
+    public async Task RepeatedUploadCoordinate_PreservesExistingFileValidationResponse(string field)
+    {
+        await using var factory = new AdmissionFactory(database.ConnectionString, useActualApplication: true, enableWrites: true);
+        using var client = AuthorizedClient(factory, "POST");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var body = new MultipartFormDataContent();
+        body.Add(new StringContent("not a file"), "other");
+        using var request = new HttpRequestMessage(HttpMethod.Post, RepeatedUploadQuery(field, "different")) { Content = body };
+        using var response = await client.SendAsync(request, deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertLegacyUploadErrorAsync(response, "Files must not be empty", deadline.Token);
+        factory.Storage.VerifyNoOtherCalls();
+        factory.Checkpoints.VerifyNoOtherCalls();
+    }
+
+    private static MultipartFormDataContent UploadMultipart()
+    {
+        var body = new MultipartFormDataContent();
+        var file = new ByteArrayContent([0, 255, 1]);
+        file.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+        body.Add(file, "files", "source +ไทย.txt");
+        return body;
+    }
+
+    private static string RepeatedUploadQuery(string field, string variant)
+    {
+        const string path = "orders +ไทย";
+        var original = field.Equals("bucket", StringComparison.OrdinalIgnoreCase) ? "source-bucket" : path;
+        var repeated = variant == "same" ? original : variant == "empty" ? "" : "different-coordinate";
+        return "/Uploads?bucket=source-bucket&path=" + Uri.EscapeDataString(path) + "&" + field + "=" + Uri.EscapeDataString(repeated);
+    }
+
+    private static async Task AssertLegacyUploadErrorAsync(HttpResponseMessage response, string message, CancellationToken token)
+    {
+        var wire = await response.Content.ReadFromJsonAsync<JsonElement>(token);
+        Assert.Equal(JsonValueKind.Array, wire.ValueKind);
+        var error = Assert.Single(wire.EnumerateArray().SelectMany(group => group.EnumerateArray()));
+        Assert.Equal(message, error.GetProperty("ErrorMessage").GetString());
+        Assert.False(error.TryGetProperty("errorMessage", out _));
+        Assert.False(error.TryGetProperty("Exception", out _));
+    }
+
+    private static async Task<string> UploadAuthoritySnapshotAsync(FileDbContext context) => JsonSerializer.Serialize(new
+    {
+        Uploads = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync(),
+        Journals = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync(),
+        Intents = await context.QuarantineUploadIntents.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync(),
+    });
+
     private static string RepeatedQuery(string method, string field, string variant)
     {
         var original = field.EndsWith("Bucket", StringComparison.OrdinalIgnoreCase)
@@ -354,13 +548,14 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
             .Select(field => field.Key + "=" + Uri.EscapeDataString(field.Value)));
     }
 
-    private sealed class AdmissionFactory(string connectionString, bool useActualApplication = false, bool enableWrites = false) : WebApplicationFactory<Program>
+    private sealed class AdmissionFactory(string connectionString, bool useActualApplication = false, bool enableWrites = false, bool observeReplay = false) : WebApplicationFactory<Program>
     {
         private const string Issuer = "https://file-route-fixture.invalid";
         private const string Audience = "file-route-fixture";
         private readonly RSA signingKey = RSA.Create(2048);
         public Mock<IFileService> Service { get; } = new(MockBehavior.Strict);
         public Mock<IObjectStorage> Storage { get; } = new(MockBehavior.Strict);
+        public Mock<IUploadIdempotencyStore> Checkpoints { get; } = new(MockBehavior.Strict);
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -392,6 +587,12 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
                     services.RemoveAll<UrlSigner>();
                     services.RemoveAll<IObjectStorage>();
                     services.AddSingleton(Storage.Object);
+                });
+            if (enableWrites || observeReplay)
+                builder.ConfigureTestServices(services =>
+                {
+                    services.RemoveAll<IUploadIdempotencyStore>();
+                    services.AddSingleton(Checkpoints.Object);
                 });
             if (!useActualApplication)
                 builder.ConfigureTestServices(services =>
