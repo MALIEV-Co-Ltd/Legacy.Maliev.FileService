@@ -27,7 +27,9 @@ public sealed class UploadsController(
     [RequirePermission(FilePermissions.Delete)]
     public async Task<ActionResult> DeleteUploadAsync([FromQuery] string? bucket, [FromQuery] string? objectName, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(bucket) || string.IsNullOrEmpty(objectName))
+        if (string.IsNullOrEmpty(bucket) || string.IsNullOrEmpty(objectName)
+            || HttpContext?.Request.Query["bucket"].Count > 1
+            || HttpContext?.Request.Query["objectName"].Count > 1)
         {
             return BadRequest("Bucket and object name is required");
         }
@@ -64,7 +66,11 @@ public sealed class UploadsController(
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(sourceBucket) || string.IsNullOrEmpty(sourceObjectName) ||
-            string.IsNullOrEmpty(destinationBucket) || string.IsNullOrEmpty(destinationObjectName))
+            string.IsNullOrEmpty(destinationBucket) || string.IsNullOrEmpty(destinationObjectName)
+            || HttpContext?.Request.Query["sourceBucket"].Count > 1
+            || HttpContext?.Request.Query["sourceObjectName"].Count > 1
+            || HttpContext?.Request.Query["destinationBucket"].Count > 1
+            || HttpContext?.Request.Query["destinationObjectName"].Count > 1)
         {
             return BadRequest("Bucket and object names are required");
         }
