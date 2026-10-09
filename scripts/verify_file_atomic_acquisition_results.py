@@ -70,7 +70,7 @@ def resource_evidence(raw, method):
 
 def inspect_trx(raw, kind):
     require(kind in {'red', 'focused', 'full'} and len(raw) <= 16 * 1024 * 1024, 'bounded fixed result kind required')
-    count = {'red': 1, 'focused': 16, 'full': 1080}[kind]
+    count = {'red': 1, 'focused': 16, 'full': 1562}[kind]
     root = ET.fromstring(raw)
     results = root.findall('./t:Results/t:UnitTestResult', NS)
     definitions = root.findall('./t:TestDefinitions/t:UnitTest', NS)
