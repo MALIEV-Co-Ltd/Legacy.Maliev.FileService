@@ -79,14 +79,15 @@ class TransportTests(unittest.TestCase):
                     intake.cleanup_current_materialization(red,self.files['input/current-source-policy.json'],hashlib.sha256(receipt).hexdigest())
                 self.assertFalse(red.exists());self.assertFalse(green.exists())
                 # Dispose only exact test-owned transport bytes, after recovery.
-                expected=dict(self.files)
-                expected['supervisor/supervisor-manifest.json']=self.files['input/supervisor-manifest.json']
-                expected['input/baseline-artifact.zip']=self.baseline
-                for name,raw in expected.items():
-                    path=root/name
-                    self.assertEqual(path.read_bytes(),raw);path.unlink()
-                for directory in sorted(root.rglob('*'),key=lambda p:len(p.parts),reverse=True):directory.rmdir()
-                root.rmdir()
+                if root.exists():
+                    expected=dict(self.files)
+                    expected['supervisor/supervisor-manifest.json']=self.files['input/supervisor-manifest.json']
+                    expected['input/baseline-artifact.zip']=self.baseline
+                    for name,raw in expected.items():
+                        path=root/name
+                        self.assertEqual(path.read_bytes(),raw);path.unlink()
+                    for directory in sorted(root.rglob('*'),key=lambda p:len(p.parts),reverse=True):directory.rmdir()
+                    root.rmdir()
     def test_source_cannot_consume_grants(self):
         with tempfile.TemporaryDirectory() as owned:
             with self.assertRaisesRegex(ValueError,'cannot consume grants'):

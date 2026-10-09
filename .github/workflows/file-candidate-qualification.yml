@@ -32,6 +32,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Check out exact CURRENT source-control base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ce183871469381eca13b359d997ad68042c4aa46
+          path: native-base
+          persist-credentials: false
       - name: Build Python source into temporary owned output
         run: |
           python3 -B - <<'PY'
@@ -41,6 +47,8 @@ jobs:
                   py_compile.compile(str(source), cfile=str(pathlib.Path(owned)/(source.name+'.pyc')), doraise=True)
           PY
       - name: Run transport and lifecycle controller suite
+        env:
+          FILE_CURRENT_TEST_BASE: ${{ github.workspace }}/native-base
         run: python3 -B -m unittest discover -s scripts/tests -p 'test_file_*.py'
 
   windows-intake-smoke:
