@@ -322,4 +322,154 @@ def main():
     print('Five original Root-bound phases passed with exact resource release; no deployment occurred')
 
 
-if __name__=='__main__':main()
+
+CURRENT_SUPERVISOR_SHA='e413a49f152c05fd218119b5ee05d1ec1f724414bb0da0ce0bf2d4d07c12e2ad'
+CURRENT_PROFILE_SHA='d4a168f857524208290d13c8c0ca92e140b820392226c49c5afbfb4295524831'
+
+
+def current_profile_type(supervisor):
+    # Load the actual closed V2 supervisor profile, never an ambient preimage.
+    root=current_supervisor_manifest(Path(supervisor)/'supervisor-manifest.json',CURRENT_SUPERVISOR_SHA)
+    path=root/'file_current_native_profile.py'
+    from materialize_file_native import _current_read
+    raw=_current_read(path,64*1024)
+    if digest(raw)!=CURRENT_PROFILE_SHA:
+        raise ValueError('Current V2 runtime profile seal required')
+    spec=importlib.util.spec_from_file_location('file_current_native_profile',path)
+    module=importlib.util.module_from_spec(spec)
+    sys.modules[spec.name]=module
+    exec(compile(raw,str(path),'exec'),module.__dict__)
+    return module.CurrentFileProfile
+
+
+def current_source_association(red,green,raw_policy,red_receipt_sha,green_receipt_sha,supervisor):
+    CurrentFileProfile=current_profile_type(supervisor)
+    profile=CurrentFileProfile(red,green,raw_policy,red_receipt_sha,green_receipt_sha,supervisor)
+    return {'schemaVersion':1,'state':'CurrentFileRouteSourceAssociated',
+        'acceptedBase':profile.policy['acceptedBase'],'sourcePolicySha256':digest(raw_policy),
+        'redReceiptSha256':red_receipt_sha,'greenReceiptSha256':green_receipt_sha,
+        'supervisorManifestSha256':CURRENT_SUPERVISOR_SHA,'runtimeProfileSha256':CURRENT_PROFILE_SHA,
+        'fixtureOverlayFiles':11,'businessPostimages':4,'sourceFiles':319,
+        'producerConsumerPostimages':2,'dependencySourceFiles':140,'producerProjectionFiles':10,
+        'dependencyManifestSha256':profile.policy['dependencyManifestSha256'],
+        'publishedProducerRevision':profile.policy['publishedProducerObservation']['revision'],
+        'producerCI':profile.policy['publishedProducerObservation']['ci'],
+        'sharedProducerPublicationObserved':True,'consumerProducerRuntimeAccepted':False,
+        'baselineActual':1555,'focusedForecast':16,'fullForecast':1571,
+        'roles':{phase:list(profile.roles(phase)) for phase in PHASES},
+        'fixtureSerialization':'MaxCpuCount1/MaxParallelThreads1/ParallelizeTestCollectionsfalse',
+        'intentReservationsSerialized':True,'maximumLiveBackendReservations':2,
+        'runtimeProfileIntegrated':True,'executionEnabled':False,'SDKStarted':False,
+        'nativeAcceptance':False,'qualifiedSharedSecurityProducer':None,'grantBundle':None}
+
+
+def current_supervisor_manifest(path,expected_sha):
+    from materialize_file_native import _current_read
+    if expected_sha!=CURRENT_SUPERVISOR_SHA:
+        raise ValueError('Stale current supervisor seal; exact V2 required')
+    raw=_current_read(path,64*1024)
+    if digest(raw)!=expected_sha:raise ValueError('Independently selected current supervisor seal required')
+    manifest=parse_json(raw);root=Path(path).parent
+    closed={'run-file-owned-qualification.py','file_current_native_profile.py','file_native_admission.py',
+            'file_root_phase_grant.py','verify-runner-coverage.py','owned-file-tests.runsettings'}
+    rows=manifest['files']
+    if {row['path'] for row in rows}!=closed or len(rows)!=len(closed):raise ValueError('Closed current supervisor files required')
+    for row in rows:
+        source=root/row['path'];reject_links(source)
+        if len(_current_read(source,row['bytes']))!=row['bytes'] or digest(_current_read(source,row['bytes']))!=row['sha256']:
+            raise ValueError('Actual current supervisor source changed')
+    return root
+
+
+def run_current_qualified_phases(owner,profile,projection,bindings,bundle,bundle_sha,evidence,validate_grant):
+    """Same original five grants, one owner allocation per phase, no renewal."""
+    if profile.policy['executionEnabled'] is not True or profile.policy['rootAllocation'] is None or profile.policy['qualifiedSharedSecurityProducer'] is None:
+        raise ValueError('Current dispatch disabled before original authority consumption')
+    grants=validate_grant_bundle(bundle,bundle_sha,bindings,validate_grant,datetime.now(timezone.utc))
+    original_directory=Path.cwd();original_argv=sys.argv;original_env=dict(os.environ)
+    candidate=profile.roots['GREEN']/'candidate';failure=None
+    try:
+        binding_raw=(json.dumps(bindings,sort_keys=True)+'\n').encode()
+        binding_path=write_new(profile.roots['GREEN'],'root-source-bindings.json',binding_raw)
+        os.environ.update(MALIEV_FILE_ADMISSION_MODE='root-candidate',
+            MalievWorkspaceRoot=str(profile.roots['GREEN']/'dependencies'),
+            MALIEV_FILE_BINDINGS_PATH=str(binding_path),MALIEV_FILE_BINDINGS_SHA256=digest(binding_raw),
+            DOTNET_ROOT=projection['sdkRoot'])
+        os.environ.pop('GH_TOKEN',None)
+        os.chdir(candidate)
+        for phase in PHASES:
+            raw,seal=grants[phase]
+            authority=validate_grant(raw,seal,phase,bindings,datetime.now(timezone.utc))
+            owner.qualified_phase_deadline(projection,authority.remaining_seconds(datetime.now(timezone.utc)),owner.time.monotonic())
+            grant=write_new(profile.roots['GREEN'],'root-phase-'+phase+'.json',raw)
+            os.environ.update(MALIEV_FILE_ROOT_GRANT_PATH=str(grant),MALIEV_FILE_ROOT_GRANT_SHA256=seal)
+            sys.argv=['run-file-owned-qualification.py',phase,str(Path(projection['sdkRoot'])/'dotnet')]
+            owner.main(projection=projection,current_profile=profile)
+    except BaseException as error:failure=error
+    finally:
+        os.chdir(original_directory);sys.argv=original_argv;os.environ.clear();os.environ.update(original_env)
+        try:retain_evidence(candidate,evidence)
+        except BaseException as error:
+            if failure is None:failure=error
+    if failure is not None:raise failure
+
+
+def current_route_main(argv):
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--current-policy',required=True)
+    parser.add_argument('--current-red-root',required=True)
+    parser.add_argument('--current-green-root',required=True)
+    parser.add_argument('--red-receipt-sha256',required=True)
+    parser.add_argument('--green-receipt-sha256',required=True)
+    parser.add_argument('--supervisor-manifest',required=True)
+    parser.add_argument('--supervisor-sha256',required=True)
+    parser.add_argument('--mode',choices=('source-association','qualification'),default='source-association')
+    parser.add_argument('--association')
+    parser.add_argument('--grant-bundle-blob')
+    parser.add_argument('--grant-bundle-sha256')
+    parser.add_argument('--evidence')
+    args=parser.parse_args(argv)
+    from materialize_file_native import _current_read,load_current_policy
+    raw=_current_read(args.current_policy,256*1024);policy=load_current_policy(raw)
+    # Gate before any grant fetch, compile helper, provider projection or Docker.
+    if args.mode=='qualification' and (policy['executionEnabled'] is not True or policy['rootAllocation'] is None or policy['qualifiedSharedSecurityProducer'] is None):
+        raise ValueError('Current qualification disabled: original allocation and qualified shared producer absent')
+    if args.mode=='source-association' and (args.grant_bundle_blob or args.grant_bundle_sha256):
+        raise ValueError('Source route cannot consume grants')
+    supervisor=current_supervisor_manifest(args.supervisor_manifest,args.supervisor_sha256)
+    CurrentFileProfile=current_profile_type(supervisor)
+    profile=CurrentFileProfile(args.current_red_root,args.current_green_root,raw,
+        args.red_receipt_sha256,args.green_receipt_sha256,supervisor)
+    if args.mode=='source-association':
+        association=current_source_association(args.current_red_root,args.current_green_root,raw,
+            args.red_receipt_sha256,args.green_receipt_sha256,supervisor)
+        result=(json.dumps(association,sort_keys=True)+'\n').encode()
+        if args.association:
+            target=Path(args.association);write_new(target.parent,target.name,result)
+        print(result.decode().strip());return
+    if sys.platform!='linux' or os.geteuid()!=0:raise ValueError('Original root-owned Linux cgroup boundary required')
+    if not re.fullmatch('[0-9a-f]{40}',args.grant_bundle_blob or '') or not re.fullmatch('[0-9a-f]{64}',args.grant_bundle_sha256 or ''):
+        raise ValueError('Original bounded five-phase Root bundle required')
+    bindings={'candidateManifestSha256':digest(raw),'supervisorManifestSha256':args.supervisor_sha256,
+              'dependencyManifestSha256':policy['dependencyManifestSha256']}
+    from file_root_phase_grant import validate_grant
+    bundle=fetch_git_blob(REPOSITORY,args.grant_bundle_blob,MAX_BUNDLE_BYTES)
+    validate_grant_bundle(bundle,args.grant_bundle_sha256,bindings,validate_grant,datetime.now(timezone.utc))
+    evidence=Path(args.evidence);reject_links(evidence);evidence.mkdir(parents=True,exist_ok=True)
+    spec=importlib.util.spec_from_file_location('file_current_resource_owner',supervisor/'run-file-owned-qualification.py')
+    owner=importlib.util.module_from_spec(spec);sys.modules[spec.name]=owner;spec.loader.exec_module(owner)
+    memory=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())
+    if int(memory['MemAvailable'].split()[0])<4096*1024 or not Path('/sys/fs/cgroup/cgroup.controllers').is_file():
+        raise ValueError('Original fixed memory/cgroup admission required')
+    owner.RPC_DEADLINE=owner.time.monotonic()+10
+    status,daemon=owner.docker('GET','/info')
+    if status!=200 or daemon.get('OSType')!='linux' or not daemon.get('ID'):
+        raise ValueError('Existing original local Linux daemon required')
+    with owner.trusted_sdk_projection(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT'),evidence,qualified_access=True) as projection:
+        independently_read_official_archive(owner,projection,evidence)
+        observe_vstest_provider(owner,str(Path(projection['sdkRoot'])/'dotnet'),evidence,bindings,projection)
+        run_current_qualified_phases(owner,profile,projection,bindings,bundle,args.grant_bundle_sha256,evidence,validate_grant)
+
+if __name__=='__main__':
+    if '--current-policy' in sys.argv[1:]:current_route_main(sys.argv[1:])
+    else:main()
