@@ -39,7 +39,7 @@ public sealed class NdaCanonicalCoverageTests
         Assert.Equal(DocumentAuthorityOutcome.Unavailable, (await resolver.ResolveAsync(23, [new(DocumentResourceKind.Shipment, 999)], null, default)).Outcome);
     }
     private static CustomerDocumentDbContext Context() => new(new DbContextOptionsBuilder<CustomerDocumentDbContext>()
-        .UseNpgsql("Host=127.0.0.1;Database=synthetic;Username=synthetic;Password=synthetic").Options);
+        .UseNpgsql("Host=127.0.0.1;Database=synthetic;Username=synthetic").Options);
 }
 internal sealed class SyntheticReplacementLineage : IReplacementCaseLineageReader
 {

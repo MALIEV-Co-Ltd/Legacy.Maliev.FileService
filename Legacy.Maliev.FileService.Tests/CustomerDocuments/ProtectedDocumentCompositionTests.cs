@@ -23,7 +23,7 @@ public sealed class ProtectedDocumentCompositionTests
         services.AddLogging();
         services.AddSingleton<StorageClient>(_ => { ownerCalls++; throw new InvalidOperationException("No owner credentials in disabled composition."); });
         services.AddSingleton<IObjectStorage>(_ => { ownerCalls++; throw new InvalidOperationException("No owner storage in disabled composition."); });
-        services.AddCustomerDocuments("Host=127.0.0.1;Port=1;Database=synthetic;Username=synthetic;Password=synthetic;Timeout=1", enabled: false);
+        services.AddCustomerDocuments("Host=127.0.0.1;Port=1;Database=synthetic;Username=synthetic;Timeout=1", enabled: false);
         services.AddDbContext<CustomerDocumentDbContext>(options => options.AddInterceptors(database));
         services.AddProtectedCustomerDocuments();
         services.AddProtectedCustomerDocumentGoogleCloudGenerationReader();

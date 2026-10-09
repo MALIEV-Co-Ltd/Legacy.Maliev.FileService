@@ -260,7 +260,7 @@ public sealed class ProtectedDocumentJourneyHttpTests(CustomerDocumentPostgreSql
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production"); builder.ConfigureLogging(logging => logging.ClearProviders());
-            builder.UseSetting("ConnectionStrings:FileDbContext", "Host=127.0.0.1;Database=synthetic;Username=synthetic;Password=synthetic"); builder.UseSetting("Cache:RedisEnabled", "false");
+            builder.UseSetting("ConnectionStrings:FileDbContext", "Host=127.0.0.1;Database=synthetic;Username=synthetic"); builder.UseSetting("Cache:RedisEnabled", "false");
             builder.UseSetting("Jwt:PublicKey", Convert.ToBase64String(Encoding.UTF8.GetBytes(key.ExportSubjectPublicKeyInfoPem()))); builder.UseSetting("Jwt:Issuer", "https://issuer.example.invalid"); builder.UseSetting("Jwt:Audience", "https://file.example.invalid");
             builder.ConfigureServices(services =>
             {

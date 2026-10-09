@@ -122,8 +122,8 @@ public sealed class DocumentReceiptHttpTests
             builder.UseEnvironment("Production");
             builder.ConfigureLogging(logging => logging.ClearProviders());
             if (registerModule)
-                builder.ConfigureServices(services => services.AddCustomerDocuments("Host=127.0.0.1;Database=synthetic;Username=synthetic;Password=synthetic", enabled: true));
-            builder.UseSetting("ConnectionStrings:FileDbContext", "Host=127.0.0.1;Database=synthetic;Username=synthetic;Password=synthetic");
+                builder.ConfigureServices(services => services.AddCustomerDocuments("Host=127.0.0.1;Database=synthetic;Username=synthetic", enabled: true));
+            builder.UseSetting("ConnectionStrings:FileDbContext", "Host=127.0.0.1;Database=synthetic;Username=synthetic");
             builder.UseSetting("Cache:RedisEnabled", "false");
             builder.UseSetting("Jwt:PublicKey", Convert.ToBase64String(Encoding.UTF8.GetBytes(key.ExportSubjectPublicKeyInfoPem())));
             builder.UseSetting("Jwt:Issuer", "https://issuer.example.invalid");

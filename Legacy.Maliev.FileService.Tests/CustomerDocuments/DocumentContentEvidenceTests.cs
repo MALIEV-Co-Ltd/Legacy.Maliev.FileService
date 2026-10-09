@@ -33,7 +33,7 @@ public sealed class DocumentContentEvidenceTests(CustomerDocumentPostgreSqlFixtu
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddCustomerDocuments("Host=127.0.0.1;Port=1;Database=synthetic;Username=synthetic;Password=synthetic;Timeout=1");
+        services.AddCustomerDocuments("Host=127.0.0.1;Port=1;Database=synthetic;Username=synthetic;Timeout=1");
         services.AddProtectedCustomerDocuments();
         services.AddProtectedCustomerDocumentContentEvidence();
         using var provider = services.BuildServiceProvider();
