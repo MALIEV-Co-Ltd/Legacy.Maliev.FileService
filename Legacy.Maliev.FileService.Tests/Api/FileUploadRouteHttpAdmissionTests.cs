@@ -202,22 +202,25 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
         Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
         var context = scope.ServiceProvider.GetRequiredService<FileDbContext>();
         await context.Database.MigrateAsync();
+        var objectName = "folder/source-" + Guid.NewGuid().ToString("N") + " +ไทย.txt";
         context.Uploads.Add(new()
         {
-            Bucket = "source-bucket", Name = "folder/source +ไทย.txt", Size = 7, ContentType = "text/plain",
+            Bucket = "source-bucket", Name = objectName, Size = 7, ContentType = "text/plain",
         });
         context.StorageMoveJournals.Add(new()
         {
             OperationId = Guid.NewGuid(), ScanClean = true,
-            SourceBucket = "source-bucket", SourceObjectName = "_quarantine/folder/source +ไทย.txt", SourceGeneration = 17,
-            DestinationBucket = "source-bucket", DestinationObjectName = "folder/source +ไทย.txt", DestinationGeneration = 31,
+            SourceBucket = "source-bucket", SourceObjectName = "_quarantine/" + objectName, SourceGeneration = 17,
+            DestinationBucket = "source-bucket", DestinationObjectName = objectName, DestinationGeneration = 31,
             State = "MetadataCommitted", CreatedAt = DateTimeOffset.UtcNow, ModifiedAt = DateTimeOffset.UtcNow,
         });
         await context.SaveChangesAsync();
         var uploadsBefore = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
         var journalsBefore = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), RepeatedQuery(method, field, "different")), deadline.Token);
+        var query = RepeatedQuery(method, field, "different").Replace(Uri.EscapeDataString("folder/source +ไทย.txt"),
+            Uri.EscapeDataString(objectName), StringComparison.Ordinal);
+        using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), query), deadline.Token);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         factory.Service.VerifyNoOtherCalls();
