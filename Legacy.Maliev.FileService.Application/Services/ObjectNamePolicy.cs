@@ -48,7 +48,7 @@ public sealed class ObjectNamePolicy(IOptions<FileStorageOptions> options, TimeP
         return $"uploads/{date.Year}-{date.Month}-{date.Day}/{uploadId}";
     }
 
-    private static string NormalizeObjectName(string value, bool allowTrailingSlash)
+    internal static string NormalizeObjectName(string value, bool allowTrailingSlash)
     {
         var normalized = value.Trim().Replace('\\', '/').TrimStart('/');
         if (allowTrailingSlash)

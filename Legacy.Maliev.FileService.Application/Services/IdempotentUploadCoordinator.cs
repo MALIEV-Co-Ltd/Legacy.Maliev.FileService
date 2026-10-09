@@ -25,6 +25,7 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store, U
     {
         if (!string.IsNullOrWhiteSpace(workflowKey) && !IsCanonicalReplayPrincipal(principalId))
             throw new UploadIdempotencyUnavailableException("Upload identity is unavailable.");
+        RequireGenericPath(path);
         using var snapshot = await snapshots.CaptureAsync(files, cancellationToken);
         files = snapshot;
         if (string.IsNullOrWhiteSpace(workflowKey)) return await execute(Guid.NewGuid(), path, files, cancellationToken);
@@ -37,6 +38,8 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store, U
         try { acquired = await store.AcquireAsync(identity, fingerprint, effectivePath, cancellationToken); }
         catch (Exception exception) when (exception is not OperationCanceledException) { throw new UploadIdempotencyUnavailableException("Upload replay protection is unavailable.", exception); }
 
+        RequireGenericPath(acquired.EffectivePath);
+        if (acquired.Response is not null) RequireGenericResponse(acquired.Response);
         if (acquired.State == UploadAcquireState.Replay) return acquired.Response ?? throw new UploadIdempotencyUnavailableException("Stored upload response is invalid.");
         if (acquired.State == UploadAcquireState.Conflict) throw new UploadIdempotencyConflictException("Idempotency-Key was already used for a different upload.");
         if (acquired.State == UploadAcquireState.InProgress) throw new UploadIdempotencyInProgressException("This upload is already in progress.");
@@ -105,6 +108,19 @@ public sealed class IdempotentUploadCoordinator(IUploadIdempotencyStore store, U
         !string.IsNullOrWhiteSpace(principal)
         && string.Equals(principal, principal.Trim(), StringComparison.Ordinal)
         && !principal.Any(char.IsControl);
+
+    private static void RequireGenericPath(string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+            FileApplicationService.RequireGenericObject(ObjectNamePolicy.NormalizeObjectName(path, allowTrailingSlash: true));
+    }
+    private static void RequireGenericResponse(UploadResultResponse response)
+    {
+        if (response.Object is null || response.Object.Count == 0 || response.Object.Any(item => item is null || string.IsNullOrWhiteSpace(item.ObjectName)))
+            throw new UploadIdempotencyUnavailableException("Stored upload response is invalid.");
+        foreach (var item in response.Object)
+            FileApplicationService.RequireGenericObject(ObjectNamePolicy.NormalizeObjectName(item.ObjectName, allowTrailingSlash: false));
+    }
 
     private async Task ReleaseAsync(string identity, string reservation) { using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)); try { await store.ReleaseAsync(identity, reservation, timeout.Token); } catch { } }
     private async Task MarkUnknownAsync(string identity, string reservation, UploadResultResponse? response) { using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)); try { await store.MarkUnknownAsync(identity, reservation, response, timeout.Token); } catch { } }
