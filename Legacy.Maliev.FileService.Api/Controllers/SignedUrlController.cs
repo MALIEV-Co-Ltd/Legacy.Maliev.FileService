@@ -22,7 +22,9 @@ public sealed class SignedUrlController(IFileService service) : ControllerBase
     [RequirePermission(FilePermissions.Read)]
     public async Task<ActionResult<Uri>> GetSignedUrlAsync([FromQuery] string? bucket, [FromQuery] string? objectName, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(bucket) || string.IsNullOrEmpty(objectName))
+        if (string.IsNullOrEmpty(bucket) || string.IsNullOrEmpty(objectName)
+            || HttpContext?.Request.Query["bucket"].Count > 1
+            || HttpContext?.Request.Query["objectName"].Count > 1)
         {
             return BadRequest();
         }

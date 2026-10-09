@@ -31,6 +31,60 @@ namespace Legacy.Maliev.FileService.Tests.Integration;
 public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
 {
     [Theory]
+    [InlineData("bucket", "same")]
+    [InlineData("bucket", "different")]
+    [InlineData("Bucket", "same")]
+    [InlineData("BUCKET", "empty")]
+    [InlineData("objectName", "same")]
+    [InlineData("objectName", "different")]
+    [InlineData("ObjectName", "same")]
+    [InlineData("OBJECTNAME", "empty")]
+    public async Task RepeatedObjectCoordinate_RejectsWithoutSigningOrChangingAuthority(string field, string variant)
+    {
+        await using var context = await ContextAsync();
+        var name = Name();
+        await SeedAsync(context, name);
+        var beforeUploads = await context.Uploads.AsNoTracking().Where(row => row.Bucket == "private" && row.Name == name).ToArrayAsync();
+        var beforeJournal = await context.StorageMoveJournals.AsNoTracking().Where(row => row.DestinationObjectName == name).ToArrayAsync();
+        var value = variant == "empty" ? "" : field.Equals("bucket", StringComparison.OrdinalIgnoreCase)
+            ? variant == "same" ? "private" : "another-bucket"
+            : variant == "same" ? name : "orders/another-object.step";
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, name);
+        using var client = factory.Client();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.GetAsync(Query("/uploads/SignedUrl", name) + "&" + field + "=" + Uri.EscapeDataString(value), deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+        Assert.Null(factory.SigningPayload);
+        var afterUploads = await context.Uploads.AsNoTracking().Where(row => row.Bucket == "private" && row.Name == name).ToArrayAsync();
+        var afterJournal = await context.StorageMoveJournals.AsNoTracking().Where(row => row.DestinationObjectName == name).ToArrayAsync();
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(beforeUploads), System.Text.Json.JsonSerializer.Serialize(afterUploads));
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(beforeJournal), System.Text.Json.JsonSerializer.Serialize(afterJournal));
+    }
+
+    [Theory]
+    [InlineData("anonymous", "bucket", HttpStatusCode.Unauthorized)]
+    [InlineData("anonymous", "objectName", HttpStatusCode.Unauthorized)]
+    [InlineData("wrong-key", "bucket", HttpStatusCode.Unauthorized)]
+    [InlineData("wrong-key", "objectName", HttpStatusCode.Unauthorized)]
+    [InlineData("wrong-permission", "bucket", HttpStatusCode.Forbidden)]
+    [InlineData("wrong-permission", "objectName", HttpStatusCode.Forbidden)]
+    public async Task RepeatedObjectCoordinate_RetainsAuthenticationAndPermissionPrecedence(string identity, string field, HttpStatusCode expected)
+    {
+        await using var context = await ContextAsync();
+        await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, Name());
+        using var client = factory.Client(identity);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.GetAsync("/uploads/SignedUrl?bucket=private&objectName=orders%2Fpart.step&" + field + "=other", deadline.Token);
+
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(0, factory.GetCalls);
+        Assert.Equal(0, factory.SignCalls);
+    }
+
+    [Theory]
     [InlineData("/uploads/SignedUrl")]
     [InlineData("/uploads/signedurl/")]
     public async Task ConfirmedRecord_UsesActualReadAdmissionAndJsonUriContract(string route)
