@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Legacy.Maliev.FileService.Api;
+using Legacy.Maliev.FileService.Api.CustomerDocuments;
 using Legacy.Maliev.FileService.Api.Http;
 using Legacy.Maliev.FileService.Api.OpenApi;
 using Legacy.Maliev.FileService.Application.Services;
@@ -46,6 +47,15 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = FileApplicationService.MaximumRequestBytes);
 builder.AddHostedFinancialCompletionAcceptance();
 builder.Services.AddFileServiceRuntime(builder.Configuration);
+// Feature-only composition; activation and owner authority remain separately gated.
+builder.Services.AddCustomerDocuments(
+    builder.Configuration.GetConnectionString("FileDbContext")
+        ?? throw new InvalidOperationException("FileDbContext is required."), enabled: false);
+builder.Services.AddProtectedCustomerDocuments();
+builder.Services.AddProtectedCustomerDocumentGoogleCloudGenerationReader();
+builder.Services.AddProtectedCustomerDocumentContentEvidence();
+builder.Services.AddCustomerDocumentNda();
+
 
 var app = builder.Build();
 

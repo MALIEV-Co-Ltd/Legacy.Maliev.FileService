@@ -57,6 +57,7 @@ public sealed class FileApplicationService(
             foreach (var file in files)
             {
                 var finalName = names.BuildFinalObjectName(path, file.FileName, operationId);
+                RequireGenericObject(finalName);
                 var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);
                 var intentId = MoveId(operationId, quarantineName);
                 long quarantineGeneration;
@@ -188,6 +189,7 @@ public sealed class FileApplicationService(
         foreach (var file in files)
         {
             var objectName = names.BuildFinalObjectName(path, file.FileName, operationId);
+            RequireGenericObject(objectName);
             var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);
             if (move is null || !move.ScanClean || move.State is not ("SourceDeleted" or "MetadataSubmitting" or "MetadataCommitted" or "Unknown")
                 || move.SourceBucket != bucket
@@ -217,6 +219,7 @@ public sealed class FileApplicationService(
         runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(bucket);
         objectName = names.RequireObjectName(objectName);
+        RequireGenericObject(objectName);
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken) ||
             !await storage.DeleteAsync(bucket, objectName, cancellationToken))
         {
@@ -240,6 +243,8 @@ public sealed class FileApplicationService(
         names.RequireBucket(destinationBucket);
         sourceObjectName = names.RequireObjectName(sourceObjectName);
         destinationObjectName = names.RequireObjectName(destinationObjectName);
+        RequireGenericObject(sourceObjectName);
+        RequireGenericObject(destinationObjectName);
         var moveId = Guid.NewGuid();
         if (!await repository.ExistsAsync(sourceBucket, sourceObjectName, cancellationToken)) return false;
         var proof = await moveJournal.FindCommittedSourceAsync(sourceBucket, sourceObjectName, cancellationToken);
@@ -272,6 +277,7 @@ public sealed class FileApplicationService(
         runtimeGate.EnsureStorageEnabled();
         names.RequireBucket(bucket);
         var safetyName = names.RequireObjectName(objectName);
+        RequireGenericObject(safetyName);
         if (objectName.Any(char.IsControl)) throw new FileUploadValidationException("Object name is invalid");
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken))
         {
@@ -347,6 +353,14 @@ public sealed class FileApplicationService(
         }
         if (failures.Count != 0) throw new UploadRollbackException(signingFailure, failures);
         throw new UploadOutcomeUnknownException("Upload signing failed before metadata submission.", signingFailure);
+    }
+
+    // This namespace is served only by authenticated customer-document routes.
+    internal static void RequireGenericObject(string normalizedObjectName)
+    {
+        if (normalizedObjectName.Equals("customer-documents", StringComparison.OrdinalIgnoreCase)
+            || normalizedObjectName.StartsWith("customer-documents/", StringComparison.OrdinalIgnoreCase))
+            throw new FileUploadValidationException("Use the customer document endpoint for this object.");
     }
 
     private static void ValidateFiles(IReadOnlyList<IUploadFile> files)
