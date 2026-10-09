@@ -205,14 +205,24 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
         var objectName = "folder/source-" + Guid.NewGuid().ToString("N") + " +ไทย.txt";
         context.Uploads.Add(new()
         {
-            Bucket = "source-bucket", Name = objectName, Size = 7, ContentType = "text/plain",
+            Bucket = "source-bucket",
+            Name = objectName,
+            Size = 7,
+            ContentType = "text/plain",
         });
         context.StorageMoveJournals.Add(new()
         {
-            OperationId = Guid.NewGuid(), ScanClean = true,
-            SourceBucket = "source-bucket", SourceObjectName = "_quarantine/" + objectName, SourceGeneration = 17,
-            DestinationBucket = "source-bucket", DestinationObjectName = objectName, DestinationGeneration = 31,
-            State = "MetadataCommitted", CreatedAt = DateTimeOffset.UtcNow, ModifiedAt = DateTimeOffset.UtcNow,
+            OperationId = Guid.NewGuid(),
+            ScanClean = true,
+            SourceBucket = "source-bucket",
+            SourceObjectName = "_quarantine/" + objectName,
+            SourceGeneration = 17,
+            DestinationBucket = "source-bucket",
+            DestinationObjectName = objectName,
+            DestinationGeneration = 31,
+            State = "MetadataCommitted",
+            CreatedAt = DateTimeOffset.UtcNow,
+            ModifiedAt = DateTimeOffset.UtcNow,
         });
         await context.SaveChangesAsync();
         var uploadsBefore = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
