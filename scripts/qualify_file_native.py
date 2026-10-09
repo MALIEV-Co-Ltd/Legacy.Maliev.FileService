@@ -245,6 +245,39 @@ def validate_sdk_projection_policy(owner,policy):
         raise ValueError('Exact official SDK projection policy differs')
 
 
+def run_qualified_phases(owner,projection,policy,candidate,evidence,args,validate_grant):
+    bundle=fetch_git_blob(REPOSITORY,args.grant_bundle_blob,MAX_BUNDLE_BYTES)
+    grants=validate_grant_bundle(bundle,args.grant_bundle_sha256,policy,validate_grant,datetime.now(timezone.utc))
+    bindings={key:policy[key] for key in ('candidateManifestSha256','supervisorManifestSha256','dependencyManifestSha256')}
+    sdk=str(Path(projection['sdkRoot'])/'dotnet')
+    owner.bind_qualification_projected_provider(Path(sdk),projection)
+    original_directory=Path.cwd();original_argv=sys.argv;original_environment=dict(os.environ);failure=None
+    try:
+        raw=(json.dumps(bindings,sort_keys=True)+'\n').encode();bindingpath=write_new(Path(ROOT),'root-source-bindings.json',raw)
+        os.environ.update(MALIEV_FILE_ADMISSION_MODE='root-candidate',MalievWorkspaceRoot=str(Path(ROOT)/'dependencies'),
+            MALIEV_FILE_BINDINGS_PATH=str(bindingpath),MALIEV_FILE_BINDINGS_SHA256=digest(raw),DOTNET_ROOT=projection['sdkRoot'])
+        # Read-only fetch credential and caller configuration never reach SDK children.
+        os.environ.pop('GH_TOKEN',None)
+        os.chdir(candidate)
+        for phase in PHASES:
+            original,seal=grants[phase]
+            authority=validate_grant(original,seal,phase,bindings,datetime.now(timezone.utc))
+            owner.qualified_phase_deadline(projection,authority.remaining_seconds(datetime.now(timezone.utc)),owner.time.monotonic())
+            path=write_new(Path(ROOT),'root-phase-'+phase+'.json',original)
+            os.environ.update(MALIEV_FILE_ROOT_GRANT_PATH=str(path),MALIEV_FILE_ROOT_GRANT_SHA256=seal)
+            sys.argv=['run-file-owned-qualification.py',phase,sdk]
+            owner.bind_qualification_projected_provider(Path(sdk),projection)
+            owner.main(projection=projection)
+    except BaseException as error:failure=error
+    finally:
+        sys.argv=original_argv;os.chdir(original_directory)
+        os.environ.clear();os.environ.update(original_environment)
+        try:retain_evidence(candidate,evidence)
+        except BaseException as error:
+            if failure is None:failure=error
+    if failure is not None:raise failure
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--policy',required=True);parser.add_argument('--evidence',required=True)
     parser.add_argument('--mode',choices=('preflight-only','qualification'),default='preflight-only')
@@ -276,37 +309,12 @@ def main():
     with owner.trusted_sdk_projection(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT'),evidence,qualified_access=True) as projection:
         independently_read_official_archive(owner,projection,evidence)
         observe_vstest_provider(owner,str(Path(projection['sdkRoot'])/'dotnet'),evidence,policy,projection)
-    write_new(evidence,'preflight.json',(json.dumps({'state':'LinuxReadOnlyPreflightPassed','plainGitHead':head,
+        if args.mode=='qualification':
+            run_qualified_phases(owner,projection,policy,candidate,evidence,args,validate_grant)
+    write_new(evidence,'preflight.json',(json.dumps({'state':'LinuxReadOnlyPreflightPassed' if args.mode=='preflight-only' else 'LinuxNativeQualificationPassed','plainGitHead':head,
         'candidateManifestSha256':policy['candidateManifestSha256'],'supervisorManifestSha256':policy['supervisorManifestSha256'],
-        'daemonId':daemon['ID'],'memoryFloorMiB':4096,'SDKStarted':False,'nativeTestsExecuted':False})+'\n').encode())
+        'daemonId':daemon['ID'],'memoryFloorMiB':4096,'SDKStarted':args.mode=='qualification','nativeTestsExecuted':args.mode=='qualification'})+'\n').encode())
     if args.mode=='preflight-only':print('Read-only Linux preflight and frozen pure controls passed; no SDK ran');return
-    bundle=fetch_git_blob(REPOSITORY,args.grant_bundle_blob,MAX_BUNDLE_BYTES)
-    grants=validate_grant_bundle(bundle,args.grant_bundle_sha256,policy,validate_grant,datetime.now(timezone.utc))
-    bindings={key:policy[key] for key in ('candidateManifestSha256','supervisorManifestSha256','dependencyManifestSha256')}
-    raw=(json.dumps(bindings,sort_keys=True)+'\n').encode();bindingpath=write_new(Path(ROOT),'root-source-bindings.json',raw)
-    os.environ.update(MALIEV_FILE_ADMISSION_MODE='root-candidate',MalievWorkspaceRoot=str(Path(ROOT)/'dependencies'),
-        MALIEV_FILE_BINDINGS_PATH=str(bindingpath),MALIEV_FILE_BINDINGS_SHA256=digest(raw))
-    sdk=shutil.which('dotnet')
-    if sdk is None:raise RuntimeError('Existing reviewed SDK executable unavailable; no installation attempted')
-    # Read-only fetch credential and caller configuration never reach SDK children.
-    os.environ.pop('GH_TOKEN',None)
-    original_directory=Path.cwd();original_argv=sys.argv;failure=None
-    try:
-        os.chdir(candidate)
-        for phase in PHASES:
-            original,seal=grants[phase]
-            validate_grant(original,seal,phase,bindings,datetime.now(timezone.utc))
-            path=write_new(Path(ROOT),'root-phase-'+phase+'.json',original)
-            os.environ.update(MALIEV_FILE_ROOT_GRANT_PATH=str(path),MALIEV_FILE_ROOT_GRANT_SHA256=seal)
-            sys.argv=['run-file-owned-qualification.py',phase,sdk]
-            owner.main()
-    except BaseException as error:failure=error
-    finally:
-        sys.argv=original_argv;os.chdir(original_directory)
-        try:retain_evidence(candidate,evidence)
-        except BaseException as error:
-            if failure is None:failure=error
-    if failure is not None:raise failure
     print('Five original Root-bound phases passed with exact resource release; no deployment occurred')
 
 
