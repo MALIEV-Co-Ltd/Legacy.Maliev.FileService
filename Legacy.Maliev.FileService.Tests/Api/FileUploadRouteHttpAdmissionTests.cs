@@ -10,10 +10,12 @@ using Google.Cloud.Storage.V1;
 using Legacy.Maliev.FileService.Api.Authorization;
 using Legacy.Maliev.FileService.Application.Interfaces;
 using Legacy.Maliev.FileService.Application.Services;
+using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Tests.OpenApi;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -198,12 +200,32 @@ public sealed class FileUploadRouteHttpAdmissionTests(FileOpenApiPostgresFixture
         using var client = AuthorizedClient(factory, method);
         using var scope = factory.Services.CreateScope();
         Assert.IsType<FileApplicationService>(scope.ServiceProvider.GetRequiredService<IFileService>());
+        var context = scope.ServiceProvider.GetRequiredService<FileDbContext>();
+        await context.Database.MigrateAsync();
+        context.Uploads.Add(new()
+        {
+            Bucket = "source-bucket", Name = "folder/source +ไทย.txt", Size = 7, ContentType = "text/plain",
+        });
+        context.StorageMoveJournals.Add(new()
+        {
+            OperationId = Guid.NewGuid(), ScanClean = true,
+            SourceBucket = "source-bucket", SourceObjectName = "_quarantine/folder/source +ไทย.txt", SourceGeneration = 17,
+            DestinationBucket = "source-bucket", DestinationObjectName = "folder/source +ไทย.txt", DestinationGeneration = 31,
+            State = "MetadataCommitted", CreatedAt = DateTimeOffset.UtcNow, ModifiedAt = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+        var uploadsBefore = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
+        var journalsBefore = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         using var response = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), RepeatedQuery(method, field, "different")), deadline.Token);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         factory.Service.VerifyNoOtherCalls();
         Assert.Null(factory.Services.GetService<StorageClient>());
+        var uploadsAfter = await context.Uploads.AsNoTracking().OrderBy(row => row.Id).ToArrayAsync();
+        var journalsAfter = await context.StorageMoveJournals.AsNoTracking().OrderBy(row => row.OperationId).ToArrayAsync();
+        Assert.Equal(JsonSerializer.Serialize(uploadsBefore), JsonSerializer.Serialize(uploadsAfter));
+        Assert.Equal(JsonSerializer.Serialize(journalsBefore), JsonSerializer.Serialize(journalsAfter));
     }
 
     [Theory]
