@@ -1,0 +1,187 @@
+name: File atomic acquisition ordinary RED-GREEN qualification
+on:
+  pull_request:
+    paths:
+      - .github/workflows/file-atomic-acquisition-qualification.yml
+      - scripts/materialize_file_atomic_acquisition.py
+      - scripts/verify_file_atomic_acquisition_results.py
+      - scripts/tests/test_file_atomic_acquisition_intake.py
+  workflow_dispatch:
+    inputs:
+      capsule_blob:
+        description: Same-repository blob of the exact reviewed two-file atomic acquisition successor
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: file-ordinary-source-qualification
+  cancel-in-progress: false
+jobs:
+  controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Compile transport then run authority and cleanup controls
+        run: |
+          python3 -B - <<'PY'
+          import pathlib, py_compile, tempfile
+          with tempfile.TemporaryDirectory(prefix='file-ordinary-controls-') as owned:
+              for name in ['scripts/materialize_file_atomic_acquisition.py', 'scripts/verify_file_atomic_acquisition_results.py', 'scripts/tests/test_file_atomic_acquisition_intake.py']:
+                  py_compile.compile(name, cfile=str(pathlib.Path(owned)/pathlib.Path(name).name)+'.pyc', doraise=True)
+          PY
+          python3 -B -m unittest discover -s scripts/tests -p test_file_atomic_acquisition_intake.py
+      - name: Lint reviewed workflow with pinned actionlint
+        run: |
+          timeout 180 go install github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca
+          command -v shellcheck
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/file-atomic-acquisition-qualification.yml
+  qualify:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MalievWorkspaceRoot: ${{ github.workspace }}/candidate/.dependencies
+      DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER: '1'
+      MSBUILDDISABLENODEREUSE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ba73e31d91780f6e5ecb8900f885beda38b40a63
+          path: candidate/red
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ba73e31d91780f6e5ecb8900f885beda38b40a63
+          path: candidate/green
+          persist-credentials: false
+      - name: Materialize exact reviewed source before dependency checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAPSULE_BLOB: ${{ inputs.capsule_blob }}
+        run: |
+          python3 -B scripts/materialize_file_atomic_acquisition.py --blob "$CAPSULE_BLOB" --checkout candidate/red --phase red --receipt evidence/red-intake.json
+          python3 -B scripts/materialize_file_atomic_acquisition.py --blob "$CAPSULE_BLOB" --checkout candidate/green --phase green --receipt evidence/green-intake.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults
+          ref: 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3
+          path: candidate/.dependencies/Legacy.Maliev.ServiceDefaults
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: MALIEV-Co-Ltd/Legacy.Maliev.CompatibilityContracts
+          ref: 78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7
+          path: candidate/.dependencies/Legacy.Maliev.CompatibilityContracts
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: MALIEV-Co-Ltd/Legacy.Maliev.Workflows
+          ref: 0159e67a033712a7120d52173819e8bde214cf6e
+          path: candidate/.dependencies/Legacy.Maliev.Workflows
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: MALIEV-Co-Ltd/Legacy.Maliev.Intranet
+          ref: 3f5f7542c93cb085757130971c4fc7cf61043f01
+          path: candidate/.dependencies/Legacy.Maliev.Intranet
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: MALIEV-Co-Ltd/Legacy.Maliev.Workflows
+          ref: e3a6093324a24968876782153286f52db8b29fd8
+          path: security-tools
+          persist-credentials: false
+      - name: Verify exact dependency checkout heads
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          test "$(git -C .dependencies/Legacy.Maliev.ServiceDefaults rev-parse HEAD)" = 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3
+          test "$(git -C .dependencies/Legacy.Maliev.CompatibilityContracts rev-parse HEAD)" = 78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7
+          test "$(git -C .dependencies/Legacy.Maliev.Workflows rev-parse HEAD)" = 0159e67a033712a7120d52173819e8bde214cf6e
+          test "$(git -C .dependencies/Legacy.Maliev.Intranet rev-parse HEAD)" = 3f5f7542c93cb085757130971c4fc7cf61043f01
+          test "$(git -C ../security-tools rev-parse HEAD)" = e3a6093324a24968876782153286f52db8b29fd8
+          for dependency in .dependencies/* ../security-tools; do git -C "$dependency" rev-parse HEAD; done | tee ../evidence/dependency-heads.log
+      - name: Verify both immutable consumer witnesses
+        working-directory: candidate
+        run: |
+          git -C .dependencies/Legacy.Maliev.Intranet show 3f5f7542c93cb085757130971c4fc7cf61043f01:Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs | sha256sum | awk '$1 != "98a4b2954e9dede6c3d237af1ae9b42198dec7f61835af22a61e601ded731bea" { exit 1 }'
+          echo 'a4a31a998cc168709d0914fa19b4836f5da219c73a3d6f99c7a2e40d15429758  .dependencies/Legacy.Maliev.Intranet/Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs' | sha256sum --check --strict
+      - name: Scan history and exact RED and GREEN source trees for secrets
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          timeout 300 go install github.com/zricethezav/gitleaks/v8@6eaad039603a4de39fddd1cf5f727391efe9974e
+          (cd green && "$(go env GOPATH)/bin/gitleaks" git --redact --exit-code 1 --no-banner) 2>&1 | tee ../evidence/history-secret-scan.log
+          for phase in red green; do
+            "$(go env GOPATH)/bin/gitleaks" dir "$phase/Legacy.Maliev.FileService.Data/RedisUploadIdempotencyStore.cs" --redact --exit-code 1 --no-banner 2>&1 | tee "../evidence/$phase-store-secret-scan.log"
+            "$(go env GOPATH)/bin/gitleaks" dir "$phase/Legacy.Maliev.FileService.Tests/Data/RedisUploadIdempotencyStoreTests.cs" --redact --exit-code 1 --no-banner 2>&1 | tee "../evidence/$phase-tests-secret-scan.log"
+          done
+      - name: Scan JWT signing resources and tracked current trees with normal protected scanners
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          foreach ($phase in 'red', 'green') {
+            $candidatePath = Join-Path (Get-Location).Path $phase
+            & ../security-tools/scripts/Invoke-JwtSigningResourceScan.ps1 -RepositoryPath $candidatePath
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            & ../security-tools/scripts/Invoke-CurrentTreeCredentialScan.ps1 -RepositoryPath $candidatePath
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.x
+      - name: Build RED first and require the exact intended regression failure
+        working-directory: candidate/red
+        run: |
+          set -euo pipefail
+          export GITHUB_ACTIONS=false
+          mkdir -p ../../evidence red-results
+          props=(-p:UseLocalMalievDependencies=true -p:UseSharedCompilation=false -m:1 -nr:false)
+          timeout 600 dotnet restore Legacy.Maliev.FileService.slnx "${props[@]}" 2>&1 | tee ../../evidence/red-restore.log
+          timeout 600 dotnet build Legacy.Maliev.FileService.slnx -c Release --no-restore --disable-build-servers "${props[@]}" 2>&1 | tee ../../evidence/red-build.log
+          grep -Eq '0 Warning\(s\)' ../../evidence/red-build.log
+          grep -Eq '0 Error\(s\)' ../../evidence/red-build.log
+          set +e
+          timeout 600 dotnet test Legacy.Maliev.FileService.slnx -c Release --no-build --no-restore "${props[@]}" --filter FullyQualifiedName~FirstAcquisition_DoesNotDependOnConditionalTransactionCompletion --logger 'trx;LogFileName=red.trx' --results-directory red-results 2>&1 | tee ../../evidence/red-test.log
+          test_status=${PIPESTATUS[0]}
+          set -e
+          test "$test_status" -eq 1
+          python3 -B ../../scripts/verify_file_atomic_acquisition_results.py --phase red --focused red-results/red.trx --receipt ../../evidence/red-results.json
+      - name: Build GREEN first then focused full and static validation
+        working-directory: candidate/green
+        run: |
+          set -euo pipefail
+          export GITHUB_ACTIONS=false
+          mkdir -p ../../evidence focused-results runner-results
+          props=(-p:UseLocalMalievDependencies=true -p:UseSharedCompilation=false -m:1 -nr:false)
+          timeout 600 dotnet restore Legacy.Maliev.FileService.slnx "${props[@]}" 2>&1 | tee ../../evidence/green-restore.log
+          timeout 600 dotnet build Legacy.Maliev.FileService.slnx -c Release --no-restore --disable-build-servers "${props[@]}" 2>&1 | tee ../../evidence/green-build.log
+          grep -Eq '0 Warning\(s\)' ../../evidence/green-build.log
+          grep -Eq '0 Error\(s\)' ../../evidence/green-build.log
+          timeout 600 dotnet test Legacy.Maliev.FileService.slnx -c Release --no-build --no-restore "${props[@]}" --filter FullyQualifiedName~Legacy.Maliev.FileService.Tests.Data.RedisUploadIdempotencyStoreTests --logger 'trx;LogFileName=focused.trx' --results-directory focused-results 2>&1 | tee ../../evidence/green-focused.log
+          timeout 600 dotnet test Legacy.Maliev.FileService.slnx -c Release --no-build --no-restore "${props[@]}" --logger 'trx;LogFileName=full.trx' --collect 'XPlat Code Coverage' --results-directory runner-results 2>&1 | tee ../../evidence/green-full.log
+          python3 -B ../../scripts/verify_file_atomic_acquisition_results.py --phase green --focused focused-results/focused.trx --full runner-results/full.trx --receipt ../../evidence/green-results.json
+          timeout 600 dotnet format Legacy.Maliev.FileService.slnx --verify-no-changes --no-restore 2>&1 | tee ../../evidence/format.log
+          timeout 600 dotnet list Legacy.Maliev.FileService.slnx package --vulnerable --include-transitive --no-restore 2>&1 | tee ../../evidence/audit.log
+          grep -qi 'no vulnerable packages' ../../evidence/audit.log
+          python3 -B scripts/verify-runner-coverage.py runner-results
+      - name: Preserve raw evidence on every outcome
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: file-atomic-acquisition-${{ github.run_id }}
+          path: |
+            evidence/
+            candidate/red/red-results/
+            candidate/green/focused-results/
+            candidate/green/runner-results/
+          if-no-files-found: warn
+          retention-days: 14
