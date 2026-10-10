@@ -2,8 +2,6 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit.Abstractions;
 
 namespace Legacy.Maliev.FileService.Tests.Startup;
@@ -65,7 +63,7 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
             foreach (var argument in new[] { "exec", "--runtimeconfig", runtime, "--depsfile", dependencies,
                          assembly.Location, "--urls", "http://127.0.0.1:0" })
                 process.StartInfo.ArgumentList.Add(argument);
-            if (failure == "argument") process.StartInfo.ArgumentList.Add("--" + sentinel);
+            if (failure == "argument") process.StartInfo.ArgumentList.Add("-" + sentinel + "=invalid");
             custody.StartAttempted = true;
             custody.StartResult = process.Start();
             Assert.True(custody.StartResult.Value);
@@ -92,6 +90,7 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
             Assert.Equal(5102, value.GetProperty("eventId").GetInt32());
             Assert.Equal("StartupFailure", value.GetProperty("EventName").GetString());
             Assert.Equal("HostInitialization", value.GetProperty("Operation").GetString());
+            if (failure == "argument") Assert.Equal("System.FormatException", value.GetProperty("exceptionType").GetString());
             Assert.Equal(assembly.GetName().Name, value.GetProperty("service").GetString());
             Assert.False(value.TryGetProperty("exceptionMessage", out _));
             Assert.False(value.TryGetProperty("stackTrace", out _));
@@ -126,9 +125,26 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
     public async Task EmbeddedNormalProgram_PreservesOriginalInitializationFailureAndCallerExitCode()
     {
         var previous = Environment.ExitCode;
-        await using var factory = new EmbeddedFailureFactory();
-        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
-        Assert.Equal("synthetic embedded initialization failure", exception.Message);
+        const string invalidConnection = "PRIVATE-STARTUP-UNSUPPORTED-KEY=value";
+        // Parsing fails before data-source creation, authentication or any provider access.
+        var expected = Assert.Throws<ArgumentException>(() => new Npgsql.NpgsqlConnectionStringBuilder(invalidConnection));
+        var entry = typeof(Program).Assembly.EntryPoint!;
+        var exception = await Assert.ThrowsAsync<ArgumentException>(async () =>
+        {
+            try
+            {
+                var result = entry.Invoke(null, [new[]
+                {
+                    "--environment", "Production", "--ConnectionStrings:FileDbContext", invalidConnection,
+                }]);
+                if (result is Task pending) await pending;
+            }
+            catch (System.Reflection.TargetInvocationException wrapper) when (wrapper.InnerException is not null)
+            {
+                ExceptionDispatchInfo.Capture(wrapper.InnerException).Throw();
+            }
+        });
+        Assert.Equal(expected.Message, exception.Message);
         Assert.Equal(previous, Environment.ExitCode);
     }
 
@@ -408,14 +424,5 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
             return 0;
         }
         protected override void Dispose(bool disposing) { IsDisposed = true; base.Dispose(disposing); }
-    }
-
-    private sealed class EmbeddedFailureFactory : WebApplicationFactory<Program>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Production");
-            builder.ConfigureAppConfiguration((_, _) => throw new InvalidOperationException("synthetic embedded initialization failure"));
-        }
     }
 }
