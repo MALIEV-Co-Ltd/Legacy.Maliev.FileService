@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 using YamlDotNet.Core;
@@ -128,8 +130,8 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_RejectsCommentedDependencySha()
     {
         AssertMutationRejected(
-            "ref: 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3",
-            "ref: main # 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3");
+            "ref: 7edcd961024868513fd5f373cab3dcb261197f77",
+            "ref: main # 7edcd961024868513fd5f373cab3dcb261197f77");
     }
 
     [Theory]
@@ -137,6 +139,16 @@ public sealed class WorkflowContractTests
     [InlineData("repository: MALIEV-Co-Ltd/Legacy.Maliev.Workflows", "repository: MALIEV-Co-Ltd/Legacy.Maliev.FileService")]
     [InlineData("path: .dependencies/Legacy.Maliev.Workflows", "path: .dependencies/unapproved")]
     public void BuildAndTest_RejectsChangedOfflineImageProducer(string original, string replacement)
+    {
+        AssertMutationRejected(original, replacement);
+    }
+
+    [Theory]
+    [InlineData("actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68", "actions/setup-dotnet@main")]
+    [InlineData("DOTNET_HOST_PATH=$host", "DOTNET_HOST_PATH=/unreviewed/dotnet")]
+    [InlineData("FullyQualifiedName~FileStartupBoundaryTests", "FullyQualifiedName~OtherTests")]
+    [InlineData("len(by_id) != 8", "len(by_id) != 1")]
+    public void BuildAndTest_RejectsChangedStartupSdkOrRegressionEvidence(string original, string replacement)
     {
         AssertMutationRejected(original, replacement);
     }
@@ -292,9 +304,9 @@ internal static partial class WorkflowContractValidator
         RejectDuplicatedValidationActionsAndCommands(jobs);
 
         var steps = RequireSequence(validateJob, "steps");
-        if (steps.Children.Count != 9)
+        if (steps.Children.Count != 12)
         {
-            throw new InvalidOperationException("Validate job must contain five pinned checkout steps, precompile consumer hash, validation, and two evidence steps.");
+            throw new InvalidOperationException("Validate job must contain the pinned dependencies, exact startup SDK/focus steps, shared validation, and evidence gates.");
         }
 
         var environment = RequireMapping(validateJob, "env");
@@ -308,7 +320,7 @@ internal static partial class WorkflowContractValidator
         RequireScalarValue(environment, "VSTestLogger", "trx");
         RequireScalarValue(environment, "VSTestResultsDirectory", "${{ github.workspace }}/runner-results");
 
-        var gate = RequireMapping(steps.Children[7], "coverage gate");
+        var gate = RequireMapping(steps.Children[10], "coverage gate");
         if (gate.Children.Count != 2)
         {
             throw new InvalidOperationException("Coverage gate must contain only name and run.");
@@ -316,7 +328,7 @@ internal static partial class WorkflowContractValidator
 
         RequireScalarValue(gate, "name", "Gate owned production coverage");
         RequireScalarValue(gate, "run", "python3 scripts/verify-runner-coverage.py runner-results");
-        var evidence = RequireMapping(steps.Children[8], "evidence upload");
+        var evidence = RequireMapping(steps.Children[11], "evidence upload");
         if (evidence.Children.Count != 4)
         {
             throw new InvalidOperationException("Evidence upload must contain exactly name, if, uses and with.");
@@ -332,7 +344,7 @@ internal static partial class WorkflowContractValidator
         }
 
         RequireScalarValue(evidenceInputs, "name", "file-validation-${{ github.sha }}");
-        RequireScalarValue(evidenceInputs, "path", "runner-results");
+        RequireScalarValue(evidenceInputs, "path", "runner-results/\nstartup-results/\n");
         RequireScalarValue(evidenceInputs, "if-no-files-found", "warn");
         RequireScalarValue(evidenceInputs, "retention-days", "7");
 
@@ -349,7 +361,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults",
-                ["ref"] = "8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3",
+                ["ref"] = "7edcd961024868513fd5f373cab3dcb261197f77",
                 ["path"] = ".dependencies/Legacy.Maliev.ServiceDefaults",
                 ["persist-credentials"] = "false",
             });
@@ -383,13 +395,25 @@ internal static partial class WorkflowContractValidator
                 ["path"] = ".dependencies/Legacy.Maliev.Intranet",
                 ["persist-credentials"] = "false",
             });
+        foreach (var (index, name) in new[]
+        {
+            (6, "Select the hosted SDK for owned startup children"),
+            (7, "Supply the exact job SDK host to startup fixtures"),
+            (9, "Require all eight standalone startup boundary regressions"),
+        })
+        {
+            var startup = RequireMapping(steps.Children[index], "startup step");
+            RequireScalarValue(startup, "name", name);
+            if (!IsApprovedStartupStep(startup))
+                throw new InvalidOperationException("Startup steps must match the reviewed SDK and exact identity-validation contracts.");
+        }
         var consumerHash = RequireMapping(steps.Children[5], "consumer hash");
         if (consumerHash.Children.Count != 2) throw new InvalidOperationException("Consumer hash must contain only name and run.");
         RequireScalarValue(consumerHash, "name", "Verify exact consumer source before compilation");
         RequireScalarValue(consumerHash, "run", "git -C .dependencies/Legacy.Maliev.Intranet show 3f5f7542c93cb085757130971c4fc7cf61043f01:Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs | sha256sum | awk '$1 != \"98a4b2954e9dede6c3d237af1ae9b42198dec7f61835af22a61e601ded731bea\" { exit 1 }'\n"
             + "echo 'a4a31a998cc168709d0914fa19b4836f5da219c73a3d6f99c7a2e40d15429758  .dependencies/Legacy.Maliev.Intranet/Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs' | sha256sum --check --strict\n");
         ValidateStep(
-            steps.Children[6],
+            steps.Children[8],
             SharedValidationAction,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -469,6 +493,8 @@ internal static partial class WorkflowContractValidator
 
             foreach (var stepNode in steps.Children.OfType<YamlMappingNode>())
             {
+                if (IsApprovedStartupStep(stepNode)) continue;
+
                 if (GetOptional(stepNode, "uses") is YamlScalarNode usesNode)
                 {
                     var action = usesNode.Value ?? string.Empty;
@@ -485,6 +511,30 @@ internal static partial class WorkflowContractValidator
                 }
             }
         }
+    }
+
+    // These narrow reviewed exceptions retain the generic ban on caller-owned duplicate validation.
+    private static bool IsApprovedStartupStep(YamlMappingNode step)
+    {
+        var name = (GetOptional(step, "name") as YamlScalarNode)?.Value;
+        var keys = step.Children.Keys.Select(RequireScalar).ToHashSet(StringComparer.Ordinal);
+        if (name == "Select the hosted SDK for owned startup children")
+        {
+            return keys.SetEquals(["name", "uses", "with"])
+                && (GetOptional(step, "uses") as YamlScalarNode)?.Value == "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68"
+                && GetOptional(step, "with") is YamlMappingNode inputs && inputs.Children.Count == 1
+                && (GetOptional(inputs, "dotnet-version") as YamlScalarNode)?.Value == "10.0.x";
+        }
+        var focus = name == "Require all eight standalone startup boundary regressions";
+        if (name != "Supply the exact job SDK host to startup fixtures" && !focus) return false;
+        if (!keys.SetEquals(focus ? new[] { "name", "shell", "env", "run" } : new[] { "name", "shell", "run" })
+            || (GetOptional(step, "shell") as YamlScalarNode)?.Value != "bash"
+            || GetOptional(step, "run") is not YamlScalarNode { Value: { } command }) return false;
+        if (focus && (GetOptional(step, "env") is not YamlMappingNode environment || environment.Children.Count != 1
+            || (GetOptional(environment, "GITHUB_ACTIONS") as YamlScalarNode)?.Value != "false")) return false;
+        var expected = focus ? "c7eb9d967996465e11a31b9bade5b9be3597aee564ed0053159c89709073b33c" : "4dede86d85d0fb052a33e2460f45a55498af0672495b4ff07d4683a8b0df0d0d";
+        return string.Equals(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(command))), expected,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RejectDuplicatedDotNetCommand(string command)
