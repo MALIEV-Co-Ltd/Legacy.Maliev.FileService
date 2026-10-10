@@ -80,8 +80,33 @@ jobs:
           tree = ET.parse('startup-results/startup.trx')
           ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
           results = tree.findall('./t:Results/t:UnitTestResult', ns)
-          if len(results) != 8 or any(row.get('outcome') != 'Passed' for row in results):
-              raise SystemExit('Expected exactly eight passing startup boundary results')
+          from collections import Counter
+          prefix = 'Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.'
+          expected = {
+              prefix + 'ActualApiEntryPoint_FailsOnceWithPrivateMetadataAndNoPlaintextFallback': 2,
+              prefix + 'EmbeddedNormalProgram_PreservesOriginalInitializationFailureAndCallerExitCode': 1,
+              prefix + 'StreamingReader_EnforcesBoundWithoutTruncatingAssertions': 2,
+              prefix + 'PartialStartUncertainty_RetainsExactHandleDirectoryAndOriginalFailure': 1,
+              prefix + 'UnsettledReaders_PreventDisposalAndRemovalUntilBothActuallyFinish': 1,
+              prefix + 'DirectoryCleanupFailure_PreservesPrimaryAndEveryCleanupFailureForRecovery': 1,
+          }
+          definitions = tree.findall('./t:TestDefinitions/t:UnitTest', ns)
+          by_id = {}
+          for definition in definitions:
+              identity = definition.get('id')
+              method = definition.find('t:TestMethod', ns)
+              if not identity or identity in by_id or method is None:
+                  raise SystemExit('Missing or duplicated startup definition identity')
+              class_name = method.get('className', '').split(',', 1)[0].strip()
+              method_name = method.get('name', '').split('(', 1)[0]
+              by_id[identity] = class_name + '.' + method_name
+          ids = [row.get('testId') for row in results]
+          names = [row.get('testName', '') for row in results]
+          actual = Counter(by_id.get(identity, '') for identity in ids)
+          if (actual != expected or len(by_id) != 8 or set(ids) != set(by_id)
+                  or len(set(ids)) != 8 or len(set(names)) != 8
+                  or any(row.get('outcome') != 'Passed' for row in results)):
+              raise SystemExit('Expected all eight distinct passing startup boundary definitions and results')
           PY
       - name: Gate owned production coverage
         run: python3 scripts/verify-runner-coverage.py runner-results
