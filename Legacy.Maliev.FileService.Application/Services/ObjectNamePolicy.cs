@@ -44,7 +44,7 @@ public sealed class ObjectNamePolicy(IOptions<FileStorageOptions> options, TimeP
 
     private string BuildLegacyDefaultPrefix(Guid uploadId)
     {
-        var date = timeProvider.GetUtcNow();
+        var date = timeProvider.GetLocalNow();
         return $"uploads/{date.Year}-{date.Month}-{date.Day}/{uploadId}";
     }
 
