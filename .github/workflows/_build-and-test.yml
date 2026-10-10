@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults
-          ref: 8f4f5f27b226ffe406c4c79b1903742e8c2e7dd3
+          ref: 7edcd961024868513fd5f373cab3dcb261197f77
           path: .dependencies/Legacy.Maliev.ServiceDefaults
           persist-credentials: false
       - name: Check out Legacy.Maliev.CompatibilityContracts
@@ -52,11 +52,37 @@ jobs:
         run: |
           git -C .dependencies/Legacy.Maliev.Intranet show 3f5f7542c93cb085757130971c4fc7cf61043f01:Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs | sha256sum | awk '$1 != "98a4b2954e9dede6c3d237af1ae9b42198dec7f61835af22a61e601ded731bea" { exit 1 }'
           echo 'a4a31a998cc168709d0914fa19b4836f5da219c73a3d6f99c7a2e40d15429758  .dependencies/Legacy.Maliev.Intranet/Legacy.Maliev.Intranet/PurchaseOrders/LegacyFileClient.cs' | sha256sum --check --strict
+      - name: Select the hosted SDK for owned startup children
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 10.0.x
+      - name: Supply the exact job SDK host to startup fixtures
+        shell: bash
+        run: |
+          host=$(command -v dotnet)
+          test -x "$host"
+          echo "DOTNET_HOST_PATH=$host" >> "$GITHUB_ENV"
       - name: Validate .NET solution
         uses: MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@e3a6093324a24968876782153286f52db8b29fd8
         with:
           solution: Legacy.Maliev.FileService.slnx
           use-local-maliev-dependencies: 'true'
+      - name: Require all eight standalone startup boundary regressions
+        shell: bash
+        env:
+          GITHUB_ACTIONS: 'false'
+        run: |
+          set -euo pipefail
+          test "$(command -v dotnet)" = "$DOTNET_HOST_PATH"
+          timeout 600 dotnet test Legacy.Maliev.FileService.Tests/Legacy.Maliev.FileService.Tests.csproj --configuration Release --no-build --no-restore --filter FullyQualifiedName~FileStartupBoundaryTests --logger 'trx;LogFileName=startup.trx' --results-directory startup-results
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('startup-results/startup.trx')
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+          results = tree.findall('./t:Results/t:UnitTestResult', ns)
+          if len(results) != 8 or any(row.get('outcome') != 'Passed' for row in results):
+              raise SystemExit('Expected exactly eight passing startup boundary results')
+          PY
       - name: Gate owned production coverage
         run: python3 scripts/verify-runner-coverage.py runner-results
       - name: Preserve validation evidence
@@ -64,6 +90,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: file-validation-${{ github.sha }}
-          path: runner-results
+          path: |
+            runner-results/
+            startup-results/
           if-no-files-found: warn
           retention-days: 7
