@@ -1,0 +1,162 @@
+{
+  "acceptedBaselineHead": "2441508ce2ff91d2eb4fb1fff74c2e8c9671e599",
+  "addedSourceHead": "c72f1e700bd723680a2bd895312048381fb23c0b",
+  "sourcePath": "Legacy.Maliev.FileService.Tests/Api/FileUploadRouteHttpAdmissionTests.cs",
+  "sourceSha256": "8eee7c6b4b839e9dfb90451a9302834e6552670707e84d161dc6eca116522662",
+  "baselineFullCount": 1576,
+  "additionalCases": 25,
+  "expectedFullCount": 1601,
+  "observedOriginalFullTrxSha256": "5c8f1ed750c3862684fedf8c4bb51f86f9118189d3049c93298409a8f5d775ab",
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"BUCKET\", variant: \"empty\", replayKey: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"BUCKET\", variant: \"empty\", replayKey: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"Bucket\", variant: \"different\", replayKey: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"Bucket\", variant: \"different\", replayKey: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"PATH\", variant: \"empty\", replayKey: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"PATH\", variant: \"empty\", replayKey: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"Path\", variant: \"different\", replayKey: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"Path\", variant: \"different\", replayKey: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"bucket\", variant: \"same\", replayKey: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"bucket\", variant: \"same\", replayKey: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"path\", variant: \"same\", replayKey: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay(field: \"path\", variant: \"same\", replayKey: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"bucket\", identity: \"anonymous\", enabled: True, expected: Unauthorized)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"bucket\", identity: \"valid\", enabled: False, expected: ServiceUnavailable)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"bucket\", identity: \"without-required-permission\", enabled: True, expected: Forbidden)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"bucket\", identity: \"wrong-signature\", enabled: True, expected: Unauthorized)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"path\", identity: \"anonymous\", enabled: True, expected: Unauthorized)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"path\", identity: \"valid\", enabled: False, expected: ServiceUnavailable)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"path\", identity: \"without-required-permission\", enabled: True, expected: Forbidden)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence(field: \"path\", identity: \"wrong-signature\", enabled: True, expected: Unauthorized)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesExistingFileValidationResponse",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesExistingFileValidationResponse(field: \"bucket\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "RepeatedUploadCoordinate_PreservesExistingFileValidationResponse",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.RepeatedUploadCoordinate_PreservesExistingFileValidationResponse(field: \"path\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape(path: \"\", expectedPath: null)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape(path: \"orders +\u0e44\u0e17\u0e22\", expectedPath: \"orders +\u0e44\u0e17\u0e22\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests",
+      "method": "SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests.SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape(path: null, expectedPath: null)",
+      "executions": 1
+    }
+  ]
+}

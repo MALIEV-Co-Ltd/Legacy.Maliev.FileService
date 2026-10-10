@@ -116,11 +116,48 @@ def verify_focus_rows(rows, baseline, inventory=None):
     return rows
 
 
+UPLOAD_COORDINATE_INVENTORY = "docs/upload-coordinate25-inventory.json"
+UPLOAD_COORDINATE_INVENTORY_SHA256 = "7f5a674e1c538bc5cd989e4001f1674aab4717382175175c7d09e7e82ac87972"
+UPLOAD_COORDINATE_TEST = "Legacy.Maliev.FileService.Tests/Api/FileUploadRouteHttpAdmissionTests.cs"
+UPLOAD_COORDINATE_TEST_SHA256 = "8eee7c6b4b839e9dfb90451a9302834e6552670707e84d161dc6eca116522662"
+
+
+def reviewed_upload_additions(inventory_path=None, source_path=None):
+    raw = Path(inventory_path or UPLOAD_COORDINATE_INVENTORY).read_bytes()
+    require(digest(raw) == UPLOAD_COORDINATE_INVENTORY_SHA256, "Reviewed upload inventory changed")
+    additions = json.loads(raw)
+    require(digest(Path(source_path or UPLOAD_COORDINATE_TEST).read_bytes()) == UPLOAD_COORDINATE_TEST_SHA256,
+            "Reviewed upload test source changed")
+    require(additions["sourcePath"] == UPLOAD_COORDINATE_TEST
+            and additions["sourceSha256"] == UPLOAD_COORDINATE_TEST_SHA256
+            and additions["baselineFullCount"] == 1576 and additions["additionalCases"] == 25
+            and additions["expectedFullCount"] == 1601, "Unexpected reviewed upload scope")
+    identities = Counter()
+    methods = Counter()
+    for row in additions["rows"]:
+        require(row["class"] == "Legacy.Maliev.FileService.Tests.Api.FileUploadRouteHttpAdmissionTests"
+                and row["executions"] == 1, "Unexpected reviewed upload identity")
+        identity = (row["class"], row["method"], row["testName"])
+        require(identity not in identities, "Duplicate reviewed upload identity")
+        identities[identity] = 1
+        methods[row["method"]] += 1
+    require(methods == Counter({"RepeatedUploadCoordinate_PreservesActualAuthorityBeforeStorageOrReplay": 12,
+                               "RepeatedUploadCoordinate_PreservesAuthenticationAndWriteGatePrecedence": 8,
+                               "SingleUploadCoordinates_PreserveOptionalPathMultipartBytesAndCreatedWireShape": 3,
+                               "RepeatedUploadCoordinate_PreservesExistingFileValidationResponse": 2}),
+            "Reviewed upload case groups changed")
+    return identities
+
+
 def verify_full(path, inventory):
     rows = read_trx(path)
-    require(len(rows) == 1576 and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass all1576")
+    additions = reviewed_upload_additions()
+    require(len(rows) == 1601 and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass all1601")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    require(sum(prior.values()) == 1567 and Counter((r["class"], r["method"], r["name"]) for r in rows) == prior + new_identities(), "Full suite changed accepted1567 identities")
+    expected = prior + new_identities() + additions
+    require(sum(prior.values()) == 1567 and sum(expected.values()) == 1601
+            and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
+            "Full suite changed accepted1576 or reviewed25 identities")
     verify_focus_rows([r for r in rows if r["class"] == CLASS], False, inventory)
     return rows
 
