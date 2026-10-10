@@ -19,6 +19,11 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_SatisfiesStructuralContract()
     {
         WorkflowContractValidator.Validate(Workflow);
+        AssertMutationRejected("timeout-minutes: 45", "timeout-minutes: 46");
+        AssertMutationRejected("timeout-minutes: 25", "timeout-minutes: 26");
+        AssertMutationRejected("fetch-depth: 0", "fetch-depth: 1");
+        AssertMutationRejected("python3 -B scripts/prove_local_date.py runner-results", "python3 -B scripts/prove_local_date.py other-results");
+        AssertMutationRejected("-p test_prove_local_date.py", "-p other_controls.py");
     }
 
     [Theory]
@@ -301,10 +306,11 @@ internal static partial class WorkflowContractValidator
         }
 
         RequireScalarValue(validateJob, "name", "validate");
+        RequireScalarValue(validateJob, "timeout-minutes", "45");
         RejectDuplicatedValidationActionsAndCommands(jobs);
 
         var steps = RequireSequence(validateJob, "steps");
-        if (steps.Children.Count != 12)
+        if (steps.Children.Count != 13)
         {
             throw new InvalidOperationException("Validate job must contain the pinned dependencies, exact startup SDK/focus steps, shared validation, and evidence gates.");
         }
@@ -320,7 +326,16 @@ internal static partial class WorkflowContractValidator
         RequireScalarValue(environment, "VSTestLogger", "trx");
         RequireScalarValue(environment, "VSTestResultsDirectory", "${{ github.workspace }}/runner-results");
 
-        var gate = RequireMapping(steps.Children[10], "coverage gate");
+        var causal = RequireMapping(steps.Children[10], "local date causal proof");
+        if (causal.Children.Count != 3)
+        {
+            throw new InvalidOperationException("Causal proof must contain only name, timeout and run.");
+        }
+
+        RequireScalarValue(causal, "name", "Prove legacy machine-local upload date causally");
+        RequireScalarValue(causal, "timeout-minutes", "25");
+        RequireScalarValue(causal, "run", "python3 -B -m unittest discover -s scripts -p test_prove_local_date.py\npython3 -B scripts/prove_local_date.py runner-results");
+        var gate = RequireMapping(steps.Children[11], "coverage gate");
         if (gate.Children.Count != 2)
         {
             throw new InvalidOperationException("Coverage gate must contain only name and run.");
@@ -328,7 +343,7 @@ internal static partial class WorkflowContractValidator
 
         RequireScalarValue(gate, "name", "Gate owned production coverage");
         RequireScalarValue(gate, "run", "python3 scripts/verify-runner-coverage.py runner-results");
-        var evidence = RequireMapping(steps.Children[11], "evidence upload");
+        var evidence = RequireMapping(steps.Children[12], "evidence upload");
         if (evidence.Children.Count != 4)
         {
             throw new InvalidOperationException("Evidence upload must contain exactly name, if, uses and with.");
@@ -354,6 +369,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["persist-credentials"] = "false",
+                ["fetch-depth"] = "0",
             });
         ValidateStep(
             steps.Children[1],

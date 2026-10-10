@@ -38,8 +38,10 @@ public sealed class ObjectNamePolicyTests
             Options.Create(new FileStorageOptions { AllowedBuckets = ["maliev.com"] }), clock);
         var uploadId = Guid.Parse("01234567-89ab-cdef-0123-456789abcdef");
 
-        Assert.Equal($"uploads/{expectedDate}/{uploadId}/part.stl",
-            localPolicy.BuildFinalObjectName(null, "PART.STL", uploadId));
+        var expectedPath = $"uploads/{expectedDate}/{uploadId}/part.stl";
+        var actualPath = localPolicy.BuildFinalObjectName(null, "PART.STL", uploadId);
+        Assert.True(expectedPath == actualPath,
+            $"Legacy upload date path mismatch; expected path={expectedPath}; actual path={actualPath}.");
         Assert.Equal("uploads/customer/part.stl",
             localPolicy.BuildFinalObjectName("Uploads\\Customer/", "PART.STL", uploadId));
     }
