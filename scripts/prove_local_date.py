@@ -23,6 +23,8 @@ CASES = [("2026-07-15T18:00:00Z", 7, "2026-7-16"), ("2026-07-31T18:00:00Z", 7, "
 OLD = "9bf31c5ab0f72ef1fcbd6afbde4d51da59ec6826"
 CONTROLLER = "Legacy.Maliev.FileService.Application/Services/ObjectNamePolicy.cs"
 TEST = "Legacy.Maliev.FileService.Tests/Application/ObjectNamePolicyTests.cs"
+BASELINE_BLOB = "ef56c94c81e3f70285df9ec102ee070935990f18"
+BASELINE_SHA256 = "581a73156f78913cff6acd86f375ddf9f777d6a0458959fd17e182e629a655db"
 NS = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
 
 
@@ -166,6 +168,41 @@ def record_group_exit(record, receipt, commands, probe=None, now=time.monotonic,
         receipt.write_text(json.dumps(commands, indent=2) + "\n")
 
 
+def verify_baseline_identity(commit, blob_identity, data):
+    require(commit == OLD, "Fetched baseline commit differs from immutable pin")
+    require(blob_identity == BASELINE_BLOB and digest(data) == BASELINE_SHA256,
+            "Accepted baseline policy blob/hash mismatch")
+    return data
+
+
+def fetch_baseline(output):
+    timeout = shutil.which("timeout")
+    git = shutil.which("git")
+    require(timeout and git, "Missing bounded provenance tools")
+    command = [timeout, "--signal=TERM", "--kill-after=5s", "30s", git, "fetch", "--no-tags",
+               "--no-recurse-submodules", "--depth=1",
+               "https://github.com/MALIEV-Co-Ltd/Legacy.Maliev.FileService.git", OLD]
+    record = {"name": "immutable-baseline-fetch", "command": command,
+              "startedUtc": datetime.now(timezone.utc).isoformat()}
+    with (output / "baseline-fetch.log").open("wb") as log:
+        with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as process:
+            record["pid"] = process.pid
+            stat = Path(f"/proc/{process.pid}/stat").read_text()
+            record["kernelStartTicks"] = stat[stat.rfind(")") + 2:].split()[19]
+            record["executable"] = os.readlink(f"/proc/{process.pid}/exe")
+            record["returnCode"] = process.wait()
+            record["exitVerified"] = process.poll() is not None
+            record_group_exit(record, output / "baseline-fetch-custody.json", [record])
+    require(record["returnCode"] == 0, "Immutable baseline fetch failed")
+    commit = subprocess.check_output([git, "rev-parse", "FETCH_HEAD"], timeout=20).decode().strip()
+    blob_identity = subprocess.check_output([git, "rev-parse", OLD + ":" + CONTROLLER], timeout=20).decode().strip()
+    data = subprocess.check_output([git, "show", OLD + ":" + CONTROLLER], timeout=20)
+    original = verify_baseline_identity(commit, blob_identity, data)
+    (output / "baseline-provenance.json").write_text(json.dumps(
+        {"commit": commit, "blob": blob_identity, "sha256": digest(original)}, indent=2) + "\n")
+    return original
+
+
 def main():
     require(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true", "Hosted ordinary runner only; no local SDK custody")
     root = Path(sys.argv[1]).resolve()
@@ -178,7 +215,7 @@ def main():
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], timeout=20).decode().strip()
     require(subprocess.check_output(["git", "show", head + ":" + CONTROLLER], timeout=20) == corrected
             and subprocess.check_output(["git", "show", head + ":" + TEST], timeout=20) == test_bytes, "Dirty source inputs")
-    original = subprocess.check_output(["git", "show", OLD + ":" + CONTROLLER], timeout=20)
+    original = fetch_baseline(output)
     require(corrected.count(b"timeProvider.GetLocalNow()") == 1 and
             corrected.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()") == original,
             "Correction-disabled policy is not exact accepted source")

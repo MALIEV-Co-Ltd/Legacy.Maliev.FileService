@@ -65,3 +65,10 @@ class ProofTests(unittest.TestCase):
         with unittest.mock.patch("prove_local_date.read_trx", return_value=self.rows(False)):
             with self.assertRaises(ValueError):
                 verify_full("synthetic", prior_inventory())
+
+    def test_immutable_baseline_provenance_rejects_wrong_commit_blob_or_bytes(self):
+        data = Path(CONTROLLER).read_bytes().replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()")
+        self.assertEqual(data, verify_baseline_identity(OLD, BASELINE_BLOB, data))
+        for commit, blob, content in [("0" * 40, BASELINE_BLOB, data), (OLD, "0" * 40, data), (OLD, BASELINE_BLOB, data + b"\n")]:
+            with self.assertRaises(ValueError):
+                verify_baseline_identity(commit, blob, content)

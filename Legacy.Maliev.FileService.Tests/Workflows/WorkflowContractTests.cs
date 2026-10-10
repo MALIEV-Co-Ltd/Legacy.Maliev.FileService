@@ -21,7 +21,6 @@ public sealed class WorkflowContractTests
         WorkflowContractValidator.Validate(Workflow);
         AssertMutationRejected("timeout-minutes: 45", "timeout-minutes: 46");
         AssertMutationRejected("timeout-minutes: 25", "timeout-minutes: 26");
-        AssertMutationRejected("fetch-depth: 0", "fetch-depth: 1");
         AssertMutationRejected("python3 -B scripts/prove_local_date.py runner-results", "python3 -B scripts/prove_local_date.py other-results");
         AssertMutationRejected("-p test_prove_local_date.py", "-p other_controls.py");
     }
@@ -369,7 +368,6 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["persist-credentials"] = "false",
-                ["fetch-depth"] = "0",
             });
         ValidateStep(
             steps.Children[1],
