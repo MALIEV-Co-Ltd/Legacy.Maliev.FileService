@@ -72,3 +72,65 @@ class ProofTests(unittest.TestCase):
         for commit, blob, content in [("0" * 40, BASELINE_BLOB, data), (OLD, "0" * 40, data), (OLD, BASELINE_BLOB, data + b"\n")]:
             with self.assertRaises(ValueError):
                 verify_baseline_identity(commit, blob, content)
+
+
+class ReviewedUploadRosterTests(unittest.TestCase):
+    def full_rows(self):
+        rows = [dict(**{"class": r["className"]}, method=r["method"], name=r["testName"],
+                     outcome="Passed", message="", stack="", errorInfo=False)
+                for r in prior_inventory()["rows"] for _ in range(r["executions"])]
+        rows += [dict(**{"class": CLASS}, method=METHOD, name=case_name(*case),
+                      outcome="Passed", message="", stack="", errorInfo=False) for case in CASES]
+        rows += [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                      message="", stack="", errorInfo=False)
+                 for cls, method, name in reviewed_upload_additions().elements()]
+        return rows
+
+    def test_exact_accepted1576_plus_reviewed25_passes(self):
+        import unittest.mock
+        rows = self.full_rows()
+        self.assertEqual(1601, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_full("controlled", prior_inventory()))
+
+    def test_roster_changes_and_nonpassing_results_fail_closed(self):
+        import unittest.mock
+        for mutation in ("dropped-baseline", "unreviewed-extra", "missing-new", "failed", "skipped",
+                         "duplicate-new", "same-count-baseline-replacement", "passing-with-error"):
+            with self.subTest(mutation=mutation):
+                rows = self.full_rows()
+                if mutation == "dropped-baseline":
+                    rows.pop(0)
+                elif mutation == "unreviewed-extra":
+                    rows.append(dict(rows[0], name="unreviewed"))
+                elif mutation == "missing-new":
+                    rows.pop()
+                elif mutation == "failed":
+                    rows[-1]["outcome"] = "Failed"
+                elif mutation == "skipped":
+                    rows[-1]["outcome"] = "Skipped"
+                elif mutation == "duplicate-new":
+                    rows[-1] = dict(rows[-2])
+                elif mutation == "same-count-baseline-replacement":
+                    rows[0] = dict(rows[0], name="unreviewed")
+                else:
+                    rows[-1]["errorInfo"] = True
+                with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+                    with self.assertRaises(ValueError):
+                        verify_full("controlled", prior_inventory())
+
+    def test_reviewed_inventory_and_source_byte_bindings_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = Path(directory) / "inventory.json"
+            source = Path(directory) / "source.cs"
+            original_inventory = Path(UPLOAD_COORDINATE_INVENTORY).read_bytes()
+            original_source = Path(UPLOAD_COORDINATE_TEST).read_bytes()
+            inventory.write_bytes(original_inventory)
+            source.write_bytes(original_source)
+            self.assertEqual(25, sum(reviewed_upload_additions(inventory, source).values()))
+            for changed in ("inventory", "source"):
+                with self.subTest(changed=changed):
+                    inventory.write_bytes(original_inventory + (b" " if changed == "inventory" else b""))
+                    source.write_bytes(original_source + (b" " if changed == "source" else b""))
+                    with self.assertRaises(ValueError):
+                        reviewed_upload_additions(inventory, source)
