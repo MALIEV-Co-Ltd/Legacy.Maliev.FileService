@@ -26,6 +26,8 @@ TEST = "Legacy.Maliev.FileService.Tests/Application/ObjectNamePolicyTests.cs"
 BASELINE_BLOB = "ef56c94c81e3f70285df9ec102ee070935990f18"
 BASELINE_SHA256 = "581a73156f78913cff6acd86f375ddf9f777d6a0458959fd17e182e629a655db"
 NS = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+NONPASSING_COUNTERS = {"error", "timeout", "aborted", "inconclusive", "passedButRunAborted",
+                      "notRunnable", "notExecuted", "disconnected", "warning", "completed", "inProgress", "pending"}
 
 
 def require(condition, message):
@@ -44,7 +46,7 @@ def trx_guid(value):
     return value.lower()
 
 
-def read_trx(path):
+def read_trx(path, strict_clean_run=True):
     tree = ET.parse(path)
     definitions = tree.findall("./t:TestDefinitions/t:UnitTest", NS)
     results = tree.findall("./t:Results/t:UnitTestResult", NS)
@@ -84,21 +86,31 @@ def read_trx(path):
                      "stack": result.findtext("t:Output/t:ErrorInfo/t:StackTrace", default="", namespaces=NS),
                      "errorInfo": result.find("t:Output/t:ErrorInfo", NS) is not None})
     require(seen == entry_ids, "Result/entry bijection mismatch")
-    summary = tree.find("./t:ResultSummary", NS)
-    require(summary is not None, "Missing result summary")
-    counters = summary.find("t:Counters", NS)
-    require(counters is not None, "Missing counters")
-    require({"total", "executed", "passed", "failed"}.issubset(counters.attrib), "Missing mandatory counters")
+    summaries = tree.findall("./t:ResultSummary", NS)
+    require(len(summaries) == 1, "Expected exactly one result summary")
+    summary = summaries[0]
+    counter_nodes = summary.findall("t:Counters", NS)
+    require(len(counter_nodes) == 1, "Expected exactly one counters element")
+    counters = counter_nodes[0]
+    require(not summary.findall(".//t:ErrorInfo", NS), "Run summary contains ErrorInfo")
+    require(({"total", "executed", "passed", "failed"} | NONPASSING_COUNTERS).issubset(counters.attrib),
+            "Missing mandatory counters")
     expected = {"total": len(rows), "executed": len(rows), "passed": sum(r["outcome"] == "Passed" for r in rows),
                 "failed": sum(r["outcome"] == "Failed" for r in rows)}
     for identity, value in counters.attrib.items():
         require(int(value) == expected.get(identity, 0), "Counter mismatch/skip/timeout")
     require(summary.get("outcome") == ("Failed" if expected["failed"] else "Completed"), "Summary outcome mismatch")
+    if strict_clean_run:
+        require(expected["failed"] == 0 and summary.get("outcome") == "Completed",
+                "Focus run must be clean Completed")
+        for info in tree.findall(".//t:RunInfo", NS):
+            require(info.get("outcome") in {"Passed", "Completed", "Information"}
+                    and not info.findall(".//t:ErrorInfo", NS), "Adverse focus RunInfo")
     return rows
 
 
 def verify_focus(path, baseline):
-    rows = read_trx(path)
+    rows = read_trx(path, strict_clean_run=not baseline)
     return verify_focus_rows(rows, baseline)
 
 
@@ -275,19 +287,52 @@ def reviewed_delete_additions(inventory_path=None, source_root=None):
             }), "Unexpected literal delete case groups")
     return identities
 
-def verify_full(path, inventory, include_literal_delete=True):
-    rows = read_trx(path)
+SIGNED_DOWNLOAD_INVENTORY = "docs/signed-download-async3-inventory.json"
+SIGNED_DOWNLOAD_INVENTORY_SHA256 = "152d869771086d16a527d2cb9bb94518e86603ec37ab5e1299914362a4d95a68"
+SIGNED_DOWNLOAD_CLASS = "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests"
+SIGNED_DOWNLOAD_METHODS = {
+    "AsyncSigning_WaitsForSignatureAndPreservesLiteralThaiIdentity",
+    "AsyncSigning_CancellationReachesPendingSignatureAndSettlesCaller",
+    "AsyncGenerationSigning_BindsGenerationAndSevenDayExpiryWithoutChangingObjectIdentity",
+}
+
+
+def reviewed_signed_download_additions(inventory_path=None, source_root=None):
+    raw = Path(inventory_path or SIGNED_DOWNLOAD_INVENTORY).read_bytes()
+    require(digest(raw) == SIGNED_DOWNLOAD_INVENTORY_SHA256, "Reviewed signed download inventory changed")
+    additions = json.loads(raw)
+    require(additions["baselineFullCount"] == 1637 and additions["additionalCases"] == 3
+            and additions["expectedFullCount"] == 1640, "Unexpected signed download scope")
+    source = "Legacy.Maliev.FileService.Tests/Data/LegacySignedDownloadAsyncBoundaryTests.cs"
+    require(len(additions["sources"]) == 1 and additions["sources"][0]["path"] == source,
+            "Unexpected signed download source scope")
+    require(digest((Path(source_root or ".") / source).read_bytes()) == additions["sources"][0]["sha256"],
+            "Reviewed signed download source changed")
+    actual = Counter()
+    for row in additions["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["executions"] == 1 and identity not in actual, "Duplicate signed download identity")
+        actual[identity] = 1
+    expected = Counter((SIGNED_DOWNLOAD_CLASS, method, SIGNED_DOWNLOAD_CLASS + "." + method)
+                       for method in SIGNED_DOWNLOAD_METHODS)
+    require(actual == expected, "Reviewed signed download identities changed")
+    return actual
+
+
+def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True):
+    rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
     startup_additions = reviewed_startup_additions()
     literal_additions = reviewed_delete_additions() if include_literal_delete else Counter()
-    expected_count = 1637 if include_literal_delete else 1614
+    signed_additions = reviewed_signed_download_additions() if include_literal_delete and include_signed_download else Counter()
+    expected_count = 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
-            "Full suite changed accepted1614 or reviewed literal deletion identities")
+            "Full suite changed accepted1637 or reviewed signed download identities")
     verify_focus_rows([r for r in rows if r["class"] == CLASS], False, inventory)
     return rows
 
@@ -502,6 +547,10 @@ def delete_correction_disabled(corrected):
     return disabled
 
 
+def verify_delete_focus(path, baseline):
+    return verify_delete_focus_rows(read_trx(path, strict_clean_run=not baseline), baseline)
+
+
 def prove_delete_causal(repo, output, run, build, tests, head, inventory):
     output.mkdir(exist_ok=False)
     service = repo / DELETE_SERVICE
@@ -518,7 +567,7 @@ def prove_delete_causal(repo, output, run, build, tests, head, inventory):
     try:
         require(run("delete-candidate-focus", focus + ["--logger", "trx;LogFileName=candidate.trx", "--results-directory", str(output)], 120, output) == 0,
                 "Delete candidate focus failed")
-        verify_delete_focus_rows(read_trx(output / "candidate.trx"), False)
+        verify_delete_focus(output / "candidate.trx", False)
         service.write_bytes(original)
         require(run("delete-baseline-build", build, 180, output) == 0, "Delete baseline build failed")
         build_ok(output / "delete-baseline-build.log")
@@ -526,7 +575,7 @@ def prove_delete_causal(repo, output, run, build, tests, head, inventory):
                 "Delete baseline source/tests changed")
         require(run("delete-baseline-focus", focus + ["--logger", "trx;LogFileName=baseline.trx", "--results-directory", str(output)], 120, output) == 1,
                 "Delete baseline exit is not exactly one")
-        verify_delete_focus_rows(read_trx(output / "baseline.trx"), True)
+        verify_delete_focus(output / "baseline.trx", True)
     except BaseException as exception:
         error = exception
     finally:

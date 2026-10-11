@@ -54,7 +54,8 @@ class ProofTests(unittest.TestCase):
         results = ET.SubElement(root, n + "Results")
         result = ET.SubElement(results, n + "UnitTestResult", testId=test_id, testName="case1", executionId=execution_id, outcome="Passed")
         summary = ET.SubElement(root, n + "ResultSummary", outcome="Completed")
-        counters = ET.SubElement(summary, n + "Counters", total="1", executed="1", passed="1", failed="0", timeout="0")
+        counters = ET.SubElement(summary, n + "Counters", total="1", executed="1", passed="1", failed="0",
+                                 **{key: "0" for key in NONPASSING_COUNTERS})
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "result.trx"
             ET.ElementTree(root).write(p)
@@ -264,6 +265,72 @@ class ReviewedStartupRosterTests(unittest.TestCase):
 
 
 class TrxEntryJoinTests(unittest.TestCase):
+    def test_duplicate_summary_counters_and_run_error_info_reject(self):
+        import copy
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        for mutation in ("summary", "counters", "error-info"):
+            def mutate(root, definitions, results, entries):
+                summary = root.find(n + "ResultSummary")
+                if mutation == "summary":
+                    root.append(copy.deepcopy(summary))
+                elif mutation == "counters":
+                    summary.append(copy.deepcopy(summary.find(n + "Counters")))
+                else:
+                    ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+            with self.subTest(mutation=mutation):
+                self.verify_rejected(mutate)
+
+    def test_missing_mandatory_and_nonzero_optional_counters_reject(self):
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        for key in ("total", "executed", "passed", "failed", "timeout", "error", "warning",
+                    "aborted", "inconclusive", "passedButRunAborted", "notRunnable",
+                    "notExecuted", "disconnected", "completed", "inProgress", "pending"):
+            def mutate(root, definitions, results, entries):
+                counters = root.find(n + "ResultSummary/" + n + "Counters")
+                if key in {"total", "executed", "passed", "failed"}:
+                    counters.attrib.pop(key)
+                else:
+                    counters.set(key, "1")
+            with self.subTest(counter=key):
+                self.verify_rejected(mutate)
+
+    def test_clean_focus_rejects_adverse_run_infos(self):
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "focus.trx"
+            for outcome in ("Information", "Error", "Warning", "Aborted", "unknown", ""):
+                root, _, _, _ = self.fixture()
+                summary = root.find(n + "ResultSummary")
+                ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome=outcome)
+                ET.ElementTree(root).write(path)
+                if outcome == "Information":
+                    self.assertEqual(2, len(read_trx(path, strict_clean_run=True)))
+                else:
+                    with self.assertRaises(ValueError):
+                        read_trx(path, strict_clean_run=True)
+
+    def test_every_missing_nonpassing_counter_rejects(self):
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        for key in NONPASSING_COUNTERS:
+            def mutate(root, definitions, results, entries):
+                root.find(n + "ResultSummary/" + n + "Counters").attrib.pop(key)
+            with self.subTest(counter=key):
+                self.verify_rejected(mutate)
+
+    def test_clean_focus_rejects_failed_or_incomplete_summary(self):
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "focus.trx"
+            for outcome in ("Failed", "Aborted", "InProgress", ""):
+                root, _, _, _ = self.fixture()
+                root.find(n + "ResultSummary").set("outcome", outcome)
+                ET.ElementTree(root).write(path)
+                with self.assertRaises(ValueError):
+                    read_trx(path, strict_clean_run=True)
+
     def fixture(self):
         import xml.etree.ElementTree as ET
         n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
@@ -281,7 +348,8 @@ class TrxEntryJoinTests(unittest.TestCase):
                           testName=f"case{index}", outcome="Passed")
             ET.SubElement(entries, n + "TestEntry", testId=identity, executionId=execution)
         summary = ET.SubElement(root, n + "ResultSummary", outcome="Completed")
-        ET.SubElement(summary, n + "Counters", total="2", executed="2", passed="2", failed="0")
+        ET.SubElement(summary, n + "Counters", total="2", executed="2", passed="2", failed="0",
+                      **{key: "0" for key in NONPASSING_COUNTERS})
         return root, definitions, results, entries
 
     def verify_rejected(self, mutate):
@@ -345,7 +413,7 @@ class ReviewedDeleteLiteralRosterTests(unittest.TestCase):
         rows = self.candidate_rows()
         self.assertEqual(1637, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
-            self.assertEqual(rows, verify_full("controlled", prior_inventory()))
+            self.assertEqual(rows, verify_full("controlled", prior_inventory(), include_signed_download=False))
         self.assertEqual(Counter((row["class"], row["method"], row["name"]) for row in rows[:1614]),
                          Counter((row["class"], row["method"], row["name"]) for row in ReviewedUploadRosterTests.full_rows(self)))
 
@@ -367,7 +435,7 @@ class ReviewedDeleteLiteralRosterTests(unittest.TestCase):
                 rows[-1]["errorInfo"] = True
             with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
                 with self.assertRaises(ValueError):
-                    verify_full("mutated", prior_inventory())
+                    verify_full("mutated", prior_inventory(), include_signed_download=False)
 
     def test_literal_inventory_and_both_source_bindings_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -389,6 +457,147 @@ class ReviewedDeleteLiteralRosterTests(unittest.TestCase):
                                 else "Reviewed literal delete test source changed")
                     with self.assertRaisesRegex(ValueError, expected):
                         reviewed_delete_additions(inventory, root)
+
+class ReviewedSignedDownloadRosterTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedDeleteLiteralRosterTests.candidate_rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_signed_download_additions().elements()
+        ]
+
+    def test_exact_accepted1637_plus_signed3_passes(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1640, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_full("controlled", prior_inventory()))
+        self.assertEqual(ReviewedDeleteLiteralRosterTests.candidate_rows(self), rows[:1637])
+
+    def test_old_roster_replacement_duplicate_failed_skipped_and_passing_error_reject(self):
+        import unittest.mock
+        for mutation in ("old1637", "replacement", "duplicate", "failed", "skipped", "passing-error"):
+            with self.subTest(mutation=mutation):
+                rows = self.rows()
+                if mutation == "old1637":
+                    rows = rows[:1637]
+                elif mutation == "replacement":
+                    rows[-1]["name"] = "unreviewed"
+                elif mutation == "duplicate":
+                    rows[-1] = dict(rows[-2])
+                elif mutation == "passing-error":
+                    rows[-1]["errorInfo"] = True
+                else:
+                    rows[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+                with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+                    with self.assertRaises(ValueError):
+                        verify_full("mutated", prior_inventory())
+
+    def test_inventory_and_reviewed_source_bytes_are_bound(self):
+        raw = Path(SIGNED_DOWNLOAD_INVENTORY).read_bytes()
+        source = json.loads(raw)["sources"][0]["path"]
+        content = Path(source).read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory = root / "inventory.json"
+            target = root / source
+            target.parent.mkdir(parents=True)
+            for mutation in (None, "inventory", "source"):
+                inventory.write_bytes(raw + (b" " if mutation == "inventory" else b""))
+                target.write_bytes(content + (b" " if mutation == "source" else b""))
+                if mutation is None:
+                    self.assertEqual(3, sum(reviewed_signed_download_additions(inventory, root).values()))
+                else:
+                    with self.assertRaises(ValueError):
+                        reviewed_signed_download_additions(inventory, root)
+
+
+class CleanAcceptancePathTests(unittest.TestCase):
+    def fixture(self, rows):
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        root = ET.Element(n + "TestRun")
+        definitions = ET.SubElement(root, n + "TestDefinitions")
+        results = ET.SubElement(root, n + "Results")
+        entries = ET.SubElement(root, n + "TestEntries")
+        for index, row in enumerate(rows, 1):
+            identity = f"00000000-0000-4000-8000-{index:012d}"
+            execution = f"00000000-0000-4000-9000-{index:012d}"
+            definition = ET.SubElement(definitions, n + "UnitTest", id=identity, name=row["name"])
+            ET.SubElement(definition, n + "TestMethod", className=row["class"], name=row["method"])
+            ET.SubElement(definition, n + "Execution", id=execution)
+            result = ET.SubElement(results, n + "UnitTestResult", testId=identity, executionId=execution,
+                                   testName=row["name"], outcome=row["outcome"])
+            ET.SubElement(entries, n + "TestEntry", testId=identity, executionId=execution)
+            if row["errorInfo"]:
+                error = ET.SubElement(ET.SubElement(result, n + "Output"), n + "ErrorInfo")
+                ET.SubElement(error, n + "Message").text = row["message"]
+                ET.SubElement(error, n + "StackTrace").text = row["stack"]
+        failed = sum(row["outcome"] == "Failed" for row in rows)
+        summary = ET.SubElement(root, n + "ResultSummary", outcome="Failed" if failed else "Completed")
+        ET.SubElement(summary, n + "Counters", total=str(len(rows)), executed=str(len(rows)),
+                      passed=str(len(rows) - failed), failed=str(failed), **{key: "0" for key in NONPASSING_COUNTERS})
+        return root
+
+    def paths(self):
+        full = ReviewedSignedDownloadRosterTests.rows(self)
+        signing = [row for row in full if row["class"] in {
+            SIGNED_DOWNLOAD_CLASS, "Legacy.Maliev.FileService.Tests.Data.GoogleCloudObjectStorageSignedUrlTests"}]
+        startup = [row for row in full if row["class"].endswith(".FileStartupBoundaryTests")]
+        self.assertEqual(11, len(signing))
+        self.assertEqual(15, len(startup))
+        return [
+            ("startup-default15", self.fixture(startup), read_trx),
+            ("signing11", self.fixture(signing), lambda path: read_trx(path, strict_clean_run=True)),
+            ("date-candidate14", self.fixture(ProofTests.rows(self, False)), lambda path: verify_focus(path, False)),
+            ("delete-candidate23", self.fixture(DeleteCausalProofTests.rows(self, False)), lambda path: verify_delete_focus(path, False)),
+            *((name, self.fixture(full), lambda path: verify_full(path, prior_inventory())) for name in
+              ("original-full1640", "date-restored1640", "delete-restored1640")),
+        ]
+
+    def test_every_candidate_full_and_required_focus_rejects_adverse_run_evidence(self):
+        import copy
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "acceptance.trx"
+            for name, root, reader in self.paths():
+                ET.ElementTree(root).write(path)
+                reader(path)  # Positive control must reach and pass the real roster gate.
+                for mutation in ("RunInfo", "ErrorInfo", "duplicate-summary", "missing-nonpassing-counter"):
+                    changed = copy.deepcopy(root)
+                    summary = changed.find(n + "ResultSummary")
+                    if mutation == "RunInfo":
+                        ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome="Error")
+                    elif mutation == "ErrorInfo":
+                        ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+                    elif mutation == "duplicate-summary":
+                        changed.append(copy.deepcopy(summary))
+                    else:
+                        summary.find(n + "Counters").attrib.pop("notExecuted")
+                    ET.ElementTree(changed).write(path)
+                    with self.subTest(path=name, mutation=mutation):
+                        with self.assertRaisesRegex(ValueError, "RunInfo|ErrorInfo|summary|counters"):
+                            reader(path)
+
+    def test_only_explicit_baselines_accept_expected_failed_run_infos(self):
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        cases = [(ProofTests.rows(self, True), lambda path: verify_focus(path, True), 6),
+                 (DeleteCausalProofTests.rows(self, True), lambda path: verify_delete_focus(path, True), 13)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.trx"
+            for rows, reader, failures in cases:
+                root = self.fixture(rows)
+                ET.SubElement(ET.SubElement(root.find(n + "ResultSummary"), n + "RunInfos"),
+                              n + "RunInfo", outcome="Error")
+                ET.ElementTree(root).write(path)
+                reader(path)
+                self.assertEqual(failures, sum(row["outcome"] == "Failed"
+                                             for row in read_trx(path, strict_clean_run=False)))
+                with self.assertRaises(ValueError):
+                    read_trx(path)
+
 
 class DeleteCausalProofTests(unittest.TestCase):
     def rows(self, baseline):
