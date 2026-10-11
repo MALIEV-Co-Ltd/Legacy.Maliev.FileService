@@ -548,7 +548,7 @@ class CleanAcceptancePathTests(unittest.TestCase):
         self.assertEqual(15, len(startup))
         return [
             ("startup-default15", self.fixture(startup), read_trx),
-            ("signing11", self.fixture(signing), lambda path: read_trx(path, strict_clean_run=True)),
+            ("signing11", self.fixture(signing), verify_signing_focus),
             ("date-candidate14", self.fixture(ProofTests.rows(self, False)), lambda path: verify_focus(path, False)),
             ("delete-candidate23", self.fixture(DeleteCausalProofTests.rows(self, False)), lambda path: verify_delete_focus(path, False)),
             *((name, self.fixture(full), lambda path: verify_full(path, prior_inventory())) for name in
@@ -597,6 +597,52 @@ class CleanAcceptancePathTests(unittest.TestCase):
                                              for row in read_trx(path, strict_clean_run=False)))
                 with self.assertRaises(ValueError):
                     read_trx(path)
+
+
+class SigningFocusCollectorTests(unittest.TestCase):
+    def rows(self):
+        full = ReviewedSignedDownloadRosterTests.rows(self)
+        return [row for row in full if row["class"] in {SIGNED_DOWNLOAD_CLASS, SIGNED_EXISTING_CLASS}]
+
+    def test_exact_eight_plus_three_strict_focus_passes(self):
+        import xml.etree.ElementTree as ET
+        rows = self.rows()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "signing11.trx"
+            ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(path)
+            self.assertEqual(11, len(verify_signing_focus(path)))
+
+    def test_old_eight_replacement_duplicate_and_nonpassing_reject(self):
+        import xml.etree.ElementTree as ET
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "signing11.trx"
+            for mutation in ("old8", "replacement", "duplicate", "failed", "skipped", "passing-error"):
+                rows = self.rows()
+                if mutation == "old8":
+                    rows = [row for row in rows if row["class"] == SIGNED_EXISTING_CLASS]
+                elif mutation == "replacement":
+                    rows[-1]["name"] = "unreviewed"
+                elif mutation == "duplicate":
+                    rows[-1] = dict(rows[-2])
+                elif mutation == "passing-error":
+                    rows[-1]["errorInfo"] = True
+                else:
+                    rows[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+                ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_signing_focus(path)
+
+    def test_existing_signing_source_pin_rejects_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / SIGNED_EXISTING_TEST
+            target.parent.mkdir(parents=True)
+            content = Path(SIGNED_EXISTING_TEST).read_bytes()
+            target.write_bytes(content)
+            self.assertEqual(8, sum(reviewed_existing_signing_identities(root).values()))
+            target.write_bytes(content + b" ")
+            with self.assertRaisesRegex(ValueError, "existing signing test source changed"):
+                reviewed_existing_signing_identities(root)
 
 
 class DeleteCausalProofTests(unittest.TestCase):

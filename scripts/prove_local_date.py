@@ -295,6 +295,9 @@ SIGNED_DOWNLOAD_METHODS = {
     "AsyncSigning_CancellationReachesPendingSignatureAndSettlesCaller",
     "AsyncGenerationSigning_BindsGenerationAndSevenDayExpiryWithoutChangingObjectIdentity",
 }
+SIGNED_EXISTING_CLASS = "Legacy.Maliev.FileService.Tests.Data.GoogleCloudObjectStorageSignedUrlTests"
+SIGNED_EXISTING_TEST = "Legacy.Maliev.FileService.Tests/Data/GoogleCloudObjectStorageSignedUrlTests.cs"
+SIGNED_EXISTING_TEST_SHA256 = "c834b82b19ec938339dd7efc91a527171986d86640e29798b715b133c132abb8"
 
 
 def reviewed_signed_download_additions(inventory_path=None, source_root=None):
@@ -317,6 +320,25 @@ def reviewed_signed_download_additions(inventory_path=None, source_root=None):
                        for method in SIGNED_DOWNLOAD_METHODS)
     require(actual == expected, "Reviewed signed download identities changed")
     return actual
+
+
+def reviewed_existing_signing_identities(source_root=None):
+    require(digest((Path(source_root or ".") / SIGNED_EXISTING_TEST).read_bytes()) == SIGNED_EXISTING_TEST_SHA256,
+            "Reviewed existing signing test source changed")
+    expected = Counter({(row["className"], row["method"], row["testName"]): row["executions"]
+                        for row in prior_inventory()["rows"] if row["className"] == SIGNED_EXISTING_CLASS})
+    require(sum(expected.values()) == 8 and all(count == 1 for count in expected.values()),
+            "Accepted signing eight identities changed")
+    return expected
+
+
+def verify_signing_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    expected = reviewed_existing_signing_identities() + reviewed_signed_download_additions()
+    require(len(rows) == 11 and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+            and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Signing focus must pass exact accepted eight plus reviewed three")
+    return rows
 
 
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True):
@@ -599,6 +621,26 @@ def prove_delete_causal(repo, output, run, build, tests, head, inventory):
                "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir() if p.suffix in {".trx", ".log"}}}
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
 
+def prove_signing_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    reviewed_existing_signing_identities()
+    reviewed_signed_download_additions()
+    additional_source = json.loads(Path(SIGNED_DOWNLOAD_INVENTORY).read_text())["sources"][0]["path"]
+    frozen = {path: (repo / path).read_bytes() for path in (SIGNED_EXISTING_TEST, additional_source)}
+    require(run("signing11", tests + ["--filter",
+                "FullyQualifiedName~LegacySignedDownloadAsyncBoundaryTests|FullyQualifiedName~GoogleCloudObjectStorageSignedUrlTests",
+                "--logger", "trx;LogFileName=signing11.trx", "--results-directory", str(output)],
+                120, output) == 0, "Signing focus execution failed")
+    rows = verify_signing_focus(output / "signing11.trx")
+    require(all((repo / path).read_bytes() == content for path, content in frozen.items()),
+            "Signing focused source custody changed")
+    receipt = {"head": head, "acceptedEightPlusThreePassed": len(rows),
+               "immutableTests": {path: digest(data) for path, data in frozen.items()},
+               "rawFiles": {path.name: digest(path.read_bytes()) for path in output.iterdir()
+                            if path.suffix in {".trx", ".log"}}, "sourceUnchanged": True}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
 def main():
     require(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true", "Hosted ordinary runner only; no local SDK custody")
     root = Path(sys.argv[1]).resolve()
@@ -680,6 +722,8 @@ def main():
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     commands = []
     prove_delete_causal(repo, root / "delete-literal-causal", run, build, tests, head, inventory)
+    commands = []
+    prove_signing_focus(repo, root / "signed-download-focus", run, tests, head)
 
 
 if __name__ == "__main__":
