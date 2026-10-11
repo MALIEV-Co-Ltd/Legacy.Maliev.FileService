@@ -1,0 +1,155 @@
+{
+  "baselineFullCount": 1614,
+  "additionalCases": 23,
+  "expectedFullCount": 1637,
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Application/FileDeleteLiteralIdentityTests.cs",
+      "sha256": "27433d87f0c6537e539f11d3ac2d2d99c8b272de535ddb398690efb2f146e420"
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Integration/LegacyLiteralDeleteHttpBoundaryTests.cs",
+      "sha256": "33d6f1cd54b8e08d70af91a01407f87f0d0eb9a9dbad5a1de4f04e2a8ffe4eec"
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_LeadingSpace_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_LeadingSpace_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_TrailingSpace_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_TrailingSpace_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_Case_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_Case_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ComposedUnicode_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ComposedUnicode_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_DecomposedUnicode_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_DecomposedUnicode_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_Backslash_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_Backslash_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_LeadingSlash_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_LeadingSlash_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_RepeatedSlash_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_RepeatedSlash_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_TrailingSlash_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_TrailingSlash_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_Punctuation_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_Punctuation_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_Thai_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_Thai_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ThaiDecomposedLiteral_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ThaiDecomposedLiteral_PreservesLiteralIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ControlPrefix_RejectsBeforeBoundaryCalls",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ControlPrefix_RejectsBeforeBoundaryCalls",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ControlSuffix_RejectsBeforeBoundaryCalls",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ControlSuffix_RejectsBeforeBoundaryCalls",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ParentTraversal_RejectsBeforeBoundaryCalls",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ParentTraversal_RejectsBeforeBoundaryCalls",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_CurrentTraversal_RejectsBeforeBoundaryCalls",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_CurrentTraversal_RejectsBeforeBoundaryCalls",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ReservedSlashAlias_RejectsBeforeBoundaryCalls",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ReservedSlashAlias_RejectsBeforeBoundaryCalls",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ReservedBackslashAlias_RejectsBeforeBoundaryCalls",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ReservedBackslashAlias_RejectsBeforeBoundaryCalls",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_MissingMetadata_PreservesMetadata",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_MissingMetadata_PreservesMetadata",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+      "method": "Delete_ProviderFailure_PreservesMetadata",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests.Delete_ProviderFailure_PreservesMetadata",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests",
+      "method": "LiteralOnly_DeletesExactObjectAndMetadata",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests.LiteralOnly_DeletesExactObjectAndMetadata",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests",
+      "method": "LiteralAndDecoy_DeletesLiteralAndRetainsDecoy",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests.LiteralAndDecoy_DeletesLiteralAndRetainsDecoy",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests",
+      "method": "MissingLiteralWithDecoy_LeavesProviderAndMetadataUntouched",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests.MissingLiteralWithDecoy_LeavesProviderAndMetadataUntouched",
+      "executions": 1
+    }
+  ]
+}

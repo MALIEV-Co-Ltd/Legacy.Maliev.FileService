@@ -2,6 +2,9 @@ import unittest
 from pathlib import Path
 import tempfile
 from prove_local_date import *
+def verify_accepted_full(path, inventory):
+    # Preserve the historical 1614-roster controls alongside the stricter candidate gate.
+    return verify_full(path, inventory, include_literal_delete=False)
 
 class ProofTests(unittest.TestCase):
     def rows(self, baseline):
@@ -68,7 +71,7 @@ class ProofTests(unittest.TestCase):
         import unittest.mock
         with unittest.mock.patch("prove_local_date.read_trx", return_value=self.rows(False)):
             with self.assertRaises(ValueError):
-                verify_full("synthetic", prior_inventory())
+                verify_accepted_full("synthetic", prior_inventory())
 
     def test_immutable_baseline_provenance_rejects_wrong_commit_blob_or_bytes(self):
         data = Path(CONTROLLER).read_bytes().replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()")
@@ -101,7 +104,7 @@ class ReviewedUploadRosterTests(unittest.TestCase):
         rows = self.full_rows()
         self.assertEqual(1614, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
-            self.assertEqual(rows, verify_full("controlled", prior_inventory()))
+            self.assertEqual(rows, verify_accepted_full("controlled", prior_inventory()))
 
     def test_roster_changes_and_nonpassing_results_fail_closed(self):
         import unittest.mock
@@ -127,7 +130,7 @@ class ReviewedUploadRosterTests(unittest.TestCase):
                     rows[-1]["errorInfo"] = True
                 with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
                     with self.assertRaises(ValueError):
-                        verify_full("controlled", prior_inventory())
+                        verify_accepted_full("controlled", prior_inventory())
 
     def test_reviewed_inventory_and_source_byte_bindings_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -155,7 +158,7 @@ class ReviewedReconcileRosterTests(unittest.TestCase):
         self.assertEqual(1601, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             with self.assertRaises(ValueError):
-                verify_full("old-complete", prior_inventory())
+                verify_accepted_full("old-complete", prior_inventory())
 
     def test_prior1601_identities_are_preserved_exactly(self):
         rows = self.full_rows()
@@ -194,7 +197,7 @@ class ReviewedReconcileRosterTests(unittest.TestCase):
                          stack="RedisUploadIdempotencyStore.AcquireAsync")
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             with self.assertRaises(ValueError):
-                verify_full("real-failure-shaped-fixture", prior_inventory())
+                verify_accepted_full("real-failure-shaped-fixture", prior_inventory())
 
     def test_exact_count_with_unreviewed_new_identity_is_rejected(self):
         import unittest.mock
@@ -203,7 +206,7 @@ class ReviewedReconcileRosterTests(unittest.TestCase):
         self.assertEqual(1614, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             with self.assertRaises(ValueError):
-                verify_full("same-count-replaced-new-case", prior_inventory())
+                verify_accepted_full("same-count-replaced-new-case", prior_inventory())
 
 
 class ReviewedStartupRosterTests(unittest.TestCase):
@@ -213,7 +216,7 @@ class ReviewedStartupRosterTests(unittest.TestCase):
         self.assertEqual(1607, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             with self.assertRaises(ValueError):
-                verify_full("old-complete1607", prior_inventory())
+                verify_accepted_full("old-complete1607", prior_inventory())
 
     def test_prior1607_counter_is_preserved(self):
         rows = ReviewedUploadRosterTests.full_rows(self)
@@ -246,7 +249,7 @@ class ReviewedStartupRosterTests(unittest.TestCase):
         rows[-1] = dict(rows[-1], name="unreviewed-startup-case")
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             with self.assertRaises(ValueError):
-                verify_full("same-count-changed-startup", prior_inventory())
+                verify_accepted_full("same-count-changed-startup", prior_inventory())
 
     def test_nonpassing_startup_controls_are_rejected(self):
         import unittest.mock
@@ -257,7 +260,7 @@ class ReviewedStartupRosterTests(unittest.TestCase):
                                 errorInfo=mutation != "skipped")
                 with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
                     with self.assertRaises(ValueError):
-                        verify_full("nonpassing-startup", prior_inventory())
+                        verify_accepted_full("nonpassing-startup", prior_inventory())
 
 
 class TrxEntryJoinTests(unittest.TestCase):
@@ -325,3 +328,144 @@ class TrxEntryJoinTests(unittest.TestCase):
                                 "result": results[0], "entry": entries[0]}[surface]
                         node.set(attribute, value)
                     self.verify_rejected(mutate)
+
+class ReviewedDeleteLiteralRosterTests(unittest.TestCase):
+    def candidate_rows(self):
+        return ReviewedUploadRosterTests.full_rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_delete_additions().elements()
+        ]
+
+    def test_exact_accepted1614_plus_literal23_passes(self):
+        import unittest.mock
+        raw = Path(DELETE_LITERAL_INVENTORY).read_bytes()
+        self.assertEqual(digest(raw), DELETE_LITERAL_INVENTORY_SHA256)
+        self.assertEqual(23, sum(reviewed_delete_additions().values()))
+        rows = self.candidate_rows()
+        self.assertEqual(1637, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_full("controlled", prior_inventory()))
+        self.assertEqual(Counter((row["class"], row["method"], row["name"]) for row in rows[:1614]),
+                         Counter((row["class"], row["method"], row["name"]) for row in ReviewedUploadRosterTests.full_rows(self)))
+
+    def test_old1614_and_replaced_duplicate_failed_skipped_literal_cases_fail(self):
+        import unittest.mock
+        for mutation in ("old1614", "replacement", "duplicate", "failed", "skipped", "passing-error"):
+            rows = self.candidate_rows()
+            if mutation == "old1614":
+                rows = rows[:1614]
+            elif mutation == "replacement":
+                rows[-1] = dict(rows[-1], name="unreviewed")
+            elif mutation == "duplicate":
+                rows[-1] = dict(rows[-2])
+            elif mutation == "failed":
+                rows[-1]["outcome"] = "Failed"
+            elif mutation == "skipped":
+                rows[-1]["outcome"] = "NotExecuted"
+            else:
+                rows[-1]["errorInfo"] = True
+            with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+                with self.assertRaises(ValueError):
+                    verify_full("mutated", prior_inventory())
+
+    def test_literal_inventory_and_both_source_bindings_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory = root / "inventory.json"
+            raw = Path(DELETE_LITERAL_INVENTORY).read_bytes()
+            sources = json.loads(raw)["sources"]
+            originals = {row["path"]: Path(row["path"]).read_bytes() for row in sources}
+            for mutation in (None, "inventory", *(row["path"] for row in sources)):
+                inventory.write_bytes(raw + (b" " if mutation == "inventory" else b""))
+                for path, content in originals.items():
+                    target = root / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(content + (b" " if mutation == path else b""))
+                if mutation is None:
+                    self.assertEqual(23, sum(reviewed_delete_additions(inventory, root).values()))
+                else:
+                    expected = ("Reviewed literal delete inventory changed" if mutation == "inventory"
+                                else "Reviewed literal delete test source changed")
+                    with self.assertRaisesRegex(ValueError, expected):
+                        reviewed_delete_additions(inventory, root)
+
+class DeleteCausalProofTests(unittest.TestCase):
+    def rows(self, baseline):
+        rows = []
+        for cls, method, name in reviewed_delete_additions().elements():
+            unit = cls.endswith(".FileDeleteLiteralIdentityTests")
+            failed = baseline and method in (DELETE_UNIT_FAILURES if unit else DELETE_HTTP_FAILURES)
+            rows.append(dict(**{"class": cls}, method=method, name=name,
+                outcome="Failed" if failed else "Passed", errorInfo=failed,
+                message=("Moq.MockException ExistsAsync normalized coordinate" if unit else delete_http_failure_message(method)) if failed else "",
+                stack=(cls + "." + ("AssertRejectedAsync" if "Control" in method else
+                       "AssertFailureAsync" if method in {"Delete_MissingMetadata_PreservesMetadata", "Delete_ProviderFailure_PreservesMetadata"}
+                       else "AssertLiteralAsync") if unit else cls + ".AssertDeleteAsync(Boolean literalExists, Boolean decoyExists) in /source/LegacyLiteralDeleteHttpBoundaryTests.cs:line "
+                       + ("52" if method == "LiteralAndDecoy_DeletesLiteralAndRetainsDecoy" else "51")) if failed else ""))
+        return rows
+
+    def test_each_http_failure_rejects_auth_infrastructure_values_and_wrong_stage(self):
+        for method in DELETE_HTTP_FAILURES:
+            for mutation in ("Unauthorized", "ServiceUnavailable", "wrong-stage", "wrong-values", "fact-stack"):
+                with self.subTest(method=method, mutation=mutation):
+                    rows = self.rows(True)
+                    row = next(row for row in rows if row["method"] == method)
+                    if mutation == "wrong-stage":
+                        row["stack"] = row["stack"].rsplit(" ", 1)[0] + " 55"
+                    elif mutation == "fact-stack":
+                        row["stack"] = row["class"] + "." + method
+                    elif mutation == "wrong-values":
+                        row["message"] = row["message"].replace("Expected:", "Actual:", 1)
+                    else:
+                        row["message"] = "Assert.Equal() Failure: Values differ\nExpected: NoContent\nActual:   " + mutation
+                    with self.assertRaises(ValueError):
+                        verify_delete_focus_rows(rows, True)
+    def test_exact_candidate_and_baseline_coordinate_failures(self):
+        for baseline in (False, True):
+            rows = self.rows(baseline)
+            self.assertEqual(rows, verify_delete_focus_rows(rows, baseline))
+            self.assertEqual(13 if baseline else 0, sum(row["outcome"] == "Failed" for row in rows))
+
+    def test_infrastructure_failure_cannot_replace_expected_coordinate_failure(self):
+        for kind in ("database", "auth", "admission", "timeout", "unrelated-mock"):
+            rows = self.rows(True)
+            row = next(row for row in rows if row["outcome"] == "Failed")
+            row["message"] = kind
+            with self.assertRaises(ValueError):
+                verify_delete_focus_rows(rows, True)
+
+    def test_changed_rosters_stacks_outcomes_and_passing_errors_reject(self):
+        for mutation in ("missing", "duplicate", "unreviewed", "wrong-stack", "wrong-outcome", "skipped", "passing-error"):
+            rows = self.rows(True)
+            failed = next(row for row in rows if row["outcome"] == "Failed")
+            if mutation == "missing":
+                rows.pop()
+            elif mutation == "duplicate":
+                rows[-1] = dict(rows[-2])
+            elif mutation == "unreviewed":
+                rows[-1]["name"] = "unreviewed"
+            elif mutation == "wrong-stack":
+                failed["stack"] = "unrelated"
+            elif mutation == "wrong-outcome":
+                failed["outcome"] = "Passed"
+            elif mutation == "skipped":
+                failed["outcome"] = "NotExecuted"
+            else:
+                next(row for row in rows if row["outcome"] == "Passed")["errorInfo"] = True
+            with self.assertRaises(ValueError):
+                verify_delete_focus_rows(rows, True)
+
+    def test_actual_candidate_reconstructs_exact_pinned_baseline_and_rejects_wrong_identity(self):
+        corrected = Path(DELETE_SERVICE).read_bytes()
+        baseline = delete_correction_disabled(corrected)
+        self.assertEqual(DELETE_BASELINE_SHA256, digest(baseline))
+        self.assertEqual(baseline, verify_delete_baseline_identity(DELETE_BASELINE_COMMIT, DELETE_BASELINE_BLOB, baseline))
+        for commit, blob, data in (("0" * 40, DELETE_BASELINE_BLOB, baseline),
+                                  (DELETE_BASELINE_COMMIT, "0" * 40, baseline),
+                                  (DELETE_BASELINE_COMMIT, DELETE_BASELINE_BLOB, baseline + b"\n")):
+            with self.assertRaises(ValueError):
+                verify_delete_baseline_identity(commit, blob, data)
+        for changed in (corrected + b"\n", corrected.replace(b"RequireExistingObjectIdentity", b"OtherIdentity")):
+            with self.assertRaises(ValueError):
+                delete_correction_disabled(changed)
