@@ -389,3 +389,83 @@ class ReviewedDeleteLiteralRosterTests(unittest.TestCase):
                                 else "Reviewed literal delete test source changed")
                     with self.assertRaisesRegex(ValueError, expected):
                         reviewed_delete_additions(inventory, root)
+
+class DeleteCausalProofTests(unittest.TestCase):
+    def rows(self, baseline):
+        rows = []
+        for cls, method, name in reviewed_delete_additions().elements():
+            unit = cls.endswith(".FileDeleteLiteralIdentityTests")
+            failed = baseline and method in (DELETE_UNIT_FAILURES if unit else DELETE_HTTP_FAILURES)
+            rows.append(dict(**{"class": cls}, method=method, name=name,
+                outcome="Failed" if failed else "Passed", errorInfo=failed,
+                message=("Moq.MockException ExistsAsync normalized coordinate" if unit else delete_http_failure_message(method)) if failed else "",
+                stack=(cls + "." + ("AssertRejectedAsync" if "Control" in method else
+                       "AssertFailureAsync" if method in {"Delete_MissingMetadata_PreservesMetadata", "Delete_ProviderFailure_PreservesMetadata"}
+                       else "AssertLiteralAsync") if unit else cls + ".AssertDeleteAsync(Boolean literalExists, Boolean decoyExists) in /source/LegacyLiteralDeleteHttpBoundaryTests.cs:line "
+                       + ("52" if method == "LiteralAndDecoy_DeletesLiteralAndRetainsDecoy" else "51")) if failed else ""))
+        return rows
+
+    def test_each_http_failure_rejects_auth_infrastructure_values_and_wrong_stage(self):
+        for method in DELETE_HTTP_FAILURES:
+            for mutation in ("Unauthorized", "ServiceUnavailable", "wrong-stage", "wrong-values", "fact-stack"):
+                with self.subTest(method=method, mutation=mutation):
+                    rows = self.rows(True)
+                    row = next(row for row in rows if row["method"] == method)
+                    if mutation == "wrong-stage":
+                        row["stack"] = row["stack"].rsplit(" ", 1)[0] + " 55"
+                    elif mutation == "fact-stack":
+                        row["stack"] = row["class"] + "." + method
+                    elif mutation == "wrong-values":
+                        row["message"] = row["message"].replace("Expected:", "Actual:", 1)
+                    else:
+                        row["message"] = "Assert.Equal() Failure: Values differ\nExpected: NoContent\nActual:   " + mutation
+                    with self.assertRaises(ValueError):
+                        verify_delete_focus_rows(rows, True)
+    def test_exact_candidate_and_baseline_coordinate_failures(self):
+        for baseline in (False, True):
+            rows = self.rows(baseline)
+            self.assertEqual(rows, verify_delete_focus_rows(rows, baseline))
+            self.assertEqual(13 if baseline else 0, sum(row["outcome"] == "Failed" for row in rows))
+
+    def test_infrastructure_failure_cannot_replace_expected_coordinate_failure(self):
+        for kind in ("database", "auth", "admission", "timeout", "unrelated-mock"):
+            rows = self.rows(True)
+            row = next(row for row in rows if row["outcome"] == "Failed")
+            row["message"] = kind
+            with self.assertRaises(ValueError):
+                verify_delete_focus_rows(rows, True)
+
+    def test_changed_rosters_stacks_outcomes_and_passing_errors_reject(self):
+        for mutation in ("missing", "duplicate", "unreviewed", "wrong-stack", "wrong-outcome", "skipped", "passing-error"):
+            rows = self.rows(True)
+            failed = next(row for row in rows if row["outcome"] == "Failed")
+            if mutation == "missing":
+                rows.pop()
+            elif mutation == "duplicate":
+                rows[-1] = dict(rows[-2])
+            elif mutation == "unreviewed":
+                rows[-1]["name"] = "unreviewed"
+            elif mutation == "wrong-stack":
+                failed["stack"] = "unrelated"
+            elif mutation == "wrong-outcome":
+                failed["outcome"] = "Passed"
+            elif mutation == "skipped":
+                failed["outcome"] = "NotExecuted"
+            else:
+                next(row for row in rows if row["outcome"] == "Passed")["errorInfo"] = True
+            with self.assertRaises(ValueError):
+                verify_delete_focus_rows(rows, True)
+
+    def test_actual_candidate_reconstructs_exact_pinned_baseline_and_rejects_wrong_identity(self):
+        corrected = Path(DELETE_SERVICE).read_bytes()
+        baseline = delete_correction_disabled(corrected)
+        self.assertEqual(DELETE_BASELINE_SHA256, digest(baseline))
+        self.assertEqual(baseline, verify_delete_baseline_identity(DELETE_BASELINE_COMMIT, DELETE_BASELINE_BLOB, baseline))
+        for commit, blob, data in (("0" * 40, DELETE_BASELINE_BLOB, baseline),
+                                  (DELETE_BASELINE_COMMIT, "0" * 40, baseline),
+                                  (DELETE_BASELINE_COMMIT, DELETE_BASELINE_BLOB, baseline + b"\n")):
+            with self.assertRaises(ValueError):
+                verify_delete_baseline_identity(commit, blob, data)
+        for changed in (corrected + b"\n", corrected.replace(b"RequireExistingObjectIdentity", b"OtherIdentity")):
+            with self.assertRaises(ValueError):
+                delete_correction_disabled(changed)

@@ -370,6 +370,186 @@ def fetch_baseline(output):
     return original
 
 
+DELETE_BASELINE_COMMIT = "1e0844ec72974ad1905b45461fef33e22f403640"
+DELETE_SERVICE = "Legacy.Maliev.FileService.Application/Services/FileApplicationService.cs"
+DELETE_BASELINE_BLOB = "9da9db6f483a9099daa44383f1c25a9eec16b73e"
+DELETE_BASELINE_SHA256 = "78460169e33179b87cd97c6eac03aab44148e920f640f500d8a11fca51344cc7"
+DELETE_UNIT_FAILURES = {
+    "Delete_LeadingSpace_PreservesLiteralIdentity",
+    "Delete_TrailingSpace_PreservesLiteralIdentity",
+    "Delete_Backslash_PreservesLiteralIdentity",
+    "Delete_LeadingSlash_PreservesLiteralIdentity",
+    "Delete_RepeatedSlash_PreservesLiteralIdentity",
+    "Delete_TrailingSlash_PreservesLiteralIdentity",
+    "Delete_ControlPrefix_RejectsBeforeBoundaryCalls",
+    "Delete_ControlSuffix_RejectsBeforeBoundaryCalls",
+    "Delete_MissingMetadata_PreservesMetadata",
+    "Delete_ProviderFailure_PreservesMetadata",
+}
+DELETE_HTTP_FAILURES = {
+    "LiteralOnly_DeletesExactObjectAndMetadata",
+    "LiteralAndDecoy_DeletesLiteralAndRetainsDecoy",
+    "MissingLiteralWithDecoy_LeavesProviderAndMetadataUntouched",
+}
+
+
+def verify_delete_baseline_identity(commit, blob, data):
+    require(commit == DELETE_BASELINE_COMMIT and blob == DELETE_BASELINE_BLOB
+            and digest(data) == DELETE_BASELINE_SHA256, "Delete baseline identity differs from immutable pin")
+    return data
+
+
+def delete_http_failure_message(method, coordinate_id="0123456789abcdef0123456789abcdef"):
+    # Source-derived xunit.assert 2.9.3 formatting; this is not runtime evidence.
+    if method != "LiteralAndDecoy_DeletesLiteralAndRetainsDecoy":
+        expected, actual = (("NoContent", "BadRequest") if method ==
+            "LiteralOnly_DeletesExactObjectAndMetadata" else ("BadRequest", "NoContent"))
+        return f"Assert.Equal() Failure: Values differ\nExpected: {expected}\nActual:   {actual}"
+    normalized = "orders/" + coordinate_id + "/ชิ้นงาน-cafe\u0301.step"
+    literal = "  " + normalized + "  "
+    preview = lambda value: '"' + value[:50] + '"···'
+    pointer = " " * 24
+    return ("Assert.Equal() Failure: Collections differ\n" + pointer + "↓ (pos 0)\n"
+            + "Expected: string[]     [" + preview(literal) + "]\n"
+            + "Actual:   List<string> [" + preview(normalized) + "]\n"
+            + pointer + "↑ (pos 0)")
+
+
+def verify_delete_focus_rows(rows, baseline):
+    expected = reviewed_delete_additions()
+    require(len(rows) == 23 and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
+            "Delete focus changed frozen23 identities")
+    failures = 0
+    for row in rows:
+        unit = row["class"].endswith(".FileDeleteLiteralIdentityTests")
+        failed = baseline and row["method"] in (DELETE_UNIT_FAILURES if unit else DELETE_HTTP_FAILURES)
+        require(row["outcome"] == ("Failed" if failed else "Passed"), "Unexpected delete causal outcome")
+        if failed:
+            failures += 1
+            require(row["errorInfo"], "Delete baseline failure lacks ErrorInfo")
+            if unit:
+                helper = ("AssertRejectedAsync" if "Control" in row["method"] else
+                          "AssertFailureAsync" if row["method"] in {
+                              "Delete_MissingMetadata_PreservesMetadata",
+                              "Delete_ProviderFailure_PreservesMetadata"} else "AssertLiteralAsync")
+                require(row["class"] + "." + helper in row["stack"],
+                        "Delete baseline failure lacks reviewed helper stack")
+                require("Moq.MockException" in row["message"] and "ExistsAsync" in row["message"],
+                        "Delete baseline did not fail at exact metadata coordinate boundary")
+            else:
+                stage = 52 if row["method"] == "LiteralAndDecoy_DeletesLiteralAndRetainsDecoy" else 51
+                require(row["class"] + ".AssertDeleteAsync" in row["stack"] and
+                        f"LegacyLiteralDeleteHttpBoundaryTests.cs:line {stage}" in row["stack"],
+                        "Delete HTTP baseline failed at wrong assertion stage")
+                message = row["message"].replace("\r\n", "\n")
+                coordinate = re.search(r'Expected: string\[\]     \["  orders/([0-9a-f]{32})/', message)
+                require(message == delete_http_failure_message(row["method"],
+                        coordinate.group(1) if coordinate else "0123456789abcdef0123456789abcdef"),
+                        "Delete HTTP baseline failure is not the expected coordinate/status assertion")
+        else:
+            require(not row["errorInfo"], "Delete passing control contains ErrorInfo")
+    require(failures == (13 if baseline else 0), "Delete baseline failure count differs")
+    return rows
+
+
+def fetch_delete_baseline(output):
+    timeout, git = shutil.which("timeout"), shutil.which("git")
+    require(timeout and git, "Missing bounded delete provenance tools")
+    command = [timeout, "--signal=TERM", "--kill-after=5s", "30s", git, "fetch", "--no-tags",
+               "--no-recurse-submodules", "--depth=1",
+               "https://github.com/MALIEV-Co-Ltd/Legacy.Maliev.FileService.git", DELETE_BASELINE_COMMIT]
+    record = {"name": "immutable-delete-baseline-fetch", "command": command,
+              "startedUtc": datetime.now(timezone.utc).isoformat()}
+    with (output / "baseline-fetch.log").open("wb") as log:
+        with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as process:
+            record["pid"] = process.pid
+            stat = Path(f"/proc/{process.pid}/stat").read_text()
+            record["kernelStartTicks"] = stat[stat.rfind(")") + 2:].split()[19]
+            record["executable"] = os.readlink(f"/proc/{process.pid}/exe")
+            record["returnCode"] = process.wait()
+            record["exitVerified"] = process.poll() is not None
+            record_group_exit(record, output / "baseline-fetch-custody.json", [record])
+    require(record["returnCode"] == 0, "Immutable delete baseline fetch failed")
+    commit = subprocess.check_output([git, "rev-parse", "FETCH_HEAD"], timeout=20).decode().strip()
+    blob = subprocess.check_output([git, "rev-parse", DELETE_BASELINE_COMMIT + ":" + DELETE_SERVICE], timeout=20).decode().strip()
+    data = subprocess.check_output([git, "show", DELETE_BASELINE_COMMIT + ":" + DELETE_SERVICE], timeout=20)
+    original = verify_delete_baseline_identity(commit, blob, data)
+    (output / "baseline-provenance.json").write_text(json.dumps(
+        {"commit": commit, "blob": blob, "sha256": digest(original)}, indent=2) + "\n")
+    return original
+
+
+def delete_correction_disabled(corrected):
+    helper = b'''    private string RequireExistingObjectIdentity(string objectName)
+    {
+        var safetyName = names.RequireObjectName(objectName);
+        RequireGenericObject(safetyName);
+        if (objectName.Any(char.IsControl))
+        {
+            throw new FileUploadValidationException("Object name is invalid");
+        }
+
+        return objectName;
+    }
+
+'''
+    call = b"objectName = RequireExistingObjectIdentity(objectName);"
+    require(corrected.count(helper) == 1 and corrected.count(call) == 1,
+            "Delete correction block/call count differs")
+    disabled = corrected.replace(helper, b"").replace(call,
+        b"objectName = names.RequireObjectName(objectName);\n        RequireGenericObject(objectName);")
+    require(digest(disabled) == DELETE_BASELINE_SHA256, "Delete correction-disabled source differs from immutable baseline")
+    return disabled
+
+
+def prove_delete_causal(repo, output, run, build, tests, head, inventory):
+    output.mkdir(exist_ok=False)
+    service = repo / DELETE_SERVICE
+    corrected = service.read_bytes()
+    additions = json.loads(Path(DELETE_LITERAL_INVENTORY).read_text())
+    frozen = {row["path"]: (repo / row["path"]).read_bytes() for row in additions["sources"]}
+    reviewed_delete_additions()
+    require(subprocess.check_output(["git", "show", head + ":" + DELETE_SERVICE], timeout=20) == corrected,
+            "Delete candidate source differs from proposed head")
+    original = fetch_delete_baseline(output)
+    require(delete_correction_disabled(corrected) == original, "Delete disabled source is not exact accepted baseline")
+    focus = tests + ["--filter", "FullyQualifiedName~FileDeleteLiteralIdentityTests|FullyQualifiedName~LegacyLiteralDeleteHttpBoundaryTests"]
+    error = None
+    try:
+        require(run("delete-candidate-focus", focus + ["--logger", "trx;LogFileName=candidate.trx", "--results-directory", str(output)], 120, output) == 0,
+                "Delete candidate focus failed")
+        verify_delete_focus_rows(read_trx(output / "candidate.trx"), False)
+        service.write_bytes(original)
+        require(run("delete-baseline-build", build, 180, output) == 0, "Delete baseline build failed")
+        build_ok(output / "delete-baseline-build.log")
+        require(service.read_bytes() == original and all((repo / path).read_bytes() == data for path, data in frozen.items()),
+                "Delete baseline source/tests changed")
+        require(run("delete-baseline-focus", focus + ["--logger", "trx;LogFileName=baseline.trx", "--results-directory", str(output)], 120, output) == 1,
+                "Delete baseline exit is not exactly one")
+        verify_delete_focus_rows(read_trx(output / "baseline.trx"), True)
+    except BaseException as exception:
+        error = exception
+    finally:
+        service.write_bytes(corrected)
+        require(service.read_bytes() == corrected and all((repo / path).read_bytes() == data for path, data in frozen.items()),
+                "Delete corrected source/test restore failed")
+    if error:
+        raise error
+    require(run("delete-restored-build", build, 180, output) == 0, "Delete restored build failed")
+    build_ok(output / "delete-restored-build.log")
+    require(run("delete-restored-full", tests + ["--logger", "trx;LogFileName=restored-full.trx", "--results-directory", str(output)], 600, output) == 0,
+            "Delete restored full suite failed")
+    restored = verify_full(output / "restored-full.trx", inventory)
+    require(service.read_bytes() == corrected and all((repo / path).read_bytes() == data for path, data in frozen.items()),
+            "Delete final source custody changed")
+    receipt = {"head": head, "baselineCommit": DELETE_BASELINE_COMMIT, "baselineBlob": DELETE_BASELINE_BLOB,
+               "baselineServiceSha256": digest(original), "candidateServiceSha256": digest(corrected),
+               "immutableTests": {path: digest(data) for path, data in frozen.items()},
+               "baselineTenControlsPassedThirteenExpectedFailures": True, "candidate23Passed": True,
+               "restoredFullPassed": len(restored), "sourceRestored": True,
+               "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir() if p.suffix in {".trx", ".log"}}}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
 def main():
     require(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true", "Hosted ordinary runner only; no local SDK custody")
     root = Path(sys.argv[1]).resolve()
@@ -394,13 +574,14 @@ def main():
     dotnet, timeout = shutil.which("dotnet"), shutil.which("timeout")
     require(dotnet and timeout, "Missing ordinary runner tools")
 
-    def run(name, arguments, seconds):
+    def run(name, arguments, seconds, evidence_output=None):
+        directory = output if evidence_output is None else evidence_output
         available = next(line.split()[1] for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith("MemAvailable:"))
         require(int(available) >= 4194304, "Fixed 4GiB memory admission blocked")
         command = [timeout, "--signal=TERM", "--kill-after=15s", str(seconds) + "s", dotnet, *arguments]
         record = {"name": name, "command": command, "startedUtc": datetime.now(timezone.utc).isoformat()}
         commands.append(record)
-        with (output / (name + ".log")).open("wb") as log:
+        with (directory / (name + ".log")).open("wb") as log:
             # GNU timeout owns the bounded process group; no detached SDK workers or imported job roles.
             with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as process:
                 record["pid"] = process.pid
@@ -409,7 +590,7 @@ def main():
                 record["executable"] = os.readlink(f"/proc/{process.pid}/exe")
                 record["returnCode"] = process.wait()
                 record["exitVerified"] = process.poll() is not None
-                record_group_exit(record, output / "command-custody.json", commands)
+                record_group_exit(record, directory / "command-custody.json", commands)
         return record["returnCode"]
 
     build = ["build", "Legacy.Maliev.FileService.slnx", "--configuration", "Release", "--no-restore", "--disable-build-servers",
@@ -448,6 +629,8 @@ def main():
                "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir() if p.suffix in {".trx", ".log"}}}
     (output / "command-custody.json").write_text(json.dumps(commands, indent=2) + "\n")
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    commands = []
+    prove_delete_causal(repo, root / "delete-literal-causal", run, build, tests, head, inventory)
 
 
 if __name__ == "__main__":
