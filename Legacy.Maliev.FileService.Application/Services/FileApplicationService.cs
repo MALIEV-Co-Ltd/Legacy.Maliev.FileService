@@ -252,10 +252,12 @@ public sealed class FileApplicationService(
         runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(sourceBucket);
         names.RequireBucket(destinationBucket);
-        sourceObjectName = names.RequireObjectName(sourceObjectName);
-        destinationObjectName = names.RequireObjectName(destinationObjectName);
-        RequireGenericObject(sourceObjectName);
-        RequireGenericObject(destinationObjectName);
+        var sourceSafetyName = names.RequireObjectName(sourceObjectName);
+        var destinationSafetyName = names.RequireObjectName(destinationObjectName);
+        RequireGenericObject(sourceSafetyName);
+        RequireGenericObject(destinationSafetyName);
+        if (sourceObjectName.Any(char.IsControl) || destinationObjectName.Any(char.IsControl))
+            throw new FileUploadValidationException("Object name is invalid");
         var moveId = Guid.NewGuid();
         if (!await repository.ExistsAsync(sourceBucket, sourceObjectName, cancellationToken)) return false;
         var proof = await moveJournal.FindCommittedSourceAsync(sourceBucket, sourceObjectName, cancellationToken);

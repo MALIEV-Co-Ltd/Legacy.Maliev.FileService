@@ -1,0 +1,61 @@
+{
+  "baselineFullCount": 1640,
+  "additionalCases": 8,
+  "expectedFullCount": 1648,
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Integration/LegacyFileMoveHttpBoundaryTests.cs",
+      "sha256": "7ede188600d370a36507269f43908c4c0f8f09203d5ae3305273ea304d6db17a"
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates(literalSource: \" orders/source.stl \", literalDestination: \" orders/destination.stl \")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates(literalSource: \"orders\\\\source.stl\", literalDestination: \"orders\\\\destination.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates(literalSource: \"/orders//source.stl\", literalDestination: \"/orders//destination.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates(literalSource: \" orders\\\\source.stl \", literalDestination: \" orders\\\\destination.stl \")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect(field: \"sourceObjectName\", kind: \"control\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect(field: \"destinationObjectName\", kind: \"control\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect(field: \"sourceObjectName\", kind: \"reserved\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests",
+      "method": "CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect",
+      "testName": "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests.CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect(field: \"destinationObjectName\", kind: \"reserved\")",
+      "executions": 1
+    }
+  ]
+}
