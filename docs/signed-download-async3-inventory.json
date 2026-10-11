@@ -1,0 +1,31 @@
+{
+  "baselineFullCount": 1637,
+  "additionalCases": 3,
+  "expectedFullCount": 1640,
+  "sources": [
+    {
+      "sha256": "77bb81341f33458370b1f725825e42c302f5993d61a479fd589e771d2f1cbe47",
+      "path": "Legacy.Maliev.FileService.Tests/Data/LegacySignedDownloadAsyncBoundaryTests.cs"
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests",
+      "executions": 1,
+      "method": "AsyncSigning_WaitsForSignatureAndPreservesLiteralThaiIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests.AsyncSigning_WaitsForSignatureAndPreservesLiteralThaiIdentity"
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests",
+      "executions": 1,
+      "method": "AsyncSigning_CancellationReachesPendingSignatureAndSettlesCaller",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests.AsyncSigning_CancellationReachesPendingSignatureAndSettlesCaller"
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests",
+      "executions": 1,
+      "method": "AsyncGenerationSigning_BindsGenerationAndSevenDayExpiryWithoutChangingObjectIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadAsyncBoundaryTests.AsyncGenerationSigning_BindsGenerationAndSevenDayExpiryWithoutChangingObjectIdentity"
+    }
+  ]
+}
