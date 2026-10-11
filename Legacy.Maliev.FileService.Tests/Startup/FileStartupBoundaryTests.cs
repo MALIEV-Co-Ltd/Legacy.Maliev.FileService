@@ -47,7 +47,7 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
             },
         };
         // Own the exact handle and directory before Start, including a partially successful Start.
-        var custody = new StartupCustody(process, owned);
+        var custody = new StartupCustody(process, owned) { DeclaredExecutable = host };
         try
         {
             if (failure == "configuration")
@@ -74,7 +74,7 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
             custody.Stderr = ReadBoundedAsync(custody.StderrReader, custody.Readers.Token);
             custody.Pid = process.Id;
             custody.Birth = process.StartTime.ToUniversalTime();
-            custody.Executable = process.MainModule!.FileName;
+            ObserveOwnedExecutable(custody);
             await process.WaitForExitAsync(custody.Readers.Token);
             var publicOutput = await custody.Stdout;
             var privateOutput = await custody.Stderr;
@@ -111,6 +111,8 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
                     custody.Pid,
                     custody.Birth,
                     custody.Executable,
+                    custody.DeclaredExecutable,
+                    custody.ExecutableObservation,
                     timeoutSeconds = 20,
                     stopTimeoutSeconds = 5,
                     readerSettlementSeconds = 5,
@@ -294,6 +296,101 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
         }
     }
 
+    private static (string? Executable, bool Exited) ObserveExecutable(Func<string?> module, Func<bool> exited)
+    {
+        // Declared launch paths are never evidence of a live process image.
+        // Query exceptions propagate unchanged; only an absent module with verified exit is expected.
+        var executable = module();
+        var exitVerified = exited();
+        if (string.IsNullOrEmpty(executable) && !exitVerified)
+            throw new InvalidOperationException("Live owned startup child executable could not be observed.");
+        return (executable, exitVerified);
+    }
+
+    private static bool ObserveOwnedExecutable(StartupCustody custody)
+    {
+        var observation = ObserveExecutable(() => custody.Process.MainModule?.FileName, () => custody.Process.HasExited);
+        if (!string.IsNullOrEmpty(observation.Executable)) custody.Executable = observation.Executable;
+        custody.ExecutableObservation = string.IsNullOrEmpty(observation.Executable) ? "exited-before-module-observation" : "observed-module";
+        return observation.Exited;
+    }
+
+    private static bool ShouldTerminateAfterObservation(bool exitedDuringObservation, Func<bool> exited)
+        => !exitedDuringObservation && !exited();
+
+    [Fact]
+    public void ExecutableObservation_PresentModuleRecordsObservedIdentity()
+    {
+        var observation = ObserveExecutable(() => "/observed/dotnet", () => false);
+        Assert.Equal("/observed/dotnet", observation.Executable);
+        Assert.False(observation.Exited);
+    }
+
+    [Fact]
+    public void ExecutableObservation_AbsentModuleRequiresVerifiedExit()
+    {
+        var observation = ObserveExecutable(() => null, () => true);
+        Assert.Null(observation.Executable);
+        Assert.True(observation.Exited);
+        var empty = ObserveExecutable(() => string.Empty, () => true);
+        Assert.Equal(string.Empty, empty.Executable);
+        Assert.True(empty.Exited);
+    }
+
+    [Fact]
+    public void ExecutableObservation_AbsentLiveModuleFailsWithoutLaunchFallback()
+    {
+        Assert.Throws<InvalidOperationException>(() => ObserveExecutable(() => null, () => false));
+        Assert.Throws<InvalidOperationException>(() => ObserveExecutable(() => string.Empty, () => false));
+    }
+
+    [Fact]
+    public void ExecutableObservation_ExitQueryFailurePreservesCause()
+    {
+        var cause = new IOException("exit observation failed");
+        Assert.Same(cause, Assert.Throws<IOException>(() => ObserveExecutable(() => null, () => throw cause)));
+    }
+
+    [Fact]
+    public void ExecutableObservation_ModuleQueryFailurePreservesCause()
+    {
+        var cause = new InvalidOperationException("module observation failed");
+        var exitQueried = false;
+        Assert.Same(cause, Assert.Throws<InvalidOperationException>(() => ObserveExecutable(() => throw cause,
+            () => { exitQueried = true; return true; })));
+        Assert.False(exitQueried);
+    }
+
+    [Fact]
+    public void ExecutableObservation_ExitBetweenObservationsPreventsTerminationDecision()
+    {
+        var first = ObserveExecutable(() => "/observed/dotnet", () => false);
+        var cleanup = ObserveExecutable(() => null, () => true);
+        Assert.False(first.Exited);
+        Assert.True(cleanup.Exited);
+        Assert.Null(cleanup.Executable);
+        Assert.False(ShouldTerminateAfterObservation(cleanup.Exited,
+            () => throw new InvalidOperationException("Verified exit must short-circuit termination.")));
+        Assert.False(ShouldTerminateAfterObservation(first.Exited, () => true));
+        Assert.True(ShouldTerminateAfterObservation(first.Exited, () => false));
+    }
+
+    [Fact]
+    public void ExecutableObservation_PrimaryPrecedesCleanupObservationFailure()
+    {
+        using var process = new Process();
+        var custody = new StartupCustody(process, string.Empty);
+        using var readers = custody.Readers;
+        var primary = new IOException("original failure");
+        custody.Primary = primary;
+        var cleanup = Assert.Throws<InvalidOperationException>(() => ObserveExecutable(() => null, () => false));
+        custody.CleanupFailures.Add(cleanup);
+        var failure = Assert.IsType<AggregateException>(custody.FailureForCaller());
+        Assert.Equal(2, failure.InnerExceptions.Count);
+        Assert.Same(primary, failure.InnerExceptions[0]);
+        Assert.Same(cleanup, failure.InnerExceptions[1]);
+    }
+
     private static async Task SettleStartupCustodyAsync(StartupCustody custody)
     {
         if (!custody.ProcessDisposed)
@@ -315,10 +412,11 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
                         // Recover metadata through this same handle if an earlier metadata read failed.
                         custody.Pid ??= custody.Process.Id;
                         custody.Birth ??= custody.Process.StartTime.ToUniversalTime();
-                        custody.Executable ??= custody.Process.MainModule!.FileName;
+                        var exitedDuringObservation = ObserveOwnedExecutable(custody);
                         if (custody.Process.StartTime.ToUniversalTime() != custody.Birth)
                             throw new InvalidOperationException("Owned startup child birth changed; termination withheld.");
-                        custody.Process.Kill(); // No PID lookup, names or recursive tree selector.
+                        if (ShouldTerminateAfterObservation(exitedDuringObservation, () => custody.Process.HasExited))
+                            custody.Process.Kill(); // No PID lookup, names or recursive tree selector.
                         await custody.Process.WaitForExitAsync(stop.Token);
                     }
                     custody.ExitVerified = custody.Process.HasExited;
@@ -406,6 +504,8 @@ public sealed class FileStartupBoundaryTests(ITestOutputHelper output)
         public int? Pid { get; set; }
         public DateTime? Birth { get; set; }
         public string? Executable { get; set; }
+        public string? DeclaredExecutable { get; set; }
+        public string? ExecutableObservation { get; set; }
         public Task<string>? Stdout { get; set; }
         public Task<string>? Stderr { get; set; }
         public TextReader? StdoutReader { get; set; }

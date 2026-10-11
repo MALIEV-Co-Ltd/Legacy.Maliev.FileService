@@ -1,0 +1,54 @@
+{
+  "baselineHead": "f106fc697fec52940c40e6e810541a4422bc48f8",
+  "baselineFullCount": 1607,
+  "additionalCases": 7,
+  "expectedFullCount": 1614,
+  "sourcePath": "Legacy.Maliev.FileService.Tests/Startup/FileStartupBoundaryTests.cs",
+  "sourceSha256": "a471b810b4e67bc922dded9c6ba010a0f64334d145dea6021b4c3e41ebc7b03d",
+  "observedFullTrxSha256": null,
+  "identityAuthority": "Source proposal; exact observed hosted identities required",
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_PresentModuleRecordsObservedIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_PresentModuleRecordsObservedIdentity",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_AbsentModuleRequiresVerifiedExit",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_AbsentModuleRequiresVerifiedExit",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_AbsentLiveModuleFailsWithoutLaunchFallback",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_AbsentLiveModuleFailsWithoutLaunchFallback",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_ExitQueryFailurePreservesCause",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_ExitQueryFailurePreservesCause",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_ModuleQueryFailurePreservesCause",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_ModuleQueryFailurePreservesCause",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_ExitBetweenObservationsPreventsTerminationDecision",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_ExitBetweenObservationsPreventsTerminationDecision",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests",
+      "method": "ExecutableObservation_PrimaryPrecedesCleanupObservationFailure",
+      "testName": "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests.ExecutableObservation_PrimaryPrecedesCleanupObservationFailure",
+      "executions": 1
+    }
+  ]
+}
