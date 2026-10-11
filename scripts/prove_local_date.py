@@ -342,7 +342,7 @@ def verify_signing_focus(path):
 
 
 MOVE_LITERAL_INVENTORY = "docs/move-literal8-inventory.json"
-MOVE_LITERAL_INVENTORY_SHA256 = "fa50dc8307b197366562aa709674275d7d544953eecd31c042541454a08ece1d"
+MOVE_LITERAL_INVENTORY_SHA256 = "a453c8d726b41103c203f2310e0139eaff11209ec1c14b7dd68451d155dd3f73"
 
 
 def reviewed_move_additions(inventory_path=None, source_root=None):
