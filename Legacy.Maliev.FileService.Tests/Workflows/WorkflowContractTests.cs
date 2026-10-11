@@ -413,7 +413,7 @@ internal static partial class WorkflowContractValidator
         {
             (6, "Select the hosted SDK for owned startup children"),
             (7, "Supply the exact job SDK host to startup fixtures"),
-            (9, "Require all eight standalone startup boundary regressions"),
+            (9, "Require original eight and seven additional startup boundary regressions"),
         })
         {
             var startup = RequireMapping(steps.Children[index], "startup step");
@@ -539,14 +539,14 @@ internal static partial class WorkflowContractValidator
                 && GetOptional(step, "with") is YamlMappingNode inputs && inputs.Children.Count == 1
                 && (GetOptional(inputs, "dotnet-version") as YamlScalarNode)?.Value == "10.0.x";
         }
-        var focus = name == "Require all eight standalone startup boundary regressions";
+        var focus = name == "Require original eight and seven additional startup boundary regressions";
         if (name != "Supply the exact job SDK host to startup fixtures" && !focus) return false;
         if (!keys.SetEquals(focus ? new[] { "name", "shell", "env", "run" } : new[] { "name", "shell", "run" })
             || (GetOptional(step, "shell") as YamlScalarNode)?.Value != "bash"
             || GetOptional(step, "run") is not YamlScalarNode { Value: { } command }) return false;
         if (focus && (GetOptional(step, "env") is not YamlMappingNode environment || environment.Children.Count != 1
             || (GetOptional(environment, "GITHUB_ACTIONS") as YamlScalarNode)?.Value != "false")) return false;
-        var expected = focus ? "c7eb9d967996465e11a31b9bade5b9be3597aee564ed0053159c89709073b33c" : "4dede86d85d0fb052a33e2460f45a55498af0672495b4ff07d4683a8b0df0d0d";
+        var expected = focus ? "e70bba5e78b0e65b04e532a79e9e8bfcda2dff678acb7b326a40a5bf402d4e35" : "4dede86d85d0fb052a33e2460f45a55498af0672495b4ff07d4683a8b0df0d0d";
         return string.Equals(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(command))), expected,
             StringComparison.OrdinalIgnoreCase);
     }

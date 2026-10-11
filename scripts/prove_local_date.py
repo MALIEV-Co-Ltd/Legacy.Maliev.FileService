@@ -37,32 +37,53 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def trx_guid(value):
+    require(isinstance(value, str) and re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", value),
+        "Invalid TRX GUID identity")
+    return value.lower()
+
+
 def read_trx(path):
     tree = ET.parse(path)
     definitions = tree.findall("./t:TestDefinitions/t:UnitTest", NS)
     results = tree.findall("./t:Results/t:UnitTestResult", NS)
-    require(len(definitions) == len(results), "Definition/result cardinality mismatch")
+    entries = tree.findall("./t:TestEntries/t:TestEntry", NS)
+    require(len(definitions) == len(results) == len(entries), "Definition/result/entry cardinality mismatch")
     identities, execution_ids = {}, set()
     for definition in definitions:
         method = definition.find("t:TestMethod", NS)
         execution = definition.find("t:Execution", NS)
-        identity = definition.get("id")
+        identity = trx_guid(definition.get("id"))
         require(identity and identity not in identities and method is not None and execution is not None, "Invalid definition identity")
-        execution_id = execution.get("id")
+        require(len(definition.findall("t:TestMethod", NS)) == 1 and len(definition.findall("t:Execution", NS)) == 1,
+                "Duplicated definition method/execution")
+        execution_id = trx_guid(execution.get("id"))
         require(execution_id and execution_id not in execution_ids, "Duplicate execution identity")
         execution_ids.add(execution_id)
         identities[identity] = (method.get("className", "").split(",", 1)[0].strip(), method.get("name"), definition.get("name"), execution_id)
+    entry_ids, entry_executions = set(), set()
+    for entry in entries:
+        identity = trx_guid(entry.get("testId"))
+        execution_id = trx_guid(entry.get("executionId"))
+        require(identity in identities and identity not in entry_ids and execution_id not in entry_executions,
+                "Invalid/duplicate entry join")
+        require(execution_id == identities[identity][3], "Entry execution identity mismatch")
+        entry_ids.add(identity)
+        entry_executions.add(execution_id)
+    require(entry_ids == set(identities) and entry_executions == execution_ids, "Entry/definition bijection mismatch")
     rows, seen = [], set()
     for result in results:
-        identity = result.get("testId")
+        identity = trx_guid(result.get("testId"))
         require(identity in identities and identity not in seen, "Invalid/duplicate result join")
         seen.add(identity)
         cls, method, name, execution_id = identities[identity]
-        require(result.get("executionId") == execution_id and result.get("testName") == name, "Result identity mismatch")
+        require(trx_guid(result.get("executionId")) == execution_id and result.get("testName") == name, "Result identity mismatch")
         rows.append({"class": cls, "method": method, "name": name, "outcome": result.get("outcome"),
                      "message": result.findtext("t:Output/t:ErrorInfo/t:Message", default="", namespaces=NS).strip(),
                      "stack": result.findtext("t:Output/t:ErrorInfo/t:StackTrace", default="", namespaces=NS),
                      "errorInfo": result.find("t:Output/t:ErrorInfo", NS) is not None})
+    require(seen == entry_ids, "Result/entry bijection mismatch")
     summary = tree.find("./t:ResultSummary", NS)
     require(summary is not None, "Missing result summary")
     counters = summary.find("t:Counters", NS)
@@ -149,15 +170,86 @@ def reviewed_upload_additions(inventory_path=None, source_path=None):
     return identities
 
 
+RECONCILE_GENERATION_INVENTORY = "docs/reconcile-generation6-inventory.json"
+RECONCILE_GENERATION_INVENTORY_SHA256 = "fca5af6bcc2a7e65a25679e1ef16fb4ce19dd5e8388b554aa81fbf9b3b5b02e2"
+RECONCILE_GENERATION_TEST = "Legacy.Maliev.FileService.Tests/Application/FileApplicationServiceTests.cs"
+RECONCILE_GENERATION_TEST_SHA256 = "f95d5660453e415061b12fc3923caeaa761bae1bef4842387487b1de373f7725"
+
+
+def reviewed_reconcile_additions(inventory_path=None, source_path=None):
+    raw = Path(inventory_path or RECONCILE_GENERATION_INVENTORY).read_bytes()
+    require(digest(raw) == RECONCILE_GENERATION_INVENTORY_SHA256, "Reviewed reconciliation inventory changed")
+    additions = json.loads(raw)
+    require(digest(Path(source_path or RECONCILE_GENERATION_TEST).read_bytes()) == RECONCILE_GENERATION_TEST_SHA256,
+            "Reviewed reconciliation test source changed")
+    require(additions["sourcePath"] == RECONCILE_GENERATION_TEST
+            and additions["sourceSha256"] == RECONCILE_GENERATION_TEST_SHA256
+            and additions["baselineFullCount"] == 1601 and additions["additionalCases"] == 6
+            and additions["expectedFullCount"] == 1607, "Unexpected reviewed reconciliation scope")
+    identities = Counter()
+    methods = Counter()
+    for row in additions["rows"]:
+        require(row["class"] == "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests"
+                and row["executions"] == 1, "Unexpected reviewed reconciliation identity")
+        identity = (row["class"], row["method"], row["testName"])
+        require(identity not in identities, "Duplicate reviewed reconciliation identity")
+        identities[identity] = 1
+        methods[row["method"]] += 1
+    require(methods == Counter({"ReconcileUploadAsync_ReplacementAfterEvidenceRead_SignsOnlyAcknowledgedGeneration": 2,
+                               "ReconcileUploadAsync_StableEvidence_UsesGenerationSigner": 1,
+                               "ReconcileUploadAsync_NonpositiveJournalGeneration_RefusesBeforeReadingOrSigning": 2,
+                               "ReconcileUploadAsync_GenerationSignerFailure_PreservesCauseAndRecoveryObjects": 1}),
+            "Reviewed reconciliation case groups changed")
+    return identities
+
+
+STARTUP_OBSERVATION_INVENTORY = "docs/startup-observation7-inventory.json"
+STARTUP_OBSERVATION_INVENTORY_SHA256 = "f10a21a02d7b1d0b2c06362b2de2f8b9d3688a1bd4ab3f25e4ba2596eb4ca8a6"
+STARTUP_OBSERVATION_TEST = "Legacy.Maliev.FileService.Tests/Startup/FileStartupBoundaryTests.cs"
+STARTUP_OBSERVATION_TEST_SHA256 = "a471b810b4e67bc922dded9c6ba010a0f64334d145dea6021b4c3e41ebc7b03d"
+STARTUP_OBSERVATION_METHODS = (
+    "ExecutableObservation_PresentModuleRecordsObservedIdentity",
+    "ExecutableObservation_AbsentModuleRequiresVerifiedExit",
+    "ExecutableObservation_AbsentLiveModuleFailsWithoutLaunchFallback",
+    "ExecutableObservation_ExitQueryFailurePreservesCause",
+    "ExecutableObservation_ModuleQueryFailurePreservesCause",
+    "ExecutableObservation_ExitBetweenObservationsPreventsTerminationDecision",
+    "ExecutableObservation_PrimaryPrecedesCleanupObservationFailure",
+)
+
+
+def reviewed_startup_additions(inventory_path=None, source_path=None):
+    raw = Path(inventory_path or STARTUP_OBSERVATION_INVENTORY).read_bytes()
+    require(digest(raw) == STARTUP_OBSERVATION_INVENTORY_SHA256, "Reviewed startup inventory changed")
+    additions = json.loads(raw)
+    require(digest(Path(source_path or STARTUP_OBSERVATION_TEST).read_bytes()) == STARTUP_OBSERVATION_TEST_SHA256,
+            "Reviewed startup test source changed")
+    require(additions["sourcePath"] == STARTUP_OBSERVATION_TEST
+            and additions["sourceSha256"] == STARTUP_OBSERVATION_TEST_SHA256
+            and additions["baselineFullCount"] == 1607 and additions["additionalCases"] == 7
+            and additions["expectedFullCount"] == 1614, "Unexpected reviewed startup scope")
+    cls = "Legacy.Maliev.FileService.Tests.Startup.FileStartupBoundaryTests"
+    expected = Counter((cls, method, cls + "." + method) for method in STARTUP_OBSERVATION_METHODS)
+    actual = Counter()
+    for row in additions["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["executions"] == 1 and identity not in actual, "Duplicate/invalid startup identity")
+        actual[identity] = 1
+    require(actual == expected, "Reviewed startup identities changed")
+    return actual
+
+
 def verify_full(path, inventory):
     rows = read_trx(path)
     additions = reviewed_upload_additions()
-    require(len(rows) == 1601 and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass all1601")
+    reconcile_additions = reviewed_reconcile_additions()
+    startup_additions = reviewed_startup_additions()
+    require(len(rows) == 1614 and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass all1614")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions
-    require(sum(prior.values()) == 1567 and sum(expected.values()) == 1601
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions
+    require(sum(prior.values()) == 1567 and sum(expected.values()) == 1614
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
-            "Full suite changed accepted1576 or reviewed25 identities")
+            "Full suite changed accepted1601 or reviewed6+7 identities")
     verify_focus_rows([r for r in rows if r["class"] == CLASS], False, inventory)
     return rows
 

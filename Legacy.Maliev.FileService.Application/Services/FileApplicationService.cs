@@ -196,11 +196,11 @@ public sealed class FileApplicationService(
                 || move.SourceObjectName != names.BuildQuarantineObjectName(operationId, objectName)
                 || move.SourceGeneration <= 0
                 || move.DestinationBucket != bucket || move.DestinationObjectName != objectName
-                || move.DestinationGeneration is not long destinationGeneration
+                || move.DestinationGeneration is not long destinationGeneration || destinationGeneration <= 0
                 || !await repository.ExistsAsync(bucket, objectName, cancellationToken)) return null;
             var live = await storage.GetEvidenceAsync(bucket, objectName, cancellationToken);
             if (live is null || live.Generation != destinationGeneration || live.Size != file.Length) return null;
-            var uri = await storage.CreateSignedReadUriAsync(bucket, objectName, duration, cancellationToken);
+            var uri = await storage.CreateSignedGenerationReadUriAsync(bucket, objectName, destinationGeneration, duration, cancellationToken);
             result.Add(new UploadObjectResponse(bucket, objectName, uri));
             if (move.State == "MetadataSubmitting") pendingMetadata.Add(new StorageMoveClaim(MoveId(operationId, objectName), move with { State = "SourceDeleted" }));
             else hasOtherStages = true;

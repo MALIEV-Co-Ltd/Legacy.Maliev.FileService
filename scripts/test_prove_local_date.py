@@ -41,11 +41,15 @@ class ProofTests(unittest.TestCase):
         n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
         root = ET.Element(n + "TestRun")
         definitions = ET.SubElement(root, n + "TestDefinitions")
-        definition = ET.SubElement(definitions, n + "UnitTest", id="test1", name="case1")
+        test_id = "00000000-0000-4000-8000-000000000001"
+        execution_id = "00000000-0000-4000-8000-000000000002"
+        definition = ET.SubElement(definitions, n + "UnitTest", id=test_id, name="case1")
         ET.SubElement(definition, n + "TestMethod", className=CLASS, name=METHOD)
-        ET.SubElement(definition, n + "Execution", id="execution1")
+        ET.SubElement(definition, n + "Execution", id=execution_id)
+        entries = ET.SubElement(root, n + "TestEntries")
+        ET.SubElement(entries, n + "TestEntry", testId=test_id, executionId=execution_id)
         results = ET.SubElement(root, n + "Results")
-        result = ET.SubElement(results, n + "UnitTestResult", testId="test1", testName="case1", executionId="execution1", outcome="Passed")
+        result = ET.SubElement(results, n + "UnitTestResult", testId=test_id, testName="case1", executionId=execution_id, outcome="Passed")
         summary = ET.SubElement(root, n + "ResultSummary", outcome="Completed")
         counters = ET.SubElement(summary, n + "Counters", total="1", executed="1", passed="1", failed="0", timeout="0")
         with tempfile.TemporaryDirectory() as d:
@@ -84,12 +88,18 @@ class ReviewedUploadRosterTests(unittest.TestCase):
         rows += [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
                       message="", stack="", errorInfo=False)
                  for cls, method, name in reviewed_upload_additions().elements()]
+        rows += [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                      message="", stack="", errorInfo=False)
+                 for cls, method, name in reviewed_reconcile_additions().elements()]
+        rows += [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                      message="", stack="", errorInfo=False)
+                 for cls, method, name in reviewed_startup_additions().elements()]
         return rows
 
-    def test_exact_accepted1576_plus_reviewed25_passes(self):
+    def test_exact_accepted1601_plus_reviewed6_and7_passes(self):
         import unittest.mock
         rows = self.full_rows()
-        self.assertEqual(1601, len(rows))
+        self.assertEqual(1614, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             self.assertEqual(rows, verify_full("controlled", prior_inventory()))
 
@@ -134,3 +144,184 @@ class ReviewedUploadRosterTests(unittest.TestCase):
                     source.write_bytes(original_source + (b" " if changed == "source" else b""))
                     with self.assertRaises(ValueError):
                         reviewed_upload_additions(inventory, source)
+
+class ReviewedReconcileRosterTests(unittest.TestCase):
+    def full_rows(self):
+        return ReviewedUploadRosterTests.full_rows(self)
+
+    def test_old_complete1601_cannot_substitute_for_additive1614(self):
+        import unittest.mock
+        rows = self.full_rows()[:-13]
+        self.assertEqual(1601, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            with self.assertRaises(ValueError):
+                verify_full("old-complete", prior_inventory())
+
+    def test_prior1601_identities_are_preserved_exactly(self):
+        rows = self.full_rows()
+        old = Counter((row["class"], row["method"], row["name"]) for row in rows[:-13])
+        prior = Counter({(row["className"], row["method"], row["testName"]): row["executions"]
+                         for row in prior_inventory()["rows"]})
+        self.assertEqual(prior + new_identities() + reviewed_upload_additions(), old)
+        self.assertEqual(1601, sum(old.values()))
+        self.assertEqual(reviewed_reconcile_additions(),
+                         Counter((row["class"], row["method"], row["name"]) for row in rows[-13:-7]))
+
+    def test_reconcile_inventory_and_source_bindings_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = Path(directory) / "inventory.json"
+            source = Path(directory) / "source.cs"
+            original_inventory = Path(RECONCILE_GENERATION_INVENTORY).read_bytes()
+            original_source = Path(RECONCILE_GENERATION_TEST).read_bytes()
+            inventory.write_bytes(original_inventory)
+            source.write_bytes(original_source)
+            self.assertEqual(6, sum(reviewed_reconcile_additions(inventory, source).values()))
+            for changed in ("inventory", "source"):
+                with self.subTest(changed=changed):
+                    inventory.write_bytes(original_inventory + (b" " if changed == "inventory" else b""))
+                    source.write_bytes(original_source + (b" " if changed == "source" else b""))
+                    with self.assertRaises(ValueError):
+                        reviewed_reconcile_additions(inventory, source)
+
+    def test_real_redis_first_acquire_failure_is_never_hidden(self):
+        import unittest.mock
+        rows = self.full_rows()
+        name = ('Legacy.Maliev.FileService.Tests.Data.RedisUploadIdempotencyStoreTests.'
+                'SupersededWorker_CannotChangeNewReservationOrItsLease(operation: "release")')
+        failed = [row for row in rows if row["name"] == name]
+        self.assertEqual(1, len(failed))
+        failed[0].update(outcome="Failed", errorInfo=True, message="command=UNWATCH; timeout is 5000ms",
+                         stack="RedisUploadIdempotencyStore.AcquireAsync")
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            with self.assertRaises(ValueError):
+                verify_full("real-failure-shaped-fixture", prior_inventory())
+
+    def test_exact_count_with_unreviewed_new_identity_is_rejected(self):
+        import unittest.mock
+        rows = self.full_rows()
+        rows[-8] = dict(rows[-8], name="unreviewed-reconciliation-case")
+        self.assertEqual(1614, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            with self.assertRaises(ValueError):
+                verify_full("same-count-replaced-new-case", prior_inventory())
+
+
+class ReviewedStartupRosterTests(unittest.TestCase):
+    def test_old_complete1607_is_rejected(self):
+        import unittest.mock
+        rows = ReviewedUploadRosterTests.full_rows(self)[:-7]
+        self.assertEqual(1607, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            with self.assertRaises(ValueError):
+                verify_full("old-complete1607", prior_inventory())
+
+    def test_prior1607_counter_is_preserved(self):
+        rows = ReviewedUploadRosterTests.full_rows(self)
+        prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"]
+                         for r in prior_inventory()["rows"]})
+        self.assertEqual(prior + new_identities() + reviewed_upload_additions() + reviewed_reconcile_additions(),
+                         Counter((r["class"], r["method"], r["name"]) for r in rows[:-7]))
+        self.assertEqual(reviewed_startup_additions(),
+                         Counter((r["class"], r["method"], r["name"]) for r in rows[-7:]))
+
+    def test_startup_source_and_inventory_tampering_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = Path(directory) / "inventory.json"
+            source = Path(directory) / "source.cs"
+            original_inventory = Path(STARTUP_OBSERVATION_INVENTORY).read_bytes()
+            original_source = Path(STARTUP_OBSERVATION_TEST).read_bytes()
+            inventory.write_bytes(original_inventory)
+            source.write_bytes(original_source)
+            self.assertEqual(7, sum(reviewed_startup_additions(inventory, source).values()))
+            for changed in ("inventory", "source"):
+                with self.subTest(changed=changed):
+                    inventory.write_bytes(original_inventory + (b" " if changed == "inventory" else b""))
+                    source.write_bytes(original_source + (b" " if changed == "source" else b""))
+                    with self.assertRaises(ValueError):
+                        reviewed_startup_additions(inventory, source)
+
+    def test_changed_startup_identity_at_same_count_is_rejected(self):
+        import unittest.mock
+        rows = ReviewedUploadRosterTests.full_rows(self)
+        rows[-1] = dict(rows[-1], name="unreviewed-startup-case")
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            with self.assertRaises(ValueError):
+                verify_full("same-count-changed-startup", prior_inventory())
+
+    def test_nonpassing_startup_controls_are_rejected(self):
+        import unittest.mock
+        for mutation in ("failed", "skipped", "passing-with-error"):
+            with self.subTest(mutation=mutation):
+                rows = ReviewedUploadRosterTests.full_rows(self)
+                rows[-1].update(outcome={"failed": "Failed", "skipped": "NotExecuted"}.get(mutation, "Passed"),
+                                errorInfo=mutation != "skipped")
+                with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+                    with self.assertRaises(ValueError):
+                        verify_full("nonpassing-startup", prior_inventory())
+
+
+class TrxEntryJoinTests(unittest.TestCase):
+    def fixture(self):
+        import xml.etree.ElementTree as ET
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        root = ET.Element(n + "TestRun")
+        definitions = ET.SubElement(root, n + "TestDefinitions")
+        results = ET.SubElement(root, n + "Results")
+        entries = ET.SubElement(root, n + "TestEntries")
+        for index in (1, 2):
+            identity = f"00000000-0000-4000-8000-{index:012d}"
+            execution = f"00000000-0000-4000-8000-{index + 10:012d}"
+            definition = ET.SubElement(definitions, n + "UnitTest", id=identity, name=f"case{index}")
+            ET.SubElement(definition, n + "TestMethod", className=CLASS, name=METHOD)
+            ET.SubElement(definition, n + "Execution", id=execution)
+            ET.SubElement(results, n + "UnitTestResult", testId=identity, executionId=execution,
+                          testName=f"case{index}", outcome="Passed")
+            ET.SubElement(entries, n + "TestEntry", testId=identity, executionId=execution)
+        summary = ET.SubElement(root, n + "ResultSummary", outcome="Completed")
+        ET.SubElement(summary, n + "Counters", total="2", executed="2", passed="2", failed="0")
+        return root, definitions, results, entries
+
+    def verify_rejected(self, mutate):
+        import xml.etree.ElementTree as ET
+        root, definitions, results, entries = self.fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "join.trx"
+            ET.ElementTree(root).write(path)
+            self.assertEqual(2, len(read_trx(path)))
+            mutate(root, definitions, results, entries)
+            ET.ElementTree(root).write(path)
+            with self.assertRaises(ValueError):
+                read_trx(path)
+
+    def test_absent_entries_section_is_rejected(self):
+        self.verify_rejected(lambda root, definitions, results, entries: root.remove(entries))
+
+    def test_missing_entry_is_rejected(self):
+        self.verify_rejected(lambda root, definitions, results, entries: entries.remove(entries[1]))
+
+    def test_duplicate_entry_at_same_count_is_rejected(self):
+        def mutate(root, definitions, results, entries):
+            entries[1].attrib.update(entries[0].attrib)
+        self.verify_rejected(mutate)
+
+    def test_swapped_entry_executions_are_rejected(self):
+        def mutate(root, definitions, results, entries):
+            first, second = entries[0].get("executionId"), entries[1].get("executionId")
+            entries[0].set("executionId", second)
+            entries[1].set("executionId", first)
+        self.verify_rejected(mutate)
+
+    def test_unknown_entry_test_id_is_rejected(self):
+        self.verify_rejected(lambda root, definitions, results, entries:
+                             entries[1].set("testId", "00000000-0000-4000-8000-000000000099"))
+
+    def test_malformed_guids_in_every_join_surface_are_rejected(self):
+        for surface, attribute in (("definition", "id"), ("execution", "id"), ("result", "testId"),
+                                   ("result", "executionId"), ("entry", "testId"), ("entry", "executionId")):
+            for value in ("", "not-a-guid", "{00000000-0000-4000-8000-000000000001}"):
+                with self.subTest(surface=surface, attribute=attribute, value=value):
+                    def mutate(root, definitions, results, entries):
+                        node = {"definition": definitions[0], "execution": definitions[0][1],
+                                "result": results[0], "entry": entries[0]}[surface]
+                        node.set(attribute, value)
+                    self.verify_rejected(mutate)

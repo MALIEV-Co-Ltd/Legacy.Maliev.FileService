@@ -68,7 +68,7 @@ jobs:
         with:
           solution: Legacy.Maliev.FileService.slnx
           use-local-maliev-dependencies: 'true'
-      - name: Require all eight standalone startup boundary regressions
+      - name: Require original eight and seven additional startup boundary regressions
         shell: bash
         env:
           GITHUB_ACTIONS: 'false'
@@ -78,6 +78,9 @@ jobs:
           timeout 600 dotnet test Legacy.Maliev.FileService.Tests/Legacy.Maliev.FileService.Tests.csproj --configuration Release --no-build --no-restore --filter FullyQualifiedName~FileStartupBoundaryTests --logger 'trx;LogFileName=startup.trx' --results-directory startup-results
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
+          import sys
+          sys.path.insert(0, 'scripts')
+          from prove_local_date import read_trx, reviewed_startup_additions, prior_inventory, require
           tree = ET.parse('startup-results/startup.trx')
           ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
           results = tree.findall('./t:Results/t:UnitTestResult', ns)
@@ -91,7 +94,23 @@ jobs:
               prefix + 'UnsettledReaders_PreventDisposalAndRemovalUntilBothActuallyFinish': 1,
               prefix + 'DirectoryCleanupFailure_PreservesPrimaryAndEveryCleanupFailureForRecovery': 1,
           }
+          # Strict execution joins cover the entire additive roster before retaining
+          # the original eight-case gate below unchanged.
+          joined = read_trx('startup-results/startup.trx')
+          original = Counter({(row['className'], row['method'], row['testName']): row['executions']
+                              for row in prior_inventory()['rows'] if row['className'] == prefix.rstrip('.')})
+          additions = reviewed_startup_additions()
+          require(sum(original.values()) == 8 and sum(additions.values()) == 7, 'Startup scope changed')
+          require(len(joined) == 15 and Counter((row['class'], row['method'], row['name']) for row in joined)
+                  == original + additions, 'Expected exact original eight plus reviewed seven startup identities')
+          require(all(row['outcome'] == 'Passed' and not row['errorInfo'] for row in joined),
+                  'All fifteen startup cases must pass without ErrorInfo')
           definitions = tree.findall('./t:TestDefinitions/t:UnitTest', ns)
+          definitions = [definition for definition in definitions
+                         if definition.find('t:TestMethod', ns).get('className', '').split(',', 1)[0].strip()
+                         + '.' + definition.find('t:TestMethod', ns).get('name', '').split('(', 1)[0] in expected]
+          original_ids = {definition.get('id') for definition in definitions}
+          results = [row for row in results if row.get('testId') in original_ids]
           by_id = {}
           for definition in definitions:
               identity = definition.get('id')
