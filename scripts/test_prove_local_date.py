@@ -463,13 +463,14 @@ class ReviewedSignedDownloadRosterTests(unittest.TestCase):
         return ReviewedDeleteLiteralRosterTests.candidate_rows(self) + [
             dict(**{"class": cls}, method=method, name=name, outcome="Passed",
                  message="", stack="", errorInfo=False)
-            for cls, method, name in (reviewed_signed_download_additions() + reviewed_move_additions()).elements()
+            for cls, method, name in (reviewed_signed_download_additions() + reviewed_move_additions()
+                                     + reviewed_redis_additions()).elements()
         ]
 
     def test_exact_accepted1637_plus_signed3_passes(self):
         import unittest.mock
         rows = self.rows()
-        self.assertEqual(1648, len(rows))
+        self.assertEqual(1655, len(rows))
         with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
             self.assertEqual(rows, verify_full("controlled", prior_inventory()))
         self.assertEqual(ReviewedDeleteLiteralRosterTests.candidate_rows(self), rows[:1637])
@@ -477,13 +478,27 @@ class ReviewedSignedDownloadRosterTests(unittest.TestCase):
     def test_move_eight_and_accepted1640_must_be_retained(self):
         import unittest.mock
         rows = self.rows()
-        move = rows[1640:]
+        move = rows[1640:1648]
         with unittest.mock.patch("prove_local_date.read_trx", return_value=move):
             self.assertEqual(move, verify_move_focus("controlled"))
-        for changed in (rows[:1640], rows[:-1], rows + [dict(rows[-1])]):
+        for changed in (rows[:1640], rows[:1648], rows[:-1], rows + [dict(rows[-1])]):
             with unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
                 with self.assertRaises(ValueError):
                     verify_full("mutated", prior_inventory())
+
+    def test_redis_model_and_original_nine_focus_rejects_missing_or_replaced_case(self):
+        import unittest.mock
+        rows = [row for row in self.rows() if row["class"] == REDIS_REAL_CLASS
+                or row["class"].endswith(".RedisUploadAcquisitionOutcomeTests")]
+        self.assertEqual(16, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_redis_focus("controlled"))
+        changed = [dict(row) for row in rows]
+        changed[-1]["name"] = "unreviewed"
+        for bad in (rows[:-1], changed):
+            with unittest.mock.patch("prove_local_date.read_trx", return_value=bad):
+                with self.assertRaises(ValueError):
+                    verify_redis_focus("mutated")
 
     def test_old_roster_replacement_duplicate_failed_skipped_and_passing_error_reject(self):
         import unittest.mock

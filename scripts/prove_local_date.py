@@ -373,7 +373,36 @@ def reviewed_move_additions(inventory_path=None, source_root=None):
     return identities
 
 
-def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True):
+REDIS_MODEL_INVENTORY = "docs/redis-acquisition7-inventory.json"
+REDIS_MODEL_INVENTORY_SHA256 = "7c06d8c829d209869884a95b70075d8b338d9feb70b25a80bf574b3ea75f35e1"
+REDIS_REAL_CLASS = "Legacy.Maliev.FileService.Tests.Data.RedisUploadIdempotencyStoreTests"
+
+
+def reviewed_redis_additions(inventory_path=None, source_root=None):
+    raw = Path(inventory_path or REDIS_MODEL_INVENTORY).read_bytes()
+    require(digest(raw) == REDIS_MODEL_INVENTORY_SHA256, "Reviewed Redis model inventory changed")
+    additions = json.loads(raw)
+    require((additions["baselineFullCount"], additions["additionalCases"], additions["expectedFullCount"])
+            == (1648, 7, 1655), "Unexpected Redis model scope")
+    model = "Legacy.Maliev.FileService.Tests/Data/RedisUploadAcquisitionOutcomeTests.cs"
+    expected_sources = {model, "Legacy.Maliev.FileService.Tests/Data/RedisUploadIdempotencyStoreTests.cs"}
+    require(len(additions["sources"]) == 2 and {row["path"] for row in additions["sources"]} == expected_sources,
+            "Unexpected Redis source scope")
+    for row in additions["sources"]:
+        require(digest((Path(source_root or ".") / row["path"]).read_bytes()) == row["sha256"],
+                "Reviewed Redis source changed")
+    content = (Path(source_root or ".") / model).read_text()
+    methods = re.findall(r"public async Task (\w+)\(", content)
+    cls = "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests"
+    expected = Counter((cls, method, cls + "." + method) for method in methods)
+    actual = Counter((row["class"], row["method"], row["testName"]) for row in additions["rows"])
+    require(len(methods) == 7 and content.count("[Fact]") == 7 and actual == expected
+            and all(row["executions"] == 1 for row in additions["rows"]), "Unexpected Redis model identities")
+    return actual
+
+
+def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
+                include_redis_models=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -381,10 +410,11 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     literal_additions = reviewed_delete_additions() if include_literal_delete else Counter()
     signed_additions = reviewed_signed_download_additions() if include_literal_delete and include_signed_download else Counter()
     move_additions = reviewed_move_additions() if signed_additions and include_literal_move else Counter()
-    expected_count = 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    redis_additions = reviewed_redis_additions() if move_additions and include_redis_models else Counter()
+    expected_count = 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
@@ -712,6 +742,37 @@ def prove_move_focus(repo, output, run, tests, head):
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
 
 
+def verify_redis_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    original = Counter({(row["className"], row["method"], row["testName"]): row["executions"]
+                        for row in prior_inventory()["rows"] if row["className"] == REDIS_REAL_CLASS})
+    expected = original + reviewed_redis_additions()
+    require(sum(original.values()) == 9 and len(rows) == 16
+            and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+            and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Redis focus must pass exact original nine plus seven model cases")
+    return rows
+
+
+def prove_redis_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    reviewed_redis_additions()
+    sources = json.loads(Path(REDIS_MODEL_INVENTORY).read_text())["sources"]
+    frozen = {row["path"]: (repo / row["path"]).read_bytes() for row in sources}
+    require(run("redis16", tests + ["--filter",
+                "FullyQualifiedName~RedisUploadIdempotencyStoreTests|FullyQualifiedName~RedisUploadAcquisitionOutcomeTests",
+                "--logger", "trx;LogFileName=redis16.trx", "--results-directory", str(output)],
+                120, output) == 0, "Redis diagnostic focus execution failed")
+    rows = verify_redis_focus(output / "redis16.trx")
+    require(all((repo / path).read_bytes() == data for path, data in frozen.items()), "Redis focused source changed")
+    receipt = {"head": head, "originalNinePlusSevenModelsPassed": len(rows),
+               "immutableTests": {path: digest(data) for path, data in frozen.items()},
+               "rawFiles": {path.name: digest(path.read_bytes()) for path in output.iterdir()
+                            if path.suffix in {".trx", ".log"}}, "sourceUnchanged": True,
+               "runtimeCauseConfirmed": False}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
 def main():
     require(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true", "Hosted ordinary runner only; no local SDK custody")
     root = Path(sys.argv[1]).resolve()
@@ -797,6 +858,8 @@ def main():
     prove_signing_focus(repo, root / "signed-download-focus", run, tests, head)
     commands = []
     prove_move_focus(repo, root / "literal-move-focus", run, tests, head)
+    commands = []
+    prove_redis_focus(repo, root / "redis-acquisition-focus", run, tests, head)
 
 
 if __name__ == "__main__":

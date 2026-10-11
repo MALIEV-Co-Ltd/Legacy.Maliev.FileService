@@ -1,0 +1,59 @@
+{
+  "baselineFullCount": 1648,
+  "additionalCases": 7,
+  "expectedFullCount": 1655,
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Data/RedisUploadAcquisitionOutcomeTests.cs",
+      "sha256": "d526c2b8c825fca326c6d5864e2aea96e0f0158ba082d1941fd022706ebf1870"
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Data/RedisUploadIdempotencyStoreTests.cs",
+      "sha256": "830ff1e576c1c20dfd36f3bd92eb3668fbfca37dc08fc7d7b3d5d5987fb8738a"
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "AbortedInitialTransaction_WithMissingCheckpoint_FailsWithoutRetryOrOwnership",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.AbortedInitialTransaction_WithMissingCheckpoint_FailsWithoutRetryOrOwnership",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "ExistingDifferentFingerprint_IsContentionRatherThanMissingState",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.ExistingDifferentFingerprint_IsContentionRatherThanMissingState",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "PendingMatchingLease_RetainsOriginalPathWithoutAcquiring",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.PendingMatchingLease_RetainsOriginalPathWithoutAcquiring",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "PendingMissingLease_BecomesUnknownWithoutGrantingNewOwnership",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.PendingMissingLease_BecomesUnknownWithoutGrantingNewOwnership",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "UnknownCheckpoint_RetainsReservationAndResponseWithoutReexecution",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.UnknownCheckpoint_RetainsReservationAndResponseWithoutReexecution",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "CompletedCheckpoint_ReplaysExactResponseWithoutNewReservation",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.CompletedCheckpoint_ReplaysExactResponseWithoutNewReservation",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests",
+      "method": "StaleWorker_CannotRenewAnotherReservationsLease",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.RedisUploadAcquisitionOutcomeTests.StaleWorker_CannotRenewAnotherReservationsLease",
+      "executions": 1
+    }
+  ]
+}
