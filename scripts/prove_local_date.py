@@ -239,17 +239,55 @@ def reviewed_startup_additions(inventory_path=None, source_path=None):
     return actual
 
 
-def verify_full(path, inventory):
+DELETE_LITERAL_INVENTORY = "docs/delete-literal23-inventory.json"
+DELETE_LITERAL_INVENTORY_SHA256 = "11252f406b1c0ed1377f842ec69b3e1827b5463d6e20855e446ac2214fd20c3a"
+
+
+def reviewed_delete_additions(inventory_path=None, source_root=None):
+    raw = Path(inventory_path or DELETE_LITERAL_INVENTORY).read_bytes()
+    require(digest(raw) == DELETE_LITERAL_INVENTORY_SHA256, "Reviewed literal delete inventory changed")
+    additions = json.loads(raw)
+    require(additions["baselineFullCount"] == 1614 and additions["additionalCases"] == 23
+            and additions["expectedFullCount"] == 1637, "Unexpected literal delete scope")
+    expected_sources = {
+        "Legacy.Maliev.FileService.Tests/Application/FileDeleteLiteralIdentityTests.cs",
+        "Legacy.Maliev.FileService.Tests/Integration/LegacyLiteralDeleteHttpBoundaryTests.cs",
+    }
+    require(len(additions["sources"]) == 2 and {row["path"] for row in additions["sources"]} == expected_sources,
+            "Unexpected literal delete source scope")
+    for source in additions["sources"]:
+        require(digest((Path(source_root or ".") / source["path"]).read_bytes()) == source["sha256"],
+                "Reviewed literal delete test source changed")
+    identities = Counter()
+    for row in additions["rows"]:
+        require(row["class"] in {
+            "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests",
+            "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests",
+        } and row["executions"] == 1 and row["testName"] == row["class"] + "." + row["method"],
+                "Unexpected literal delete identity")
+        identity = (row["class"], row["method"], row["testName"])
+        require(identity not in identities, "Duplicate literal delete identity")
+        identities[identity] = 1
+    require(sum(identities.values()) == 23
+            and Counter(identity[0] for identity in identities) == Counter({
+                "Legacy.Maliev.FileService.Tests.Application.FileDeleteLiteralIdentityTests": 20,
+                "Legacy.Maliev.FileService.Tests.Integration.LegacyLiteralDeleteHttpBoundaryTests": 3,
+            }), "Unexpected literal delete case groups")
+    return identities
+
+def verify_full(path, inventory, include_literal_delete=True):
     rows = read_trx(path)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
     startup_additions = reviewed_startup_additions()
-    require(len(rows) == 1614 and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass all1614")
+    literal_additions = reviewed_delete_additions() if include_literal_delete else Counter()
+    expected_count = 1637 if include_literal_delete else 1614
+    require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions
-    require(sum(prior.values()) == 1567 and sum(expected.values()) == 1614
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions
+    require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
-            "Full suite changed accepted1601 or reviewed6+7 identities")
+            "Full suite changed accepted1614 or reviewed literal deletion identities")
     verify_focus_rows([r for r in rows if r["class"] == CLASS], False, inventory)
     return rows
 

@@ -218,8 +218,7 @@ public sealed class FileApplicationService(
     {
         runtimeGate.EnsureWritesEnabled();
         names.RequireBucket(bucket);
-        objectName = names.RequireObjectName(objectName);
-        RequireGenericObject(objectName);
+        objectName = RequireExistingObjectIdentity(objectName);
         if (!await repository.ExistsAsync(bucket, objectName, cancellationToken) ||
             !await storage.DeleteAsync(bucket, objectName, cancellationToken))
         {
@@ -228,6 +227,18 @@ public sealed class FileApplicationService(
 
         await repository.DeleteAsync(bucket, objectName, cancellationToken);
         return true;
+    }
+
+    private string RequireExistingObjectIdentity(string objectName)
+    {
+        var safetyName = names.RequireObjectName(objectName);
+        RequireGenericObject(safetyName);
+        if (objectName.Any(char.IsControl))
+        {
+            throw new FileUploadValidationException("Object name is invalid");
+        }
+
+        return objectName;
     }
 
     /// <inheritdoc />
