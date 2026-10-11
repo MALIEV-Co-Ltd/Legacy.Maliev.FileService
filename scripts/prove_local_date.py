@@ -374,7 +374,7 @@ def reviewed_move_additions(inventory_path=None, source_root=None):
 
 
 REDIS_MODEL_INVENTORY = "docs/redis-acquisition7-inventory.json"
-REDIS_MODEL_INVENTORY_SHA256 = "7c06d8c829d209869884a95b70075d8b338d9feb70b25a80bf574b3ea75f35e1"
+REDIS_MODEL_INVENTORY_SHA256 = "6dd4157fec727c4cd9727d7c2b600f877b290fa8a4b6fecb164abdd101ee1998"
 REDIS_REAL_CLASS = "Legacy.Maliev.FileService.Tests.Data.RedisUploadIdempotencyStoreTests"
 
 

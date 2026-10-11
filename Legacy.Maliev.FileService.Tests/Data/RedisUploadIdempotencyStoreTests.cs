@@ -127,10 +127,10 @@ public sealed class RedisUploadIdempotencyStoreTests(ITestOutputHelper output) :
         {
             CaptureDiagnostic(() => connection!.RegisterProfiler(profileLifetime.GetActiveSession), diagnosticFailures);
             CaptureDiagnostic(() => output.WriteLine(JsonSerializer.Serialize(new
-                { phase = "first-acquire-start", connected = connection!.IsConnected })), diagnosticFailures);
+            { phase = "first-acquire-start", connected = connection!.IsConnected })), diagnosticFailures);
             var result = await store.AcquireAsync("FENCE", "old-payload", "orders/old", default);
             CaptureDiagnostic(() => output.WriteLine(JsonSerializer.Serialize(new
-                { phase = "first-acquire-result", state = result.State.ToString() })), diagnosticFailures);
+            { phase = "first-acquire-result", state = result.State.ToString() })), diagnosticFailures);
             return result;
         }
         catch (Exception failure)
@@ -165,8 +165,10 @@ public sealed class RedisUploadIdempotencyStoreTests(ITestOutputHelper output) :
                 }).ToArray();
                 output.WriteLine(JsonSerializer.Serialize(new
                 {
-                    phase = "first-acquire-end", elapsedMs = clock.Elapsed.TotalMilliseconds,
-                    connected = connection!.IsConnected, commands,
+                    phase = "first-acquire-end",
+                    elapsedMs = clock.Elapsed.TotalMilliseconds,
+                    connected = connection!.IsConnected,
+                    commands,
                 }));
             }, diagnosticFailures);
             CompleteDiagnostics(primaryFailure, diagnosticFailures);
