@@ -341,17 +341,50 @@ def verify_signing_focus(path):
     return rows
 
 
-def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True):
+MOVE_LITERAL_INVENTORY = "docs/move-literal8-inventory.json"
+MOVE_LITERAL_INVENTORY_SHA256 = "fa50dc8307b197366562aa709674275d7d544953eecd31c042541454a08ece1d"
+
+
+def reviewed_move_additions(inventory_path=None, source_root=None):
+    raw = Path(inventory_path or MOVE_LITERAL_INVENTORY).read_bytes()
+    require(digest(raw) == MOVE_LITERAL_INVENTORY_SHA256, "Reviewed literal move inventory changed")
+    additions = json.loads(raw)
+    require((additions["baselineFullCount"], additions["additionalCases"], additions["expectedFullCount"])
+            == (1640, 8, 1648), "Unexpected literal move scope")
+    source = "Legacy.Maliev.FileService.Tests/Integration/LegacyFileMoveHttpBoundaryTests.cs"
+    require(len(additions["sources"]) == 1 and additions["sources"][0]["path"] == source,
+            "Unexpected literal move source scope")
+    require(digest((Path(source_root or ".") / source).read_bytes()) == additions["sources"][0]["sha256"],
+            "Reviewed literal move source changed")
+    expected_class = "Legacy.Maliev.FileService.Tests.Integration.LegacyFileMoveHttpBoundaryTests"
+    groups = Counter()
+    identities = Counter()
+    for row in additions["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["class"] == expected_class and row["executions"] == 1 and identity not in identities
+                and row["testName"].startswith(expected_class + "." + row["method"] + "("),
+                "Unexpected literal move identity")
+        identities[identity] = 1
+        groups[row["method"]] += 1
+    require(groups == Counter({
+        "CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates": 4,
+        "CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect": 4,
+    }), "Unexpected literal move groups")
+    return identities
+
+
+def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
     startup_additions = reviewed_startup_additions()
     literal_additions = reviewed_delete_additions() if include_literal_delete else Counter()
     signed_additions = reviewed_signed_download_additions() if include_literal_delete and include_signed_download else Counter()
-    expected_count = 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    move_additions = reviewed_move_additions() if signed_additions and include_literal_move else Counter()
+    expected_count = 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
@@ -565,6 +598,20 @@ def delete_correction_disabled(corrected):
             "Delete correction block/call count differs")
     disabled = corrected.replace(helper, b"").replace(call,
         b"objectName = names.RequireObjectName(objectName);\n        RequireGenericObject(objectName);")
+    # The immutable whole-file DELETE baseline predates the independent move fix.
+    # Reverse only its exact reviewed hunk for historical source reconstruction;
+    # the finally path restores the entire current corrected file before full tests.
+    move = b'''        var sourceSafetyName = names.RequireObjectName(sourceObjectName);
+        var destinationSafetyName = names.RequireObjectName(destinationObjectName);
+        RequireGenericObject(sourceSafetyName);
+        RequireGenericObject(destinationSafetyName);
+        if (sourceObjectName.Any(char.IsControl) || destinationObjectName.Any(char.IsControl))
+            throw new FileUploadValidationException("Object name is invalid");'''
+    require(disabled.count(move) == 1, "Reviewed move correction block differs")
+    disabled = disabled.replace(move, b'''        sourceObjectName = names.RequireObjectName(sourceObjectName);
+        destinationObjectName = names.RequireObjectName(destinationObjectName);
+        RequireGenericObject(sourceObjectName);
+        RequireGenericObject(destinationObjectName);''')
     require(digest(disabled) == DELETE_BASELINE_SHA256, "Delete correction-disabled source differs from immutable baseline")
     return disabled
 
@@ -636,6 +683,30 @@ def prove_signing_focus(repo, output, run, tests, head):
             "Signing focused source custody changed")
     receipt = {"head": head, "acceptedEightPlusThreePassed": len(rows),
                "immutableTests": {path: digest(data) for path, data in frozen.items()},
+               "rawFiles": {path.name: digest(path.read_bytes()) for path in output.iterdir()
+                            if path.suffix in {".trx", ".log"}}, "sourceUnchanged": True}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
+def verify_move_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    require(len(rows) == 8 and Counter((row["class"], row["method"], row["name"]) for row in rows)
+            == reviewed_move_additions() and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Move focus must pass exact reviewed eight")
+    return rows
+
+
+def prove_move_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    reviewed_move_additions()
+    source = json.loads(Path(MOVE_LITERAL_INVENTORY).read_text())["sources"][0]["path"]
+    frozen = (repo / source).read_bytes()
+    require(run("move8", tests + ["--filter", "FullyQualifiedName~CurrentLiteralMove_",
+                "--logger", "trx;LogFileName=move8.trx", "--results-directory", str(output)],
+                120, output) == 0, "Move focus execution failed")
+    rows = verify_move_focus(output / "move8.trx")
+    require((repo / source).read_bytes() == frozen, "Move focused source custody changed")
+    receipt = {"head": head, "reviewedMoveEightPassed": len(rows), "immutableTest": {source: digest(frozen)},
                "rawFiles": {path.name: digest(path.read_bytes()) for path in output.iterdir()
                             if path.suffix in {".trx", ".log"}}, "sourceUnchanged": True}
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
@@ -724,6 +795,8 @@ def main():
     prove_delete_causal(repo, root / "delete-literal-causal", run, build, tests, head, inventory)
     commands = []
     prove_signing_focus(repo, root / "signed-download-focus", run, tests, head)
+    commands = []
+    prove_move_focus(repo, root / "literal-move-focus", run, tests, head)
 
 
 if __name__ == "__main__":
