@@ -345,11 +345,11 @@ def verify_signing_focus(path, include_synchronous_signing=True):
 
 CREDENTIAL_CLASS = "Legacy.Maliev.FileService.Tests.Api.CredentialRegistrationCompatibilityTests"
 CREDENTIAL_TEST = "Legacy.Maliev.FileService.Tests/Api/CredentialRegistrationCompatibilityTests.cs"
-CREDENTIAL_TEST_SHA256 = "0c82ad1747057c56962aeb539dd68112861f370f7ccb787879550b9b3dad0922"
+REGISTRATION_TEST_SOURCE_SHA256 = "0c82ad1747057c56962aeb539dd68112861f370f7ccb787879550b9b3dad0922"
 
 
 def verify_credential_focus(path):
-    require(digest(Path(CREDENTIAL_TEST).read_bytes()) == CREDENTIAL_TEST_SHA256,
+    require(digest(Path(CREDENTIAL_TEST).read_bytes()) == REGISTRATION_TEST_SOURCE_SHA256,
             "Accepted credential test source changed")
     expected = Counter({(row["className"], row["method"], row["testName"]): row["executions"]
                         for row in prior_inventory()["rows"] if row["className"] == CREDENTIAL_CLASS})
