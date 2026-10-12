@@ -2,9 +2,99 @@ import unittest
 from pathlib import Path
 import tempfile
 from prove_local_date import *
+from prove_local_date import verify_full as verify_current_full
+from prove_local_date import verify_signing_focus as verify_current_signing_focus
+
+
+def verify_full(*args, **kwargs):
+    # Existing historical controls keep their original reviewed 1655 ceiling.
+    return verify_current_full(*args, include_synchronous_signing=False, **kwargs)
+
+
+def verify_signing_focus(path):
+    # Retain all original signing11 positive and negative controls unchanged.
+    return verify_current_signing_focus(path, include_synchronous_signing=False)
 def verify_accepted_full(path, inventory):
     # Preserve the historical 1614-roster controls alongside the stricter candidate gate.
     return verify_full(path, inventory, include_literal_delete=False)
+
+
+class ReviewedSynchronousSigningRosterTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedSignedDownloadRosterTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_synchronous_signing_additions().elements()
+        ]
+
+    def test_current_full_retains_all1655_and_exact_six(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1661, len(rows))
+        self.assertEqual(ReviewedSignedDownloadRosterTests.rows(self), rows[:1655])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_current_full("controlled", prior_inventory()))
+        replaced = [dict(row) for row in rows]
+        replaced[-1]["name"] = "unreviewed"
+        failed = [dict(row) for row in rows]
+        failed[-1]["outcome"] = "Failed"
+        for bad in (rows[:1655], rows[:-1], rows + [dict(rows[-1])], replaced, failed):
+            with unittest.mock.patch("prove_local_date.read_trx", return_value=bad):
+                with self.assertRaises(ValueError):
+                    verify_current_full("mutated", prior_inventory())
+
+    def test_current_signing_focus_retains_eleven_plus_exact_six(self):
+        import unittest.mock
+        rows = [row for row in self.rows() if row["class"] in {
+            SIGNED_DOWNLOAD_CLASS, SIGNED_EXISTING_CLASS, SYNC_SIGNING_CLASS}]
+        self.assertEqual(17, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_current_signing_focus("controlled"))
+        replaced = [dict(row) for row in rows]
+        replaced[-1]["name"] = "unreviewed"
+        error = [dict(row) for row in rows]
+        error[-1]["errorInfo"] = True
+        for bad in (rows[:-1], rows + [dict(rows[-1])], replaced, error):
+            with unittest.mock.patch("prove_local_date.read_trx", return_value=bad):
+                with self.assertRaises(ValueError):
+                    verify_current_signing_focus("mutated")
+
+    def test_synchronous_inventory_rejects_modified_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inventory.json"
+            path.write_bytes(Path(SYNC_SIGNING_INVENTORY).read_bytes() + b" ")
+            with self.assertRaisesRegex(ValueError, "synchronous signing inventory changed"):
+                reviewed_synchronous_signing_additions(path)
+
+    def test_separate_credential_focus_retains_exact_six(self):
+        import unittest.mock
+        rows = [row for row in self.rows() if row["class"] == CREDENTIAL_CLASS]
+        self.assertEqual(6, len(rows))
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_credential_focus("controlled"))
+        replaced = [dict(row) for row in rows]
+        replaced[-1]["name"] = "unreviewed"
+        for bad in (rows[:-1], rows + [dict(rows[-1])], replaced):
+            with unittest.mock.patch("prove_local_date.read_trx", return_value=bad):
+                with self.assertRaises(ValueError):
+                    verify_credential_focus("mutated")
+
+    def test_synchronous_inventory_rejects_adapter_or_test_source_drift(self):
+        import json
+        import shutil
+        inventory = json.loads(Path(SYNC_SIGNING_INVENTORY).read_text())
+        for source in inventory["sources"]:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for entry in inventory["sources"]:
+                    target = root / entry["path"]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(entry["path"], target)
+                self.assertEqual(6, sum(reviewed_synchronous_signing_additions(source_root=root).values()))
+                changed = root / source["path"]
+                changed.write_bytes(changed.read_bytes() + b" ")
+                with self.assertRaisesRegex(ValueError, "synchronous signing source changed"):
+                    reviewed_synchronous_signing_additions(source_root=root)
 
 class ProofTests(unittest.TestCase):
     def rows(self, baseline):

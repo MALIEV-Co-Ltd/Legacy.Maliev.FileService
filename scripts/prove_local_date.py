@@ -332,12 +332,32 @@ def reviewed_existing_signing_identities(source_root=None):
     return expected
 
 
-def verify_signing_focus(path):
+def verify_signing_focus(path, include_synchronous_signing=True):
     rows = read_trx(path, strict_clean_run=True)
     expected = reviewed_existing_signing_identities() + reviewed_signed_download_additions()
-    require(len(rows) == 11 and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+    if include_synchronous_signing:
+        expected += reviewed_synchronous_signing_additions()
+    require(len(rows) == sum(expected.values()) and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
             and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
-            "Signing focus must pass exact accepted eight plus reviewed three")
+            "Signing focus must pass exact reviewed signing roster")
+    return rows
+
+
+CREDENTIAL_CLASS = "Legacy.Maliev.FileService.Tests.Api.CredentialRegistrationCompatibilityTests"
+CREDENTIAL_TEST = "Legacy.Maliev.FileService.Tests/Api/CredentialRegistrationCompatibilityTests.cs"
+REGISTRATION_TEST_SOURCE_SHA256 = "0c82ad1747057c56962aeb539dd68112861f370f7ccb787879550b9b3dad0922"
+
+
+def verify_credential_focus(path):
+    require(digest(Path(CREDENTIAL_TEST).read_bytes()) == REGISTRATION_TEST_SOURCE_SHA256,
+            "Accepted credential test source changed")
+    expected = Counter({(row["className"], row["method"], row["testName"]): row["executions"]
+                        for row in prior_inventory()["rows"] if row["className"] == CREDENTIAL_CLASS})
+    rows = read_trx(path, strict_clean_run=True)
+    require(sum(expected.values()) == 6 and len(rows) == 6
+            and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+            and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Credential focus must pass exact accepted six")
     return rows
 
 
@@ -401,8 +421,45 @@ def reviewed_redis_additions(inventory_path=None, source_root=None):
     return actual
 
 
+SYNC_SIGNING_INVENTORY = "docs/signed-download-sync6-inventory.json"
+SYNC_SIGNING_INVENTORY_SHA256 = "8b68ef89e54540d7382231cafc8f31ac0e0f9883a5967d210c6d9050c3907629"
+SYNC_SIGNING_CLASS = "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests"
+
+
+def reviewed_synchronous_signing_additions(inventory_path=None, source_root=None):
+    raw = Path(inventory_path or SYNC_SIGNING_INVENTORY).read_bytes()
+    require(digest(raw) == SYNC_SIGNING_INVENTORY_SHA256, "Reviewed synchronous signing inventory changed")
+    additions = json.loads(raw)
+    require((additions["baselineFullCount"], additions["additionalCases"], additions["expectedFullCount"],
+             additions["expectedSigningFocus"]) == (1655, 6, 1661, 17), "Unexpected synchronous signing scope")
+    test = "Legacy.Maliev.FileService.Tests/Data/LegacySignedDownloadSynchronousBoundaryTests.cs"
+    expected_sources = {test, "Legacy.Maliev.FileService.Data/GoogleCloudObjectStorage.cs"}
+    require(len(additions["sources"]) == 2 and {row["path"] for row in additions["sources"]} == expected_sources,
+            "Unexpected synchronous signing source scope")
+    for row in additions["sources"]:
+        require(digest((Path(source_root or ".") / row["path"]).read_bytes()) == row["sha256"],
+                "Reviewed synchronous signing source changed")
+    content = (Path(source_root or ".") / test).read_text()
+    theory = "SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4"
+    facts = ["SynchronousSigning_ProducesVerifiableSyntheticRsaSignatureWithoutTransport",
+             "SynchronousSigning_PropagatesExactFailureWithoutNullOrAsyncFallback"]
+    require(content.count("[Theory]") == 1 and content.count("[Fact]") == 2
+            and re.findall(r"public void (\w+)\(", content) == [theory] + facts
+            and re.findall(r"\[InlineData\((\d+), (\d+)\)\]", content)
+            == [("1", "3600"), ("168", "604800"), ("169", "604800"), ("720", "604800")],
+            "Synchronous signing source identities changed")
+    expected = Counter((SYNC_SIGNING_CLASS, theory,
+                        f"{SYNC_SIGNING_CLASS}.{theory}(hours: {hours}, expectedSeconds: {seconds})")
+                       for hours, seconds in [(1, 3600), (168, 604800), (169, 604800), (720, 604800)])
+    expected += Counter((SYNC_SIGNING_CLASS, name, SYNC_SIGNING_CLASS + "." + name) for name in facts)
+    actual = Counter((row["class"], row["method"], row["testName"]) for row in additions["rows"])
+    require(actual == expected and all(row["executions"] == 1 for row in additions["rows"]),
+            "Unexpected synchronous signing identities")
+    return actual
+
+
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
-                include_redis_models=True):
+                include_redis_models=True, include_synchronous_signing=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -411,10 +468,11 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     signed_additions = reviewed_signed_download_additions() if include_literal_delete and include_signed_download else Counter()
     move_additions = reviewed_move_additions() if signed_additions and include_literal_move else Counter()
     redis_additions = reviewed_redis_additions() if move_additions and include_redis_models else Counter()
-    expected_count = 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    sync_additions = reviewed_synchronous_signing_additions() if redis_additions and include_synchronous_signing else Counter()
+    expected_count = 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
@@ -698,20 +756,39 @@ def prove_delete_causal(repo, output, run, build, tests, head, inventory):
                "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir() if p.suffix in {".trx", ".log"}}}
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
 
+def prove_credential_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    frozen = {path: (repo / path).read_bytes() for path in
+              (CREDENTIAL_TEST, "Legacy.Maliev.FileService.Api/FileServiceRuntimeRegistration.cs")}
+    require(run("credential6", tests + ["--filter", "FullyQualifiedName~CredentialRegistrationCompatibilityTests",
+                "--logger", "trx;LogFileName=credential6.trx", "--results-directory", str(output)],
+                120, output) == 0, "Credential focus execution failed")
+    rows = verify_credential_focus(output / "credential6.trx")
+    require(all((repo / path).read_bytes() == content for path, content in frozen.items()),
+            "Credential focused source custody changed")
+    receipt = {"head": head, "acceptedSixPassed": len(rows), "sourceUnchanged": True,
+               "immutableTests": {path: digest(data) for path, data in frozen.items()},
+               "rawFiles": {path.name: digest(path.read_bytes()) for path in output.iterdir()
+                            if path.suffix in {".trx", ".log"}}}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
 def prove_signing_focus(repo, output, run, tests, head):
     output.mkdir(exist_ok=False)
     reviewed_existing_signing_identities()
     reviewed_signed_download_additions()
+    reviewed_synchronous_signing_additions()
     additional_source = json.loads(Path(SIGNED_DOWNLOAD_INVENTORY).read_text())["sources"][0]["path"]
-    frozen = {path: (repo / path).read_bytes() for path in (SIGNED_EXISTING_TEST, additional_source)}
-    require(run("signing11", tests + ["--filter",
-                "FullyQualifiedName~LegacySignedDownloadAsyncBoundaryTests|FullyQualifiedName~GoogleCloudObjectStorageSignedUrlTests",
-                "--logger", "trx;LogFileName=signing11.trx", "--results-directory", str(output)],
+    sync_sources = [row["path"] for row in json.loads(Path(SYNC_SIGNING_INVENTORY).read_text())["sources"]]
+    frozen = {path: (repo / path).read_bytes() for path in (SIGNED_EXISTING_TEST, additional_source, *sync_sources)}
+    require(run("signing17", tests + ["--filter",
+                "FullyQualifiedName~LegacySignedDownloadAsyncBoundaryTests|FullyQualifiedName~GoogleCloudObjectStorageSignedUrlTests|FullyQualifiedName~LegacySignedDownloadSynchronousBoundaryTests",
+                "--logger", "trx;LogFileName=signing17.trx", "--results-directory", str(output)],
                 120, output) == 0, "Signing focus execution failed")
-    rows = verify_signing_focus(output / "signing11.trx")
+    rows = verify_signing_focus(output / "signing17.trx")
     require(all((repo / path).read_bytes() == content for path, content in frozen.items()),
             "Signing focused source custody changed")
-    receipt = {"head": head, "acceptedEightPlusThreePassed": len(rows),
+    receipt = {"head": head, "acceptedEightPlusThreePlusSixPassed": len(rows),
                "immutableTests": {path: digest(data) for path, data in frozen.items()},
                "rawFiles": {path.name: digest(path.read_bytes()) for path in output.iterdir()
                             if path.suffix in {".trx", ".log"}}, "sourceUnchanged": True}
@@ -856,6 +933,8 @@ def main():
     prove_delete_causal(repo, root / "delete-literal-causal", run, build, tests, head, inventory)
     commands = []
     prove_signing_focus(repo, root / "signed-download-focus", run, tests, head)
+    commands = []
+    prove_credential_focus(repo, root / "credential-registration-focus", run, tests, head)
     commands = []
     prove_move_focus(repo, root / "literal-move-focus", run, tests, head)
     commands = []

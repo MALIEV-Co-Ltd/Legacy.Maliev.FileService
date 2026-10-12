@@ -330,6 +330,20 @@ public sealed class GoogleCloudObjectStorage(StorageClient client, UrlSigner sig
         }
     }
 
+    /// <summary>Creates a signed read URL using the genuine synchronous SDK signing boundary.</summary>
+    /// <param name="bucketName">The literal bucket name.</param>
+    /// <param name="objectName">The literal object name.</param>
+    /// <param name="timeSpan">The requested duration, capped at seven days.</param>
+    /// <returns>The signed URL. Signing failures propagate through the approved actionable failure boundary.</returns>
+    public Uri GetSignedUrl(string bucketName, string objectName, TimeSpan timeSpan)
+    {
+        var request = CreateReadRequestTemplate(bucketName, objectName);
+        var options = CreateReadOptions(timeSpan);
+        if (hostedOrigin is not null) options = hostedOrigin.Apply(options);
+        var url = signer.Sign(request, options);
+        return hostedOrigin is null ? new Uri(url, UriKind.Absolute) : hostedOrigin.ValidateSignedUri(url);
+    }
+
     /// <inheritdoc />
     public async Task<Uri> CreateSignedReadUriAsync(
         string bucket,
