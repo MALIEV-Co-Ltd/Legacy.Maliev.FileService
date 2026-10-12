@@ -1,0 +1,54 @@
+{
+  "baselineFullCount": 1655,
+  "additionalCases": 6,
+  "expectedFullCount": 1661,
+  "expectedSigningFocus": 17,
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Data/GoogleCloudObjectStorage.cs",
+      "sha256": "618ff6c66c43b26f640cba26112543143a72371eef92583898ed293fd54a0b41"
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Data/LegacySignedDownloadSynchronousBoundaryTests.cs",
+      "sha256": "2ca045ca441ec6f9d50d53d599548f5b63a8dd215f6bcd5cf8ae39ee6daaa4a9"
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests",
+      "method": "SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests.SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4(hours: 1, expectedSeconds: 3600)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests",
+      "method": "SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests.SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4(hours: 168, expectedSeconds: 604800)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests",
+      "method": "SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests.SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4(hours: 169, expectedSeconds: 604800)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests",
+      "method": "SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests.SynchronousSigning_UsesSyncSdkAndLiteralIdentityWithBoundedV4(hours: 720, expectedSeconds: 604800)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests",
+      "method": "SynchronousSigning_ProducesVerifiableSyntheticRsaSignatureWithoutTransport",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests.SynchronousSigning_ProducesVerifiableSyntheticRsaSignatureWithoutTransport",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests",
+      "method": "SynchronousSigning_PropagatesExactFailureWithoutNullOrAsyncFallback",
+      "testName": "Legacy.Maliev.FileService.Tests.Data.LegacySignedDownloadSynchronousBoundaryTests.SynchronousSigning_PropagatesExactFailureWithoutNullOrAsyncFallback",
+      "executions": 1
+    }
+  ]
+}
