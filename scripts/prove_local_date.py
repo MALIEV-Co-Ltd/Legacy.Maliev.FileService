@@ -188,11 +188,65 @@ RECONCILE_GENERATION_TEST = "Legacy.Maliev.FileService.Tests/Application/FileApp
 RECONCILE_GENERATION_TEST_SHA256 = "f95d5660453e415061b12fc3923caeaa761bae1bef4842387487b1de373f7725"
 
 
+# The accepted reconciliation inventory remains pinned to its immutable pre-132 bytes.
+# Admit only this reviewed successor, and prove its exact inverse before reusing that inventory.
+NULL_SIGNING_TEST_SHA256 = "d85a574d93ed0c409bf9e291ef66dec80eb031c9a5a4063025c95e3a90b4e9c9"
+NULL_SIGNING_SERVICE_SHA256 = "971371b3fb0531a7a0f76399779a3de9ce73675f44e8c45bb9317c2369ce90bd"
+NULL_SIGNING_PRIOR_SERVICE_SHA256 = "1da302c98931d0036ab402bdae4aaf42e21ca957760c4e1f34f396a06dcf5968"
+NULL_SIGNING_CLASS = "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests"
+NULL_SIGNING_METHODS = (
+    "UploadAsync_NullSignedUri_CompensatesEveryExactPromotionBeforeMetadata",
+    "UploadAsync_NullSignedUriAndCleanupFailure_RetainsBothCausesWithoutMetadata",
+)
+
+
+def null_signing_tests_disabled(corrected):
+    require(digest(corrected) == NULL_SIGNING_TEST_SHA256, "Reviewed reconciliation test source changed")
+    first = b"\n    [Fact]\n    public async Task " + NULL_SIGNING_METHODS[0].encode() + b"()"
+    following = b"\n    [Fact]\n    public async Task UploadAsync_ConfirmedSigningFailure_CompensatesExactPromotedGenerationsBeforeMetadata()"
+    require(corrected.count(first) == corrected.count(following) == 1
+            and corrected.count(NULL_SIGNING_METHODS[1].encode() + b"()") == 1,
+            "Reviewed null signing test blocks changed")
+    start, stop = corrected.index(first), corrected.index(following)
+    require(start < stop, "Reviewed null signing test order changed")
+    disabled = corrected[:start] + corrected[stop:]
+    field = b"        public int NullSignedUriCall { get; init; }\n"
+    mode = b'''            // Deliberately broken signer boundary: nonnullable annotation is not a runtime guarantee.
+            if (Signed.Count == NullSignedUriCall) return Task.FromResult<Uri>(null!);
+
+'''
+    require(disabled.count(field) == disabled.count(mode) == 1, "Reviewed null signer fake changed")
+    disabled = disabled.replace(field, b"").replace(mode, b"")
+    require(digest(disabled) == RECONCILE_GENERATION_TEST_SHA256,
+            "Null signing test inverse differs from immutable reconciliation source")
+    return disabled
+
+
+def null_signing_correction_disabled(corrected):
+    require(digest(corrected) == NULL_SIGNING_SERVICE_SHA256, "Reviewed null signing service source changed")
+    guarded = b'''                    var uri = await storage.CreateSignedReadUriAsync(uploadBucket, uploadName, duration, cancellationToken)
+                        ?? throw new InvalidOperationException("Upload signing returned no URI.");'''
+    original = b"                    var uri = await storage.CreateSignedReadUriAsync(uploadBucket, uploadName, duration, cancellationToken);"
+    require(corrected.count(guarded) == 1, "Reviewed null signing correction differs")
+    disabled = corrected.replace(guarded, original)
+    require(digest(disabled) == NULL_SIGNING_PRIOR_SERVICE_SHA256,
+            "Null signing correction inverse differs from reviewed pre-132 source")
+    return disabled
+
+
+def reviewed_null_signing_additions(source_root=None):
+    root = Path(source_root or ".")
+    null_signing_tests_disabled((root / RECONCILE_GENERATION_TEST).read_bytes())
+    null_signing_correction_disabled((root / DELETE_SERVICE).read_bytes())
+    return Counter((NULL_SIGNING_CLASS, method, NULL_SIGNING_CLASS + "." + method)
+                   for method in NULL_SIGNING_METHODS)
+
+
 def reviewed_reconcile_additions(inventory_path=None, source_path=None):
     raw = Path(inventory_path or RECONCILE_GENERATION_INVENTORY).read_bytes()
     require(digest(raw) == RECONCILE_GENERATION_INVENTORY_SHA256, "Reviewed reconciliation inventory changed")
     additions = json.loads(raw)
-    require(digest(Path(source_path or RECONCILE_GENERATION_TEST).read_bytes()) == RECONCILE_GENERATION_TEST_SHA256,
+    require(digest(null_signing_tests_disabled(Path(source_path or RECONCILE_GENERATION_TEST).read_bytes())) == RECONCILE_GENERATION_TEST_SHA256,
             "Reviewed reconciliation test source changed")
     require(additions["sourcePath"] == RECONCILE_GENERATION_TEST
             and additions["sourceSha256"] == RECONCILE_GENERATION_TEST_SHA256
@@ -459,7 +513,7 @@ def reviewed_synchronous_signing_additions(inventory_path=None, source_root=None
 
 
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
-                include_redis_models=True, include_synchronous_signing=True):
+                include_redis_models=True, include_synchronous_signing=True, include_null_signing=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -469,10 +523,11 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     move_additions = reviewed_move_additions() if signed_additions and include_literal_move else Counter()
     redis_additions = reviewed_redis_additions() if move_additions and include_redis_models else Counter()
     sync_additions = reviewed_synchronous_signing_additions() if redis_additions and include_synchronous_signing else Counter()
-    expected_count = 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    null_additions = reviewed_null_signing_additions() if sync_additions and include_null_signing else Counter()
+    expected_count = 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
@@ -668,6 +723,8 @@ def fetch_delete_baseline(output):
 
 
 def delete_correction_disabled(corrected):
+    # Remove only the reviewed independent null-signing guard before the older delete/move inverse.
+    corrected = null_signing_correction_disabled(corrected)
     helper = b'''    private string RequireExistingObjectIdentity(string objectName)
     {
         var safetyName = names.RequireObjectName(objectName);

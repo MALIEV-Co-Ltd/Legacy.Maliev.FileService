@@ -313,6 +313,75 @@ public sealed class FileApplicationServiceTests
     }
 
     [Fact]
+    public async Task UploadAsync_NullSignedUri_CompensatesEveryExactPromotionBeforeMetadata()
+    {
+        var storage = new RecordingStorage { NullSignedUriCall = 2 };
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [
+                new MemoryUploadFile("first.step", "application/step", [1, 2, 3]),
+                new MemoryUploadFile("second.step", "application/step", [4, 5, 6]),
+            ],
+            CancellationToken.None));
+
+        Assert.IsType<InvalidOperationException>(failure.InnerException);
+        Assert.Equal(2, storage.NameOnlySignCalls);
+        Assert.Equal(2, storage.Moved.Count);
+        Assert.Equal(new[]
+        {
+            ("maliev.com", "orders/42/first.step"),
+            ("maliev.com", "orders/42/second.step"),
+        }, storage.Deleted);
+        Assert.Equal(new long[] { 31, 31 }, storage.DeletedGenerations);
+        Assert.Equal(0, storage.NameOnlyDeleteCalls);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+        Assert.Equal(2, storage.Journal!.Evidence.Count);
+        Assert.All(storage.Journal.Evidence.Values, evidence =>
+        {
+            Assert.Equal("CompensatedRemoved", evidence.State);
+            Assert.Equal(31, evidence.DestinationGeneration);
+        });
+    }
+
+    [Fact]
+    public async Task UploadAsync_NullSignedUriAndCleanupFailure_RetainsBothCausesWithoutMetadata()
+    {
+        var cleanupFailure = new IOException("controlled conditional cleanup failure");
+        var storage = new RecordingStorage { NullSignedUriCall = 1 };
+        storage.DeleteFailures["orders/42/part.step"] = cleanupFailure;
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var failure = await Assert.ThrowsAsync<UploadRollbackException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
+            CancellationToken.None));
+
+        Assert.IsType<InvalidOperationException>(failure.UploadFailure);
+        var cleanup = Assert.Single(failure.CleanupFailures);
+        Assert.Same(cleanupFailure, cleanup.Cause);
+        var causes = Assert.IsType<AggregateException>(failure.InnerException).InnerExceptions;
+        Assert.Collection(causes,
+            cause => Assert.Same(failure.UploadFailure, cause),
+            cause => Assert.Same(cleanupFailure, cause));
+        Assert.Equal("maliev.com", cleanup.Bucket);
+        Assert.Equal("orders/42/part.step", cleanup.ObjectName);
+        Assert.Equal(("maliev.com", "orders/42/part.step"), Assert.Single(storage.Deleted));
+        Assert.Equal(31, Assert.Single(storage.DeletedGenerations));
+        Assert.Equal(1, storage.NameOnlySignCalls);
+        Assert.Equal(0, storage.NameOnlyDeleteCalls);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+        Assert.Equal("CompensationUnknown", Assert.Single(storage.Journal!.Evidence.Values).State);
+    }
+
+    [Fact]
     public async Task UploadAsync_ConfirmedSigningFailure_CompensatesExactPromotedGenerationsBeforeMetadata()
     {
         var expected = new InvalidOperationException("signing unavailable");
@@ -628,6 +697,7 @@ public sealed class FileApplicationServiceTests
         public bool CleanupObservedCancellation { get; private set; }
         public Exception? SignedUrlFailure { get; init; }
         public int SignedUrlFailureCall { get; init; }
+        public int NullSignedUriCall { get; init; }
         public CancellationTokenSource? RequestCancellation { get; init; }
         public bool DeleteResult { get; init; } = true;
         public Exception? MoveFailure { get; init; }
@@ -726,6 +796,9 @@ public sealed class FileApplicationServiceTests
                 RequestCancellation?.Cancel();
                 return Task.FromException<Uri>(SignedUrlFailure);
             }
+
+            // Deliberately broken signer boundary: nonnullable annotation is not a runtime guarantee.
+            if (Signed.Count == NullSignedUriCall) return Task.FromResult<Uri>(null!);
 
             return Task.FromResult(new Uri($"https://storage.test/{objectName}"));
         }

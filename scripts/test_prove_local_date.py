@@ -6,6 +6,81 @@ from prove_local_date import verify_full as verify_current_full
 from prove_local_date import verify_signing_focus as verify_current_signing_focus
 
 
+# Historical controls retain their exact 1661 ceiling; the unwrapped candidate gate
+# below separately requires all 1663 current identities, including the two null-URI Facts.
+verify_candidate_full = verify_current_full
+
+
+def verify_current_full(*args, **kwargs):
+    return verify_candidate_full(*args, include_null_signing=False, **kwargs)
+
+
+class ReviewedNullSigningSuccessorTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedSynchronousSigningRosterTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_null_signing_additions().elements()
+        ]
+
+    def test_current_full_retains_all1661_and_exact_two_null_signing_facts(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1663, len(rows))
+        self.assertEqual(ReviewedSynchronousSigningRosterTests.rows(self), rows[:1661])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_candidate_full("controlled", prior_inventory()))
+        for mutation in ("old1661", "missing", "duplicate", "replacement", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1661":
+                changed = changed[:1661]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_candidate_full("mutated", prior_inventory())
+
+    def test_exact_successor_inverses_retain_both_immutable_prior_hashes(self):
+        tests = Path(RECONCILE_GENERATION_TEST).read_bytes()
+        service = Path(DELETE_SERVICE).read_bytes()
+        self.assertEqual(RECONCILE_GENERATION_TEST_SHA256, digest(null_signing_tests_disabled(tests)))
+        self.assertEqual(NULL_SIGNING_PRIOR_SERVICE_SHA256, digest(null_signing_correction_disabled(service)))
+        self.assertEqual(DELETE_BASELINE_SHA256, digest(delete_correction_disabled(service)))
+        for changed in (tests + b"\n", tests.replace(b"NullSignedUriCall = 2", b"NullSignedUriCall = 3"),
+                        tests.replace(b"signing unavailable", b"changed old signing assertion")):
+            with self.subTest(kind="test-source"), self.assertRaises(ValueError):
+                null_signing_tests_disabled(changed)
+        for changed in (service + b"\n", service.replace(b"Upload signing returned no URI.", b"changed"),
+                        service.replace(b"RequireExistingObjectIdentity", b"OtherIdentity")):
+            with self.subTest(kind="service-source"), self.assertRaises(ValueError):
+                null_signing_correction_disabled(changed)
+
+    def test_two_identity_enrollment_rejects_either_source_drift(self):
+        originals = {RECONCILE_GENERATION_TEST: Path(RECONCILE_GENERATION_TEST).read_bytes(),
+                     DELETE_SERVICE: Path(DELETE_SERVICE).read_bytes()}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path, data in originals.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            self.assertEqual(2, sum(reviewed_null_signing_additions(root).values()))
+            for path, data in originals.items():
+                target = root / path
+                target.write_bytes(data + b" ")
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    reviewed_null_signing_additions(root)
+                target.write_bytes(data)
+
+
 def verify_full(*args, **kwargs):
     # Existing historical controls keep their original reviewed 1655 ceiling.
     return verify_current_full(*args, include_synchronous_signing=False, **kwargs)
