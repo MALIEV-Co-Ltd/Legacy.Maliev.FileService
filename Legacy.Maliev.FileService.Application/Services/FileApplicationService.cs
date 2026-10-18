@@ -126,7 +126,8 @@ public sealed class FileApplicationService(
             {
                 foreach (var (uploadBucket, uploadName, _) in promoted)
                 {
-                    var uri = await storage.CreateSignedReadUriAsync(uploadBucket, uploadName, duration, cancellationToken);
+                    var uri = await storage.CreateSignedReadUriAsync(uploadBucket, uploadName, duration, cancellationToken)
+                        ?? throw new InvalidOperationException("Upload signing returned no URI.");
                     result.Add(new UploadObjectResponse(uploadBucket, uploadName, uri));
                 }
             }
