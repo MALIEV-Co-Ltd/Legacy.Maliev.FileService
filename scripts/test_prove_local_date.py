@@ -2,8 +2,13 @@ import unittest
 from pathlib import Path
 import tempfile
 from prove_local_date import *
-from prove_local_date import verify_full as verify_current_full
+from prove_local_date import verify_full as verify_observation_full
 from prove_local_date import verify_signing_focus as verify_current_signing_focus
+
+
+def verify_current_full(*args, **kwargs):
+    # Preserve every existing historical wrapper and exact 1663/1661 ceiling.
+    return verify_observation_full(*args, include_request_observation=False, **kwargs)
 
 
 # Historical controls retain their exact 1661 ceiling; the unwrapped candidate gate
@@ -915,3 +920,113 @@ class DeleteCausalProofTests(unittest.TestCase):
         for changed in (corrected + b"\n", corrected.replace(b"RequireExistingObjectIdentity", b"OtherIdentity")):
             with self.assertRaises(ValueError):
                 delete_correction_disabled(changed)
+
+
+class ReviewedRequestObservationSuccessorTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedNullSigningSuccessorTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=cls + "." + method, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method in [
+                ("Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests",
+                 "RegisteredGetHealth_IdentifiesOnlyItsHostWithoutSuccessfulProbeIncidents"),
+                ("Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests",
+                 "SyntheticObservation_RequiresNativeLoopbackAndOneNonceAndPreservesThrottling"),
+                ("Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests",
+                 "DisabledSignedRead_ProducesOneSanitizedIncidentWithoutSyntheticOrHealthIdentity"),
+            ]
+        ]
+
+    def test_current_full_retains_all1663_and_exact_three_observer_facts(self):
+        rows = self.rows()
+        self.assertEqual(1666, len(rows))
+        self.assertEqual(ReviewedNullSigningSuccessorTests.rows(self), rows[:1663])
+        cls = "Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests"
+        self.assertEqual(21, sum(row["class"] == cls for row in rows[:1663]))
+        self.assertEqual(24, sum(row["class"] == cls for row in rows))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "full1666.trx"
+            ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(path)
+            self.assertEqual(rows, verify_observation_full(path, prior_inventory()))
+
+    def test_current_full_rejects_changed_old_or_observer_identities_outcomes_and_counts(self):
+        cls = "Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests"
+        for mutation in ("old1663", "missing", "duplicate", "extra", "wrong-class", "wrong-method",
+                         "wrong-display", "arguments", "old-host-replaced", "old-other-replaced",
+                         "failed", "skipped", "passing-error"):
+            rows = self.rows()
+            if mutation == "old1663":
+                rows = rows[:1663]
+            elif mutation == "missing":
+                rows.pop()
+            elif mutation == "duplicate":
+                rows[-1] = dict(rows[-2])
+            elif mutation == "extra":
+                rows.append(dict(rows[-1]))
+            elif mutation == "wrong-class":
+                rows[-1]["class"] = "Unreviewed.Observer"
+            elif mutation == "wrong-method":
+                rows[-1]["method"] += "Renamed"
+            elif mutation in {"wrong-display", "arguments"}:
+                rows[-1]["name"] += "Renamed" if mutation == "wrong-display" else "(unexpected: True)"
+            elif mutation in {"old-host-replaced", "old-other-replaced"}:
+                victim = next(row for row in rows[:1663] if (row["class"] == cls) == (mutation == "old-host-replaced"))
+                victim["name"] = "UnreviewedReplacement"
+            elif mutation == "passing-error":
+                rows[-1]["errorInfo"] = True
+            else:
+                rows[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "changed.trx"
+                ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_observation_full(path, prior_inventory())
+
+    def test_current_full_rejects_run_errors_counter_spoof_and_broken_execution_joins(self):
+        import copy
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        original = CleanAcceptancePathTests.fixture(self, self.rows())
+        for mutation in ("run-error", "summary-error", "counter", "duplicate-summary",
+                         "missing-counter", "wrong-result-execution", "missing-entry"):
+            root = copy.deepcopy(original)
+            summary = root.find(n + "ResultSummary")
+            if mutation == "run-error":
+                ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome="Error")
+            elif mutation == "summary-error":
+                ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+            elif mutation == "counter":
+                summary.find(n + "Counters").set("passed", "1667")
+            elif mutation == "duplicate-summary":
+                root.append(copy.deepcopy(summary))
+            elif mutation == "missing-counter":
+                summary.find(n + "Counters").attrib.pop("notExecuted")
+            elif mutation == "wrong-result-execution":
+                root.find(n + "Results")[-1].set("executionId", "00000000-0000-4000-9000-999999999999")
+            else:
+                entries = root.find(n + "TestEntries")
+                entries.remove(entries[-1])
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "changed-run.trx"
+                ET.ElementTree(root).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_observation_full(path, prior_inventory())
+
+    def test_observer_enrollment_requires_exact_reviewed_source(self):
+        content = Path(REQUEST_OBSERVATION_TEST).read_bytes()
+        self.assertEqual(REQUEST_OBSERVATION_TEST_SHA256, digest(content))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / REQUEST_OBSERVATION_TEST
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+            self.assertEqual(3, sum(reviewed_request_observation_additions(root).values()))
+            for changed in (
+                content + b"\n",
+                content.replace(b'AddProvider(Observation)', b'ClearProviders()'),
+                content.replace(b'Assert.Equal(503, incident.StatusCode)', b'Assert.Equal(500, incident.StatusCode)'),
+            ):
+                path.write_bytes(changed)
+                with self.subTest(kind="source-drift"), self.assertRaises(ValueError):
+                    reviewed_request_observation_additions(root)
+
+
