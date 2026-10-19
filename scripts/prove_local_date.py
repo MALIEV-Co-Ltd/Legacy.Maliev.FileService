@@ -512,8 +512,25 @@ def reviewed_synchronous_signing_additions(inventory_path=None, source_root=None
     return actual
 
 
+REQUEST_OBSERVATION_TEST = "Legacy.Maliev.FileService.Tests/OpenApi/FileHostTransportHttpTests.cs"
+REQUEST_OBSERVATION_TEST_SHA256 = "ce3c214a821039e2d99209b702ae224fd3defe8a624ccf3e04d124d641a4ae45"
+REQUEST_OBSERVATION_CLASS = "Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests"
+REQUEST_OBSERVATION_METHODS = (
+    "RegisteredGetHealth_IdentifiesOnlyItsHostWithoutSuccessfulProbeIncidents",
+    "SyntheticObservation_RequiresNativeLoopbackAndOneNonceAndPreservesThrottling",
+    "DisabledSignedRead_ProducesOneSanitizedIncidentWithoutSyntheticOrHealthIdentity",
+)
+
+
+def reviewed_request_observation_additions(source_root=None):
+    content = (Path(source_root or ".") / REQUEST_OBSERVATION_TEST).read_bytes()
+    require(digest(content) == REQUEST_OBSERVATION_TEST_SHA256, "Reviewed request observation source changed")
+    return Counter((REQUEST_OBSERVATION_CLASS, method, REQUEST_OBSERVATION_CLASS + "." + method)
+                   for method in REQUEST_OBSERVATION_METHODS)
+
+
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
-                include_redis_models=True, include_synchronous_signing=True, include_null_signing=True):
+                include_redis_models=True, include_synchronous_signing=True, include_null_signing=True, include_request_observation=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -524,10 +541,11 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     redis_additions = reviewed_redis_additions() if move_additions and include_redis_models else Counter()
     sync_additions = reviewed_synchronous_signing_additions() if redis_additions and include_synchronous_signing else Counter()
     null_additions = reviewed_null_signing_additions() if sync_additions and include_null_signing else Counter()
-    expected_count = 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    observation_additions = reviewed_request_observation_additions() if null_additions and include_request_observation else Counter()
+    expected_count = 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")

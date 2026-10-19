@@ -16,6 +16,7 @@ try
 
     builder.AddServiceDefaults();
     builder.AddDefaultApiVersioning();
+    builder.AddPrivateRequestObservation("file");
     builder.AddPostgresDbContext<FileDbContext>(connectionName: "FileDbContext");
     builder.AddStandardCache("legacy:file:");
     builder.AddStandardCors();
