@@ -1,0 +1,48 @@
+{
+  "expectedFullCount": 1607,
+  "rows": [
+    {
+      "method": "ReconcileUploadAsync_GenerationSignerFailure_PreservesCauseAndRecoveryObjects",
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "executions": 1,
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.ReconcileUploadAsync_GenerationSignerFailure_PreservesCauseAndRecoveryObjects"
+    },
+    {
+      "method": "ReconcileUploadAsync_NonpositiveJournalGeneration_RefusesBeforeReadingOrSigning",
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "executions": 1,
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.ReconcileUploadAsync_NonpositiveJournalGeneration_RefusesBeforeReadingOrSigning(generation: 0)"
+    },
+    {
+      "method": "ReconcileUploadAsync_NonpositiveJournalGeneration_RefusesBeforeReadingOrSigning",
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "executions": 1,
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.ReconcileUploadAsync_NonpositiveJournalGeneration_RefusesBeforeReadingOrSigning(generation: -1)"
+    },
+    {
+      "method": "ReconcileUploadAsync_ReplacementAfterEvidenceRead_SignsOnlyAcknowledgedGeneration",
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "executions": 1,
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.ReconcileUploadAsync_ReplacementAfterEvidenceRead_SignsOnlyAcknowledgedGeneration(replacement: 32)"
+    },
+    {
+      "method": "ReconcileUploadAsync_ReplacementAfterEvidenceRead_SignsOnlyAcknowledgedGeneration",
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "executions": 1,
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.ReconcileUploadAsync_ReplacementAfterEvidenceRead_SignsOnlyAcknowledgedGeneration(replacement: 999999)"
+    },
+    {
+      "method": "ReconcileUploadAsync_StableEvidence_UsesGenerationSigner",
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "executions": 1,
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.ReconcileUploadAsync_StableEvidence_UsesGenerationSigner"
+    }
+  ],
+  "additionalCases": 6,
+  "sourceSha256": "f95d5660453e415061b12fc3923caeaa761bae1bef4842387487b1de373f7725",
+  "observedFullTrxSha256": null,
+  "baselineHead": "f106fc697fec52940c40e6e810541a4422bc48f8",
+  "identityAuthority": "Source-reviewed additions; exact display names proposed, hosted observation required",
+  "sourcePath": "Legacy.Maliev.FileService.Tests/Application/FileApplicationServiceTests.cs",
+  "baselineFullCount": 1601
+}

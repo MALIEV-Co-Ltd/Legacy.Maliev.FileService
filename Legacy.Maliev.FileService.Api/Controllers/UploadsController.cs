@@ -128,6 +128,13 @@ public sealed class UploadsController(
             return BadRequest(ModelState.Values.Select(value => value.Errors));
         }
 
+        if (HttpContext?.Request.Query["bucket"].Count > 1)
+            ModelState.AddModelError(nameof(bucket), "Bucket must be supplied once");
+        if (HttpContext?.Request.Query["path"].Count > 1)
+            ModelState.AddModelError(nameof(path), "Path must be supplied at most once");
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState.Values.Select(value => value.Errors));
+
         try
         {
             runtimeGate.EnsureWritesEnabled();

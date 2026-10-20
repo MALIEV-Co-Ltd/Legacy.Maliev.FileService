@@ -4,23 +4,31 @@ on:
   pull_request:
     paths:
       - .github/workflows/file-native-qualification.yml
+      - scripts/materialize_file_current_transport.py
+      - scripts/file-current-transport-index.json
+      - qualification-inputs/file-current/**
       - scripts/materialize_file_native.py
       - scripts/qualify_file_native.py
       - scripts/file-native-policy.json
       - scripts/tests/test_file_native_*.py
+      - scripts/tests/test_file_current_transport.py
       - docs/file-native-qualification.md
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [preflight-only, qualification]
-        default: preflight-only
+        options: [source-association, qualification]
+        default: source-association
         required: true
-        description: No-SDK trusted archive observation; native qualification requires five original Root phase grants
+        description: CURRENT source association; qualification refuses until reviewed execution successor and original grants
       capsule_blob:
         type: string
         required: true
-        description: Same-repository blob of the exact reviewed V35 capsule
+        description: Exact reviewed CURRENT source capsule blob fc637c2d4d2c90d8291c7689b06e1c9b27ed824f
+      baseline_blob:
+        type: string
+        required: true
+        description: Exact retained baseline blob af25652fe32d51d33d737ff7e90b63a0adf2b4d5
       grant_bundle_blob:
         type: string
         required: false
@@ -45,6 +53,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Check out exact CURRENT source-control base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ce183871469381eca13b359d997ad68042c4aa46
+          path: native-base
+          persist-credentials: false
       - name: Build protected Python source into owned temporary output
         run: |
           python3 -B - <<'PY'
@@ -54,6 +68,8 @@ jobs:
                   py_compile.compile(str(path), cfile=str(pathlib.Path(owned)/(path.name+'.pyc')), doraise=True)
           PY
       - name: Run protected source/transport control suite
+        env:
+          FILE_CURRENT_TEST_BASE: ${{ github.workspace }}/native-base
         run: python3 -B -m unittest discover -s scripts/tests -p 'test_file_*.py'
   native:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
@@ -67,35 +83,31 @@ jobs:
       - name: Check out original detached public File base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 07f0b5b721e3df758a9ec742c6f167491f899e44
+          ref: ce183871469381eca13b359d997ad68042c4aa46
           path: native-base
           persist-credentials: false
-      - name: Verify and materialize exact candidate source
+      - name: Verify CURRENT capsule and associate original RED/GREEN sources
         env:
           GH_TOKEN: ${{ github.token }}
           CAPSULE_BLOB: ${{ inputs.capsule_blob }}
-        run: |
-          python3 -B scripts/materialize_file_native.py --policy scripts/file-native-policy.json --base-checkout native-base --capsule-blob "$CAPSULE_BLOB" --receipt evidence/intake.json
-      - name: No-SDK trusted projection preflight or original Root qualification
-        env:
-          GH_TOKEN: ${{ github.token }}
+          BASELINE_BLOB: ${{ inputs.baseline_blob }}
           FILE_NATIVE_MODE: ${{ inputs.mode }}
           ROOT_BUNDLE_BLOB: ${{ inputs.grant_bundle_blob }}
           ROOT_BUNDLE_SHA256: ${{ inputs.grant_bundle_sha256 }}
         run: |
           set -euo pipefail
-          export MALIEV_FILE_EVIDENCE_UID="$(id -u)"
-          export MALIEV_FILE_EVIDENCE_GID="$(id -g)"
-          arguments=(--policy scripts/file-native-policy.json --evidence evidence/qualification --mode "$FILE_NATIVE_MODE")
+          arguments=(--capsule-blob "$CAPSULE_BLOB" --baseline-blob "$BASELINE_BLOB"
+            --index scripts/file-current-transport-index.json --base-checkout native-base
+            --root /tmp/maliev-file-current-transport --evidence evidence/current
+            --mode "$FILE_NATIVE_MODE")
           if [[ "$FILE_NATIVE_MODE" == qualification ]]; then
             test -n "$ROOT_BUNDLE_BLOB" && test -n "$ROOT_BUNDLE_SHA256"
             arguments+=(--grant-bundle-blob "$ROOT_BUNDLE_BLOB" --grant-bundle-sha256 "$ROOT_BUNDLE_SHA256")
           elif [[ -n "$ROOT_BUNDLE_BLOB" || -n "$ROOT_BUNDLE_SHA256" ]]; then
-            echo 'Read-only preflight cannot consume an SDK grant.' >&2
+            echo 'Source association cannot consume an SDK grant.' >&2
             exit 1
           fi
-          sudo --preserve-env=PATH,DOTNET_ROOT,GH_TOKEN,GITHUB_ACTIONS,GITHUB_REPOSITORY,GITHUB_SHA,GITHUB_WORKSPACE,GITHUB_WORKFLOW_REF,GITHUB_WORKFLOW_SHA,GITHUB_EVENT_NAME,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,MALIEV_FILE_EVIDENCE_UID,MALIEV_FILE_EVIDENCE_GID \
-            python3 -B scripts/qualify_file_native.py "${arguments[@]}"
+          python3 -B scripts/materialize_file_current_transport.py "${arguments[@]}"
       - name: Retain original source intake and owned qualification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
