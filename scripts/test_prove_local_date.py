@@ -2,8 +2,12 @@ import unittest
 from pathlib import Path
 import tempfile
 from prove_local_date import *
-from prove_local_date import verify_full as verify_observation_full
+from prove_local_date import verify_full as verify_validation_full
 from prove_local_date import verify_signing_focus as verify_current_signing_focus
+
+
+def verify_observation_full(*args, **kwargs):
+    return verify_validation_full(*args, include_validation_logging=False, **kwargs)
 
 
 def verify_current_full(*args, **kwargs):
@@ -1028,5 +1032,53 @@ class ReviewedRequestObservationSuccessorTests(unittest.TestCase):
                 path.write_bytes(changed)
                 with self.subTest(kind="source-drift"), self.assertRaises(ValueError):
                     reviewed_request_observation_additions(root)
+
+
+class ReviewedSignedUrlValidationLoggingTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedRequestObservationSuccessorTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_validation_logging_additions().elements()
+        ]
+
+    def test_current_roster_retains_all1666_and_requires_three_validation_facts(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1669, len(rows))
+        self.assertEqual(ReviewedRequestObservationSuccessorTests.rows(self), rows[:1666])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_validation_full("controlled", prior_inventory()))
+        for mutation in ("old1666", "missing", "duplicate", "replacement", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1666":
+                changed = changed[:1666]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_validation_full("mutated", prior_inventory())
+
+    def test_enrollment_requires_the_exact_reviewed_validation_test_source(self):
+        content = Path(VALIDATION_LOGGING_TEST).read_bytes()
+        self.assertEqual(VALIDATION_LOGGING_TEST_SHA256, digest(content))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / VALIDATION_LOGGING_TEST
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+            self.assertEqual(3, sum(reviewed_validation_logging_additions(root).values()))
+            for changed in (content + b"\n", content.replace(b"LogLevel.Warning", b"LogLevel.Information")):
+                path.write_bytes(changed)
+                with self.subTest(kind="source-drift"), self.assertRaises(ValueError):
+                    reviewed_validation_logging_additions(root)
 
 
