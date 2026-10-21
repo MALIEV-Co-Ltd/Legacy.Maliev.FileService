@@ -710,8 +710,8 @@ public sealed class FileApplicationServiceTests
         var path = new string(' ', 970) + "A";
         var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);
         store.Setup(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new UploadAcquireResult(UploadAcquireState.Acquired, "reservation", EffectivePath: path));
-        store.Setup(value => value.RenewAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).ReturnsAsync(true);
+            .Returns(Task.FromResult(new UploadAcquireResult(UploadAcquireState.Acquired, "reservation", EffectivePath: path)));
+        store.Setup(value => value.RenewAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).Returns(Task.FromResult(true));
         store.Setup(value => value.ReleaseAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);
         var storage = new RecordingStorage();

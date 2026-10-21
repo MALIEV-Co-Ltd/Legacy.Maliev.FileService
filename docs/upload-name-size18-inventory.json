@@ -87,12 +87,20 @@
     {
       "path": "Legacy.Maliev.FileService.Tests/Application/FileApplicationServiceTests.cs",
       "preGitBlob": "9f89c76f682969aff70f0db8082266782b934da2",
-      "postGitBlob": "5d09a5a69f5ce03adab9572288dc8f59f777638b",
+      "postGitBlob": "6a932e4a0e992c14c62ae8891101a92926f821f3",
       "preSha256": "9cff5418832ad94740f9b32a8c357d3f825bfd18219a67c662d1ce00ed6deeaf",
-      "postSha256": "b13270d9bf335d6c4dc49ffa03d636fb0bad47a723318972bf6d8519303ff75d",
+      "postSha256": "da6d6f148482c86d901f1d74dd9b423b75d20d65d40e34cc09062c319ceaaef3",
       "preBytes": 46019,
-      "postBytes": 52891,
+      "postBytes": 52915,
       "inverse": [
+        {
+          "post": ".Returns(Task.FromResult(true));",
+          "pre": ".ReturnsAsync(true);"
+        },
+        {
+          "post": ".Returns(Task.FromResult(new UploadAcquireResult(UploadAcquireState.Acquired, \"reservation\", EffectivePath: path)));",
+          "pre": ".ReturnsAsync(new UploadAcquireResult(UploadAcquireState.Acquired, \"reservation\", EffectivePath: path));"
+        },
         {
           "post": "            intents ?? new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);",
           "pre": "            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);"

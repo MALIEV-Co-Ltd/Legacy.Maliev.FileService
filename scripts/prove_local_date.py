@@ -151,7 +151,7 @@ def verify_focus_rows(rows, baseline, inventory=None):
 
 
 UPLOAD_PREFIX_INVENTORY = "docs/upload-prefix18-inventory.json"
-UPLOAD_PREFIX_INVENTORY_SHA256 = "ed2c1444e6b0824b82449f40a008616b3340d5a8c7d71071d9e538f41bfe7175"
+UPLOAD_PREFIX_INVENTORY_SHA256 = "99aa875fdecc1b9e1e0539879d09c4d3e5671748fa7b12aaaf54e6caa62a191c"
 
 
 def upload_prefix_inventory(inventory_path=None):
@@ -262,7 +262,7 @@ def prove_upload_prefix_focus(repo, output, run, tests, head):
     return rows
 
 UPLOAD_SIZE_INVENTORY = "docs/upload-name-size18-inventory.json"
-UPLOAD_SIZE_INVENTORY_SHA256 = "9d2cb501ec14de2cfce43c0e6845fa9a5305915261250904d88f5eafd73899b2"
+UPLOAD_SIZE_INVENTORY_SHA256 = "eff17d7d68e4c2edc95dd5663bf7d274a2e983ff658953607eed303ed30eb147"
 
 
 def upload_size_inventory(inventory_path=None):
