@@ -38,6 +38,83 @@ public sealed class FileApplicationServiceTests
         Assert.Equal(new Uri($"https://storage.test/{metadata.Name}"), response.Uri);
     }
 
+    /// <summary>Retains the literal custom-prefix coordinate through promotion, metadata response loss, and deterministic recovery.</summary>
+    /// <param name="path">The padded custom prefix supplied to both the upload and its recovery attempt.</param>
+    /// <param name="expectedObjectName">The independently derived lower-case destination retaining the source prefix padding.</param>
+    /// <returns>A task that completes after checking literal metadata, journal, and generation-bound recovery coordinates.</returns>
+    [Theory]
+    [InlineData(" Uploads/Customer ", " uploads/customer /part.stl")]
+    [InlineData("Uploads/Customer\u00a0", "uploads/customer\u00a0/part.stl")]
+    public async Task UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate(string path, string expectedObjectName)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+        var files = new IUploadFile[] { new MemoryUploadFile("PART.STL", "model/stl", [1, 2, 3]) };
+
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            service.UploadAsync("maliev.com", path, files, operationId, default));
+
+        Assert.Equal(expectedObjectName, Assert.Single(storage.Moved).DestinationObjectName);
+        Assert.Equal(expectedObjectName, Assert.Single(repository.Uploads).Name);
+        var journal = Assert.IsType<RecordingMoveJournal>(storage.Journal);
+        var evidence = Assert.Single(journal.Evidence).Value;
+        Assert.Equal(expectedObjectName, evidence.DestinationObjectName);
+        Assert.Equal($"_quarantine/{operationId:N}/{expectedObjectName}", evidence.SourceObjectName);
+
+        Assert.Null(await service.ReconcileUploadAsync("maliev.com", path.Trim(), files, operationId, default));
+        Assert.Empty(storage.GenerationSigned);
+        repository.ThrowAfterAdd = false;
+        var recovered = await service.ReconcileUploadAsync("maliev.com", path, files, operationId, default);
+
+        Assert.NotNull(recovered);
+        Assert.Equal(expectedObjectName, Assert.Single(recovered.Object).ObjectName);
+        var signed = Assert.Single(storage.GenerationSigned);
+        Assert.Equal(expectedObjectName, signed.ObjectName);
+        Assert.Equal(31, signed.Generation);
+        Assert.Equal(1, repository.AddRangeCallCount);
+        Assert.Single(repository.Uploads);
+        Assert.Single(journal.Evidence);
+    }
+
+
+    /// <summary>Rejects padded reserved roots before upload or recovery crosses a storage boundary.</summary>
+    /// <param name="path">The padded protected namespace supplied as a custom prefix.</param>
+    /// <param name="reconcile">Whether to exercise recovery instead of initial upload.</param>
+    /// <returns>A task that completes after checking rejection and untouched recording boundaries.</returns>
+    [Theory]
+    [InlineData(" customer-documents ", false)]
+    [InlineData(" customer-documents ", true)]
+    [InlineData(" / customer-documents ", false)]
+    [InlineData(" / customer-documents ", true)]
+    public async Task UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(string path, bool reconcile)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+        var files = new IUploadFile[] { new MemoryUploadFile("PART.STL", "model/stl", [1]) };
+
+        if (reconcile)
+        {
+            await Assert.ThrowsAsync<FileUploadValidationException>(() =>
+                service.ReconcileUploadAsync("maliev.com", path, files, operationId, default));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<FileUploadValidationException>(() =>
+                service.UploadAsync("maliev.com", path, files, operationId, default));
+        }
+
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(storage.Moved);
+        Assert.Empty(storage.Signed);
+        Assert.Empty(storage.GenerationSigned);
+        Assert.Empty(repository.Uploads);
+        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);
+    }
+
     [Fact]
     public async Task UploadAsync_InfectedFile_FailsClosedAndDeletesQuarantine()
     {

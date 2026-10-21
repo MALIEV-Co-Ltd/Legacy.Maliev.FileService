@@ -56,8 +56,8 @@ public sealed class FileApplicationService(
         {
             foreach (var file in files)
             {
-                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId);
-                RequireGenericObject(finalName);
+                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);
+                RequireGenericObject(normalizedObjectName);
                 var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);
                 var intentId = MoveId(operationId, quarantineName);
                 long quarantineGeneration;
@@ -189,8 +189,8 @@ public sealed class FileApplicationService(
         var hasOtherStages = false;
         foreach (var file in files)
         {
-            var objectName = names.BuildFinalObjectName(path, file.FileName, operationId);
-            RequireGenericObject(objectName);
+            var objectName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);
+            RequireGenericObject(normalizedObjectName);
             var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);
             if (move is null || !move.ScanClean || move.State is not ("SourceDeleted" or "MetadataSubmitting" or "MetadataCommitted" or "Unknown")
                 || move.SourceBucket != bucket
