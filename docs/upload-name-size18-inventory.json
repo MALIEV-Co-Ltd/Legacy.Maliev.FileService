@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 1,
+  "baseCommit": "39d9eb9f2d3ea041f6a09ba9eb12204fa4fae1f0",
+  "baseTree": "f8f15b6529e3a2926aead9e770735571e5c4b643",
+  "reviewThread": "PRRT_kwDOTY41ls6u_MLr",
+  "baselineFullCount": 1687,
+  "additionalCases": 18,
+  "expectedFullCount": 1705,
+  "limit": {
+    "utf8Bytes": 1024,
+    "appliesTo": [
+      "reconstructed lower-case final name",
+      "normalized complete configured quarantine name"
+    ],
+    "reference": "https://docs.cloud.google.com/storage/docs/objects#naming"
+  },
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Application/Services/ObjectNamePolicy.cs",
+      "preGitBlob": "363909618d062be827906446aebafe498903af1f",
+      "postGitBlob": "62d5af43c200c3352f2c1a5480d0da750781ed83",
+      "preSha256": "a80f7f4544785b4c642ecabd9763812e4d153e286ae240f0da9737b7df9f2866",
+      "postSha256": "dc6a7134757be444e7cc149200b1184169db4f5e10303eb93d2494b494074ed8",
+      "preBytes": 3959,
+      "postBytes": 4357,
+      "inverse": [
+        {
+          "post": "    private static string RequireObjectNameSize(string objectName)\n    {\n        // The GCS UTF-8 byte limit also bounds the journals' 1024-character columns.\n        if (Encoding.UTF8.GetByteCount(objectName) > 1024)\n            throw new FileUploadValidationException(\"Object name is too long\");\n\n        return objectName;\n    }\n\n    private string BuildLegacyDefaultPrefix(Guid uploadId)",
+          "pre": "    private string BuildLegacyDefaultPrefix(Guid uploadId)"
+        },
+        {
+          "post": "        RequireObjectNameSize(NormalizeObjectName($\"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}\", allowTrailingSlash: false));",
+          "pre": "        NormalizeObjectName($\"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}\", allowTrailingSlash: false);"
+        },
+        {
+          "post": "        return RequireObjectNameSize(finalName.ToLowerInvariant());",
+          "pre": "        return finalName.ToLowerInvariant();"
+        },
+        {
+          "post": "using System.Text;\nusing Legacy.Maliev.FileService.Application.Models;",
+          "pre": "using Legacy.Maliev.FileService.Application.Models;"
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Application/Services/FileApplicationService.cs",
+      "preGitBlob": "f5d8e1810064eaf80ea6551b372c8ea0305a62fe",
+      "postGitBlob": "bb9dce564d56f6e2ac14a3816bf0d9d9dedda5b2",
+      "preSha256": "0236b3b0eeb1c749c94efd14b0bb6ce6e7f97645495b5d57876088489774f606",
+      "postSha256": "c4c9b56db6f9f93a202ab3b1fe61b3a5ae631acaf9b6c2cbbae3761cf8434ad9",
+      "preBytes": 22542,
+      "postBytes": 22884,
+      "inverse": [
+        {
+          "post": "                || move.SourceObjectName != quarantineName",
+          "pre": "                || move.SourceObjectName != names.BuildQuarantineObjectName(operationId, objectName)"
+        },
+        {
+          "post": "            RequireGenericObject(normalizedObjectName);\n            var quarantineName = names.BuildQuarantineObjectName(operationId, objectName);\n            var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);",
+          "pre": "            RequireGenericObject(normalizedObjectName);\n            var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);"
+        },
+        {
+          "post": "            foreach (var (file, finalName, quarantineName) in destinations)\n            {",
+          "pre": "            foreach (var file in files)\n            {\n                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);\n                RequireGenericObject(normalizedObjectName);\n                var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);"
+        },
+        {
+          "post": "        files = snapshot;\n\n        // Validate every exact coordinate before persisting any intent or uploading a batch member.\n        var destinations = files.Select(file =>\n        {\n            var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);\n            RequireGenericObject(normalizedObjectName);\n            var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);\n            return (File: file, FinalName: finalName, QuarantineName: quarantineName);\n        }).ToArray();\n\n        var promoted",
+          "pre": "        files = snapshot;\n\n        var promoted"
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Application/ObjectNamePolicyTests.cs",
+      "preGitBlob": "6af68671d3d26de3086340a7359817989a298cf5",
+      "postGitBlob": "52c6d52f9bde4eaa73fe8283b76f8e3b67ccdb22",
+      "preSha256": "2ab2fbcfd975436f80322f8f5322f1e13222466b4d49fb1d56b596943be16b3f",
+      "postSha256": "3e67c325ecd6e5bcd4506804851109211d9ec7f8d315d8113221e173a4f2ce8b",
+      "preBytes": 5350,
+      "postBytes": 8279,
+      "inverse": [
+        {
+          "post": "    /// <summary>Checks the UTF-8 limit after restoring literal prefix padding and lower-casing.</summary>\n    /// <param name=\"scenario\">The exact or overflowing ASCII or multibyte padding boundary.</param>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    [InlineData(2)]\n    [InlineData(3)]\n    public void BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(int scenario)\n    {\n        var (padding, count, accepted, expectedBytes) = scenario switch\n        {\n            0 => (' ', 1014, true, 1024),\n            1 => (' ', 1015, false, 1025),\n            2 => ('\\u00a0', 507, true, 1024),\n            _ => ('\\u00a0', 508, false, 1026),\n        };\n        var path = new string(padding, count) + \"A\";\n        var expected = new string(padding, count) + \"a/part.stl\";\n        Assert.Equal(expectedBytes, System.Text.Encoding.UTF8.GetByteCount(expected));\n\n        if (accepted)\n            Assert.Equal(expected, policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty));\n        else\n            Assert.Throws<FileUploadValidationException>(() => policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty));\n    }\n\n    /// <summary>Counts the actual configured quarantine prefix and operation identity in the storage byte boundary.</summary>\n    /// <param name=\"scenario\">The exact or overflowing ASCII, multibyte or custom quarantine prefix case.</param>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    [InlineData(2)]\n    [InlineData(3)]\n    [InlineData(4)]\n    [InlineData(5)]\n    public void BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(int scenario)\n    {\n        var (path, quarantinePrefix, accepted, expectedBytes) = scenario switch\n        {\n            0 => (new string(' ', 969) + \"A\", \"_quarantine\", true, 1024),\n            1 => (new string(' ', 970) + \"A\", \"_quarantine\", false, 1025),\n            2 => (new string('\\u00a0', 484) + \"AA\", \"_quarantine\", true, 1024),\n            3 => (new string('\\u00a0', 485) + \"A\", \"_quarantine\", false, 1025),\n            4 => (new string(' ', 880) + \"A\", new string('q', 100), true, 1024),\n            _ => (new string(' ', 881) + \"A\", new string('q', 100), false, 1025),\n        };\n        var localPolicy = new ObjectNamePolicy(Options.Create(new FileStorageOptions\n        {\n            AllowedBuckets = [\"maliev.com\"],\n            QuarantinePrefix = quarantinePrefix,\n        }), TimeProvider.System);\n        var finalName = localPolicy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty);\n        var expected = $\"{quarantinePrefix}/{Guid.Empty:N}/{finalName}\";\n        Assert.Equal(expectedBytes, System.Text.Encoding.UTF8.GetByteCount(expected));\n\n        if (accepted)\n            Assert.Equal(expected, localPolicy.BuildQuarantineObjectName(Guid.Empty, finalName));\n        else\n            Assert.Throws<FileUploadValidationException>(() => localPolicy.BuildQuarantineObjectName(Guid.Empty, finalName));\n    }\n\n    [Fact]\n    public void RequireBucket_UnknownBucket_Rejects()",
+          "pre": "    [Fact]\n    public void RequireBucket_UnknownBucket_Rejects()"
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Application/FileApplicationServiceTests.cs",
+      "preGitBlob": "9f89c76f682969aff70f0db8082266782b934da2",
+      "postGitBlob": "5d09a5a69f5ce03adab9572288dc8f59f777638b",
+      "preSha256": "9cff5418832ad94740f9b32a8c357d3f825bfd18219a67c662d1ce00ed6deeaf",
+      "postSha256": "b13270d9bf335d6c4dc49ffa03d636fb0bad47a723318972bf6d8519303ff75d",
+      "preBytes": 46019,
+      "postBytes": 52891,
+      "inverse": [
+        {
+          "post": "            intents ?? new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);",
+          "pre": "            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);"
+        },
+        {
+          "post": "            QuarantinePrefix = quarantinePrefix,",
+          "pre": "            QuarantinePrefix = \"_quarantine\","
+        },
+        {
+          "post": "        bool writesEnabled = true,\n        IQuarantineUploadIntent? intents = null,\n        string quarantinePrefix = \"_quarantine\")\n",
+          "pre": "        bool writesEnabled = true)\n"
+        },
+        {
+          "post": "    /// <summary>Rejects an invalid complete batch before any recovery intent, scanner, journal or storage call.</summary>\n    /// <param name=\"scenario\">An overflowing final name, quarantine name, later filename or configured prefix.</param>\n    /// <returns>A task completing after the validation failure and untouched boundaries are checked.</returns>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    [InlineData(2)]\n    [InlineData(3)]\n    [InlineData(4)]\n    public async Task UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(int scenario)\n    {\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);\n        var scans = 0;\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean), () => scans++),\n            repository, intents: intents.Object, quarantinePrefix: scenario == 4 ? new string('q', 1000) : \"_quarantine\");\n        var path = scenario switch\n        {\n            0 => new string(' ', 1015) + \"A\",\n            1 => new string(' ', 970) + \"A\",\n            2 => new string('\\u00a0', 485) + \"A\",\n            _ => \"A\",\n        };\n        IUploadFile[] files = scenario == 3\n            ? [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1]),\n               new MemoryUploadFile(new string('f', 980) + \".STL\", \"model/stl\", [2])]\n            : [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1])];\n\n        await Assert.ThrowsAsync<FileUploadValidationException>(() =>\n            service.UploadAsync(\"maliev.com\", path, files, Guid.Empty, default));\n\n        intents.VerifyNoOtherCalls();\n        Assert.Equal(0, scans);\n        Assert.Empty(storage.Uploaded);\n        Assert.Empty(storage.Moved);\n        Assert.Empty(storage.Deleted);\n        Assert.Empty(storage.Signed);\n        Assert.Empty(repository.Uploads);\n        Assert.Equal(0, repository.AddRangeCallCount);\n        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);\n    }\n\n    /// <summary>Retains exact legal padding at the complete quarantine byte limit through journal and metadata submission.</summary>\n    /// <param name=\"scenario\">The ASCII or multibyte padding boundary.</param>\n    /// <returns>A task completing after the unchanged literal upload coordinates are verified.</returns>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    public async Task UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity(int scenario)\n    {\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);\n        var path = scenario == 0 ? new string(' ', 969) + \"A\" : new string('\\u00a0', 484) + \"AA\";\n        var expected = scenario == 0 ? new string(' ', 969) + \"a/part.stl\" : new string('\\u00a0', 484) + \"aa/part.stl\";\n        var operationId = Guid.Parse(\"5d034fac-25b1-4ba0-bfe2-502ab26471ca\");\n\n        var result = await service.UploadAsync(\"maliev.com\", path,\n            [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1])], operationId, default);\n\n        var quarantine = Assert.Single(storage.Uploaded).ObjectName;\n        Assert.Equal($\"_quarantine/{operationId:N}/{expected}\", quarantine);\n        Assert.Equal(1024, System.Text.Encoding.UTF8.GetByteCount(quarantine));\n        Assert.Equal(expected, Assert.Single(storage.Moved).DestinationObjectName);\n        Assert.Equal(expected, Assert.Single(repository.Uploads).Name);\n        Assert.Equal(expected, Assert.Single(result.Object).ObjectName);\n        var evidence = Assert.Single(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence).Value;\n        Assert.Equal(quarantine, evidence.SourceObjectName);\n        Assert.Equal(expected, evidence.DestinationObjectName);\n        Assert.Equal(\"MetadataCommitted\", evidence.State);\n    }\n\n    /// <summary>Releases replay reservations after deterministic name rejection, so retries never enter unknown reconciliation.</summary>\n    /// <returns>A task completing after two rejected attempts release their reservations without storage effects.</returns>\n    [Fact]\n    public async Task UploadAsync_OversizedCoordinate_ReleasesReplayReservationOnEveryAttempt()\n    {\n        var path = new string(' ', 970) + \"A\";\n        var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);\n        store.Setup(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()))\n            .ReturnsAsync(new UploadAcquireResult(UploadAcquireState.Acquired, \"reservation\", EffectivePath: path));\n        store.Setup(value => value.RenewAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>())).ReturnsAsync(true);\n        store.Setup(value => value.ReleaseAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);\n        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository, intents: intents.Object);\n        var coordinator = new IdempotentUploadCoordinator(store.Object, new UploadSnapshotCapture());\n        IUploadFile[] files = [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1])];\n\n        for (var attempt = 0; attempt < 2; attempt++)\n            await Assert.ThrowsAsync<FileUploadValidationException>(() => coordinator.ExecuteAsync(\n                \"intranet-service\", \"workflow-byte-boundary\", \"maliev.com\", path, files,\n                (operationId, effectivePath, captured, token) => service.UploadAsync(\"maliev.com\", effectivePath, captured, operationId, token),\n                (_, _, _, _) => throw new InvalidOperationException(\"Validation must never require reconciliation\"), default));\n\n        store.Verify(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));\n        store.Verify(value => value.RenewAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));\n        store.Verify(value => value.ReleaseAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));\n        store.VerifyNoOtherCalls();\n        intents.VerifyNoOtherCalls();\n        Assert.Empty(storage.Uploaded);\n        Assert.Empty(storage.Moved);\n        Assert.Empty(repository.Uploads);\n        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);\n    }\n\n    private static FileApplicationService CreateService(",
+          "pre": "    private static FileApplicationService CreateService("
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(scenario: 0)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(scenario: 1)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(scenario: 2)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(scenario: 3)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(scenario: 0)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(scenario: 1)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(scenario: 2)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(scenario: 3)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(scenario: 4)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(scenario: 5)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(scenario: 0)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(scenario: 1)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(scenario: 2)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(scenario: 3)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(scenario: 4)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity(scenario: 0)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity(scenario: 1)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAsync_OversizedCoordinate_ReleasesReplayReservationOnEveryAttempt",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAsync_OversizedCoordinate_ReleasesReplayReservationOnEveryAttempt",
+      "executions": 1
+    }
+  ],
+  "claim": "Source-derived roster only; hosted TRX must agree. No actual RED or runtime/SDK/provider acceptance claimed."
+}

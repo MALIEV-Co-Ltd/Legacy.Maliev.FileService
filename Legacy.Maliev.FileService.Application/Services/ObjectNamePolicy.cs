@@ -1,3 +1,4 @@
+using System.Text;
 using Legacy.Maliev.FileService.Application.Models;
 using Microsoft.Extensions.Options;
 
@@ -51,15 +52,24 @@ public sealed class ObjectNamePolicy(IOptions<FileStorageOptions> options, TimeP
             finalName = customPrefix[..leadingPaddingLength] + finalName.Insert(prefixBoundary, customPrefix[trailingPaddingStart..]);
         }
 
-        return finalName.ToLowerInvariant();
+        return RequireObjectNameSize(finalName.ToLowerInvariant());
     }
 
     /// <summary>Builds a non-public quarantine object name.</summary>
     public string BuildQuarantineObjectName(Guid operationId, string finalObjectName) =>
-        NormalizeObjectName($"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}", allowTrailingSlash: false);
+        RequireObjectNameSize(NormalizeObjectName($"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}", allowTrailingSlash: false));
 
     /// <summary>Validates an existing object name without changing its case.</summary>
     public string RequireObjectName(string objectName) => NormalizeObjectName(objectName, allowTrailingSlash: false);
+
+    private static string RequireObjectNameSize(string objectName)
+    {
+        // The GCS UTF-8 byte limit also bounds the journals' 1024-character columns.
+        if (Encoding.UTF8.GetByteCount(objectName) > 1024)
+            throw new FileUploadValidationException("Object name is too long");
+
+        return objectName;
+    }
 
     private string BuildLegacyDefaultPrefix(Guid uploadId)
     {

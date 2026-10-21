@@ -48,17 +48,23 @@ public sealed class FileApplicationService(
         using var snapshot = await snapshots.CaptureAsync(files, cancellationToken);
         files = snapshot;
 
+        // Validate every exact coordinate before persisting any intent or uploading a batch member.
+        var destinations = files.Select(file =>
+        {
+            var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);
+            RequireGenericObject(normalizedObjectName);
+            var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);
+            return (File: file, FinalName: finalName, QuarantineName: quarantineName);
+        }).ToArray();
+
         var promoted = new List<(string Bucket, string ObjectName, Guid MoveId)>();
         var quarantined = new List<(string Bucket, string ObjectName, long Generation)>();
         var uploads = new List<Upload>(files.Count);
 
         try
         {
-            foreach (var file in files)
+            foreach (var (file, finalName, quarantineName) in destinations)
             {
-                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);
-                RequireGenericObject(normalizedObjectName);
-                var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);
                 var intentId = MoveId(operationId, quarantineName);
                 long quarantineGeneration;
                 await using (var content = file.OpenReadStream())
@@ -191,10 +197,11 @@ public sealed class FileApplicationService(
         {
             var objectName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);
             RequireGenericObject(normalizedObjectName);
+            var quarantineName = names.BuildQuarantineObjectName(operationId, objectName);
             var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);
             if (move is null || !move.ScanClean || move.State is not ("SourceDeleted" or "MetadataSubmitting" or "MetadataCommitted" or "Unknown")
                 || move.SourceBucket != bucket
-                || move.SourceObjectName != names.BuildQuarantineObjectName(operationId, objectName)
+                || move.SourceObjectName != quarantineName
                 || move.SourceGeneration <= 0
                 || move.DestinationBucket != bucket || move.DestinationObjectName != objectName
                 || move.DestinationGeneration is not long destinationGeneration || destinationGeneration <= 0

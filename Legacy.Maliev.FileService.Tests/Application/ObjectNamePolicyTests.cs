@@ -93,6 +93,67 @@ public sealed class ObjectNamePolicyTests
         Assert.Equal(expectedObjectName, policy.BuildFinalObjectName(path, "PART.STL", Guid.Empty));
     }
 
+    /// <summary>Checks the UTF-8 limit after restoring literal prefix padding and lower-casing.</summary>
+    /// <param name="scenario">The exact or overflowing ASCII or multibyte padding boundary.</param>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(int scenario)
+    {
+        var (padding, count, accepted, expectedBytes) = scenario switch
+        {
+            0 => (' ', 1014, true, 1024),
+            1 => (' ', 1015, false, 1025),
+            2 => ('\u00a0', 507, true, 1024),
+            _ => ('\u00a0', 508, false, 1026),
+        };
+        var path = new string(padding, count) + "A";
+        var expected = new string(padding, count) + "a/part.stl";
+        Assert.Equal(expectedBytes, System.Text.Encoding.UTF8.GetByteCount(expected));
+
+        if (accepted)
+            Assert.Equal(expected, policy.BuildFinalObjectName(path, "PART.STL", Guid.Empty));
+        else
+            Assert.Throws<FileUploadValidationException>(() => policy.BuildFinalObjectName(path, "PART.STL", Guid.Empty));
+    }
+
+    /// <summary>Counts the actual configured quarantine prefix and operation identity in the storage byte boundary.</summary>
+    /// <param name="scenario">The exact or overflowing ASCII, multibyte or custom quarantine prefix case.</param>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(int scenario)
+    {
+        var (path, quarantinePrefix, accepted, expectedBytes) = scenario switch
+        {
+            0 => (new string(' ', 969) + "A", "_quarantine", true, 1024),
+            1 => (new string(' ', 970) + "A", "_quarantine", false, 1025),
+            2 => (new string('\u00a0', 484) + "AA", "_quarantine", true, 1024),
+            3 => (new string('\u00a0', 485) + "A", "_quarantine", false, 1025),
+            4 => (new string(' ', 880) + "A", new string('q', 100), true, 1024),
+            _ => (new string(' ', 881) + "A", new string('q', 100), false, 1025),
+        };
+        var localPolicy = new ObjectNamePolicy(Options.Create(new FileStorageOptions
+        {
+            AllowedBuckets = ["maliev.com"],
+            QuarantinePrefix = quarantinePrefix,
+        }), TimeProvider.System);
+        var finalName = localPolicy.BuildFinalObjectName(path, "PART.STL", Guid.Empty);
+        var expected = $"{quarantinePrefix}/{Guid.Empty:N}/{finalName}";
+        Assert.Equal(expectedBytes, System.Text.Encoding.UTF8.GetByteCount(expected));
+
+        if (accepted)
+            Assert.Equal(expected, localPolicy.BuildQuarantineObjectName(Guid.Empty, finalName));
+        else
+            Assert.Throws<FileUploadValidationException>(() => localPolicy.BuildQuarantineObjectName(Guid.Empty, finalName));
+    }
+
     [Fact]
     public void RequireBucket_UnknownBucket_Rejects()
     {

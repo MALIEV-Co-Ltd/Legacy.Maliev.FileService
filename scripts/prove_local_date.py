@@ -151,7 +151,7 @@ def verify_focus_rows(rows, baseline, inventory=None):
 
 
 UPLOAD_PREFIX_INVENTORY = "docs/upload-prefix18-inventory.json"
-UPLOAD_PREFIX_INVENTORY_SHA256 = "8da8015f81e58172ce6307f8f25af59d8e36ab15c3d4fd56f5d3441f2a00512d"
+UPLOAD_PREFIX_INVENTORY_SHA256 = "ed2c1444e6b0824b82449f40a008616b3340d5a8c7d71071d9e538f41bfe7175"
 
 
 def upload_prefix_inventory(inventory_path=None):
@@ -260,6 +260,89 @@ def prove_upload_prefix_focus(repo, output, run, tests, head):
                             if p.suffix in {".trx", ".log"}}}
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return rows
+
+UPLOAD_SIZE_INVENTORY = "docs/upload-name-size18-inventory.json"
+UPLOAD_SIZE_INVENTORY_SHA256 = "9d2cb501ec14de2cfce43c0e6845fa9a5305915261250904d88f5eafd73899b2"
+
+
+def upload_size_inventory(inventory_path=None):
+    raw = Path(inventory_path or UPLOAD_SIZE_INVENTORY).read_bytes()
+    require(digest(raw) == UPLOAD_SIZE_INVENTORY_SHA256, "Reviewed upload name size inventory changed")
+    inventory = json.loads(raw)
+    require(inventory["schemaVersion"] == 1 and inventory["baselineFullCount"] == 1687
+            and inventory["additionalCases"] == 18 and inventory["expectedFullCount"] == 1705
+            and len(inventory["sources"]) == 4, "Reviewed upload name size scope changed")
+    return inventory
+
+
+def upload_size_correction_disabled(path, corrected, inventory_path=None):
+    matches = [source for source in upload_size_inventory(inventory_path)["sources"] if source["path"] == path]
+    require(len(matches) == 1, "Unknown reviewed upload name size source")
+    source = matches[0]
+    require(digest(corrected) == source["postSha256"] and len(corrected) == source["postBytes"],
+            "Reviewed upload name size source changed")
+    disabled = corrected
+    for operation in source["inverse"]:
+        after, before = operation["post"].encode("utf-8"), operation["pre"].encode("utf-8")
+        require(after and disabled.count(after) == 1, "Reviewed upload name size inverse changed")
+        disabled = disabled.replace(after, before, 1)
+    require(digest(disabled) == source["preSha256"] and len(disabled) == source["preBytes"],
+            "Upload name size inverse differs from immutable predecessor")
+    return disabled
+
+
+def reviewed_upload_size_additions(inventory_path=None, source_root=None):
+    inventory = upload_size_inventory(inventory_path)
+    root = Path(source_root or ".")
+    for source in inventory["sources"]:
+        upload_size_correction_disabled(source["path"], (root / source["path"]).read_bytes(), inventory_path)
+    identities = Counter()
+    for row in inventory["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["executions"] == 1 and identity not in identities, "Duplicate upload name size identity")
+        identities[identity] = 1
+    require(sum(identities.values()) == 18, "Exact eighteen upload name size identities required")
+    return identities
+
+
+def upload_size_focus_filter(inventory_path=None):
+    methods = sorted({row["class"] + "." + row["method"] for row in upload_size_inventory(inventory_path)["rows"]})
+    require(len(methods) == 5, "Exact five upload name size methods required")
+    return "|".join("FullyQualifiedName=" + method for method in methods)
+
+
+def verify_upload_size_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    expected = reviewed_upload_size_additions()
+    require(len(rows) == 18 and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+            and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Exact eighteen joined upload name size cases must pass without errors or skips")
+    return rows
+
+
+def prove_upload_size_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    inventory = upload_size_inventory()
+    sources = {source["path"]: (repo / source["path"]).read_bytes() for source in inventory["sources"]}
+    reviewed_upload_size_additions(source_root=repo)
+    for path, content in sources.items():
+        require(subprocess.check_output(["git", "show", head + ":" + path], timeout=20) == content,
+                "Upload name size source differs from proposed head")
+    require(run("upload-name-size18", tests + ["--filter", upload_size_focus_filter(),
+            "--logger", "trx;LogFileName=name-size18.trx", "--results-directory", str(output)], 120, output) == 0,
+            "Upload name size focus failed")
+    rows = verify_upload_size_focus(output / "name-size18.trx")
+    require(all((repo / path).read_bytes() == content for path, content in sources.items()),
+            "Upload name size focus changed source")
+    receipt = {"head": head, "exactJoinedCasesPassed": len(rows), "baselineFullCount": 1687,
+               "expectedFullCount": 1705, "inventorySha256": UPLOAD_SIZE_INVENTORY_SHA256,
+               "sourceSha256": {path: digest(content) for path, content in sources.items()},
+               "sourceUnchanged": True, "providerCallsProven": False,
+               "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir()
+                            if p.suffix in {".trx", ".log"}}}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return rows
+
 
 UPLOAD_COORDINATE_INVENTORY = "docs/upload-coordinate25-inventory.json"
 UPLOAD_COORDINATE_INVENTORY_SHA256 = "7f5a674e1c538bc5cd989e4001f1674aab4717382175175c7d09e7e82ac87972"
@@ -662,7 +745,7 @@ def reviewed_validation_logging_additions(source_root=None):
 
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
                 include_redis_models=True, include_synchronous_signing=True, include_null_signing=True, include_request_observation=True,
-                include_validation_logging=True, include_upload_prefix=True):
+                include_validation_logging=True, include_upload_prefix=True, include_upload_size=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -676,15 +759,16 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     observation_additions = reviewed_request_observation_additions() if null_additions and include_request_observation else Counter()
     validation_additions = reviewed_validation_logging_additions() if observation_additions and include_validation_logging else Counter()
     prefix_additions = reviewed_upload_prefix_additions() if validation_additions and include_upload_prefix else Counter()
-    expected_count = 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    size_additions = reviewed_upload_size_additions() if prefix_additions and include_upload_size else Counter()
+    expected_count = 1705 if size_additions else 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions + size_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
     verify_focus_rows([r for r in rows if r["class"] == CLASS
-                       and (r["class"], r["method"], r["name"]) not in prefix_additions], False, inventory)
+                       and (r["class"], r["method"], r["name"]) not in prefix_additions + size_additions], False, inventory)
     return rows
 
 
@@ -1106,6 +1190,8 @@ def main():
     tests = ["test", "Legacy.Maliev.FileService.Tests/Legacy.Maliev.FileService.Tests.csproj", "--configuration", "Release",
              "--no-build", "--no-restore", "--disable-build-servers", "-p:UseLocalMalievDependencies=true", "-p:GITHUB_ACTIONS=false", "-p:VSTestCollect="]
     prove_upload_prefix_focus(repo, root / "upload-prefix-focus", run, tests, head)
+    commands = []
+    prove_upload_size_focus(repo, root / "upload-name-size-focus", run, tests, head)
     commands = []
     date_filter = local_date_focus_filter(inventory)
     error = None

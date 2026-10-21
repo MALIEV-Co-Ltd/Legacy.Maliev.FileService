@@ -629,18 +629,128 @@ public sealed class FileApplicationServiceTests
         Assert.Empty(repository.Uploads);
     }
 
+    /// <summary>Rejects an invalid complete batch before any recovery intent, scanner, journal or storage call.</summary>
+    /// <param name="scenario">An overflowing final name, quarantine name, later filename or configured prefix.</param>
+    /// <returns>A task completing after the validation failure and untouched boundaries are checked.</returns>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(int scenario)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);
+        var scans = 0;
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean), () => scans++),
+            repository, intents: intents.Object, quarantinePrefix: scenario == 4 ? new string('q', 1000) : "_quarantine");
+        var path = scenario switch
+        {
+            0 => new string(' ', 1015) + "A",
+            1 => new string(' ', 970) + "A",
+            2 => new string('\u00a0', 485) + "A",
+            _ => "A",
+        };
+        IUploadFile[] files = scenario == 3
+            ? [new MemoryUploadFile("PART.STL", "model/stl", [1]),
+               new MemoryUploadFile(new string('f', 980) + ".STL", "model/stl", [2])]
+            : [new MemoryUploadFile("PART.STL", "model/stl", [1])];
+
+        await Assert.ThrowsAsync<FileUploadValidationException>(() =>
+            service.UploadAsync("maliev.com", path, files, Guid.Empty, default));
+
+        intents.VerifyNoOtherCalls();
+        Assert.Equal(0, scans);
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(storage.Moved);
+        Assert.Empty(storage.Deleted);
+        Assert.Empty(storage.Signed);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);
+    }
+
+    /// <summary>Retains exact legal padding at the complete quarantine byte limit through journal and metadata submission.</summary>
+    /// <param name="scenario">The ASCII or multibyte padding boundary.</param>
+    /// <returns>A task completing after the unchanged literal upload coordinates are verified.</returns>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity(int scenario)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var path = scenario == 0 ? new string(' ', 969) + "A" : new string('\u00a0', 484) + "AA";
+        var expected = scenario == 0 ? new string(' ', 969) + "a/part.stl" : new string('\u00a0', 484) + "aa/part.stl";
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+
+        var result = await service.UploadAsync("maliev.com", path,
+            [new MemoryUploadFile("PART.STL", "model/stl", [1])], operationId, default);
+
+        var quarantine = Assert.Single(storage.Uploaded).ObjectName;
+        Assert.Equal($"_quarantine/{operationId:N}/{expected}", quarantine);
+        Assert.Equal(1024, System.Text.Encoding.UTF8.GetByteCount(quarantine));
+        Assert.Equal(expected, Assert.Single(storage.Moved).DestinationObjectName);
+        Assert.Equal(expected, Assert.Single(repository.Uploads).Name);
+        Assert.Equal(expected, Assert.Single(result.Object).ObjectName);
+        var evidence = Assert.Single(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence).Value;
+        Assert.Equal(quarantine, evidence.SourceObjectName);
+        Assert.Equal(expected, evidence.DestinationObjectName);
+        Assert.Equal("MetadataCommitted", evidence.State);
+    }
+
+    /// <summary>Releases replay reservations after deterministic name rejection, so retries never enter unknown reconciliation.</summary>
+    /// <returns>A task completing after two rejected attempts release their reservations without storage effects.</returns>
+    [Fact]
+    public async Task UploadAsync_OversizedCoordinate_ReleasesReplayReservationOnEveryAttempt()
+    {
+        var path = new string(' ', 970) + "A";
+        var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);
+        store.Setup(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UploadAcquireResult(UploadAcquireState.Acquired, "reservation", EffectivePath: path));
+        store.Setup(value => value.RenewAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        store.Setup(value => value.ReleaseAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository, intents: intents.Object);
+        var coordinator = new IdempotentUploadCoordinator(store.Object, new UploadSnapshotCapture());
+        IUploadFile[] files = [new MemoryUploadFile("PART.STL", "model/stl", [1])];
+
+        for (var attempt = 0; attempt < 2; attempt++)
+            await Assert.ThrowsAsync<FileUploadValidationException>(() => coordinator.ExecuteAsync(
+                "intranet-service", "workflow-byte-boundary", "maliev.com", path, files,
+                (operationId, effectivePath, captured, token) => service.UploadAsync("maliev.com", effectivePath, captured, operationId, token),
+                (_, _, _, _) => throw new InvalidOperationException("Validation must never require reconciliation"), default));
+
+        store.Verify(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));
+        store.Verify(value => value.RenewAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));
+        store.Verify(value => value.ReleaseAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));
+        store.VerifyNoOtherCalls();
+        intents.VerifyNoOtherCalls();
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(storage.Moved);
+        Assert.Empty(repository.Uploads);
+        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);
+    }
+
     private static FileApplicationService CreateService(
         RecordingStorage storage,
         IFileSafetyScanner scanner,
         RecordingRepository repository,
-        bool writesEnabled = true)
+        bool writesEnabled = true,
+        IQuarantineUploadIntent? intents = null,
+        string quarantinePrefix = "_quarantine")
     {
         var options = Options.Create(new FileStorageOptions
         {
             Enabled = true,
             WritesEnabled = writesEnabled,
             AllowedBuckets = ["maliev.com"],
-            QuarantinePrefix = "_quarantine",
+            QuarantinePrefix = quarantinePrefix,
             SignedUrlHours = 168,
         });
         var time = new FakeTimeProvider(Now);
@@ -655,7 +765,7 @@ public sealed class FileApplicationServiceTests
             options,
             new LegacyFileRuntimeGate(options),
             NullLogger<FileApplicationService>.Instance,
-            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);
+            intents ?? new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);
     }
 
     private sealed class MemoryUploadFile(string name, string contentType, byte[] bytes) : IUploadFile
