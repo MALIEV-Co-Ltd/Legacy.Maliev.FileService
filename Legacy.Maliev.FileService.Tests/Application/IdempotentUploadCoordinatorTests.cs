@@ -57,6 +57,43 @@ public sealed class IdempotentUploadCoordinatorTests
         { executions++; return Task.FromResult(Response()); }, (_, _, _, _) => Task.FromResult<UploadResultResponse?>(null), default);
     }
 
+
+    /// <summary>Keeps slash aliases of a padded prefix on one literal destination and one execution.</summary>
+    /// <param name="firstPath">The first custom prefix stored with the replay identity.</param>
+    /// <param name="retryPath">The equivalent prefix used by the retry.</param>
+    /// <returns>A task that completes after checking the literal destination and completed response replay.</returns>
+    [Theory]
+    [InlineData("/ A ", " A ")]
+    [InlineData(" A ", "/ A ")]
+    public async Task PaddedPrefixSlashAlias_ReplaysSameLiteralDestination(string firstPath, string retryPath)
+    {
+        var store = new MemoryStore();
+        var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture());
+        var policy = new ObjectNamePolicy(Microsoft.Extensions.Options.Options.Create(
+            new FileStorageOptions { AllowedBuckets = ["maliev.com"] }), TimeProvider.System);
+        var executions = 0;
+
+        var first = await Run(firstPath);
+        var replay = await Run(retryPath);
+
+        Assert.Equal(" a /part.stl", Assert.Single(first.Object).ObjectName);
+        Assert.Equal(" a /part.stl", policy.BuildFinalObjectName(retryPath, "PART.STL", Guid.Empty));
+        Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(replay));
+        Assert.Equal(1, executions);
+        Assert.Equal("completed", store.State);
+
+        Task<UploadResultResponse> Run(string path) => coordinator.ExecuteAsync(
+            "intranet-service", "workflow-42", "maliev.com", path, [new File("PART.STL", "model/stl", [1])],
+            (operationId, effectivePath, _, _) =>
+            {
+                executions++;
+                return Task.FromResult(new UploadResultResponse([new("maliev.com",
+                    policy.BuildFinalObjectName(effectivePath, "PART.STL", operationId), new Uri("https://storage.test/signed"))]));
+            },
+            (_, _, _, _) => throw new InvalidOperationException("Completed replay must not reconcile."),
+            default);
+    }
+
     [Fact]
     public async Task SameWorkflowWithDifferentBytes_ConflictsWithoutExecution()
     {

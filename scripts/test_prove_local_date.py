@@ -2,8 +2,110 @@ import unittest
 from pathlib import Path
 import tempfile
 from prove_local_date import *
-from prove_local_date import verify_full as verify_current_full
+from prove_local_date import verify_full as verify_validation_full
 from prove_local_date import verify_signing_focus as verify_current_signing_focus
+
+
+verify_console_full = verify_validation_full
+
+
+def verify_boundary_full(*args, **kwargs):
+    # Every historical control retains its exact 1705-or-earlier roster.
+    return verify_console_full(*args, include_private_console=False, **kwargs)
+
+
+def verify_prefix_full(*args, **kwargs):
+    # Retain the original exact 1687 ceiling for every historical prefix control.
+    return verify_boundary_full(*args, include_upload_size=False, **kwargs)
+
+
+def verify_validation_full(*args, **kwargs):
+    # Every existing historical control retains its exact 1669-or-earlier ceiling.
+    return verify_prefix_full(*args, include_upload_prefix=False, **kwargs)
+
+
+def verify_observation_full(*args, **kwargs):
+    return verify_validation_full(*args, include_validation_logging=False, **kwargs)
+
+
+def verify_current_full(*args, **kwargs):
+    # Preserve every existing historical wrapper and exact 1663/1661 ceiling.
+    return verify_observation_full(*args, include_request_observation=False, **kwargs)
+
+
+# Historical controls retain their exact 1661 ceiling; the unwrapped candidate gate
+# below separately requires all 1663 current identities, including the two null-URI Facts.
+verify_candidate_full = verify_current_full
+
+
+def verify_current_full(*args, **kwargs):
+    return verify_candidate_full(*args, include_null_signing=False, **kwargs)
+
+
+class ReviewedNullSigningSuccessorTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedSynchronousSigningRosterTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_null_signing_additions().elements()
+        ]
+
+    def test_current_full_retains_all1661_and_exact_two_null_signing_facts(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1663, len(rows))
+        self.assertEqual(ReviewedSynchronousSigningRosterTests.rows(self), rows[:1661])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_candidate_full("controlled", prior_inventory()))
+        for mutation in ("old1661", "missing", "duplicate", "replacement", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1661":
+                changed = changed[:1661]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_candidate_full("mutated", prior_inventory())
+
+    def test_exact_successor_inverses_retain_both_immutable_prior_hashes(self):
+        tests = Path(RECONCILE_GENERATION_TEST).read_bytes()
+        service = Path(DELETE_SERVICE).read_bytes()
+        self.assertEqual(RECONCILE_GENERATION_TEST_SHA256, digest(null_signing_tests_disabled(tests)))
+        self.assertEqual(NULL_SIGNING_PRIOR_SERVICE_SHA256, digest(null_signing_correction_disabled(service)))
+        self.assertEqual(DELETE_BASELINE_SHA256, digest(delete_correction_disabled(service)))
+        for changed in (tests + b"\n", tests.replace(b"NullSignedUriCall = 2", b"NullSignedUriCall = 3"),
+                        tests.replace(b"signing unavailable", b"changed old signing assertion")):
+            with self.subTest(kind="test-source"), self.assertRaises(ValueError):
+                null_signing_tests_disabled(changed)
+        for changed in (service + b"\n", service.replace(b"Upload signing returned no URI.", b"changed"),
+                        service.replace(b"RequireExistingObjectIdentity", b"OtherIdentity")):
+            with self.subTest(kind="service-source"), self.assertRaises(ValueError):
+                null_signing_correction_disabled(changed)
+
+    def test_two_identity_enrollment_rejects_either_source_drift(self):
+        originals = {RECONCILE_GENERATION_TEST: Path(RECONCILE_GENERATION_TEST).read_bytes(),
+                     DELETE_SERVICE: Path(DELETE_SERVICE).read_bytes()}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path, data in originals.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            self.assertEqual(2, sum(reviewed_null_signing_additions(root).values()))
+            for path, data in originals.items():
+                target = root / path
+                target.write_bytes(data + b" ")
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    reviewed_null_signing_additions(root)
+                target.write_bytes(data)
 
 
 def verify_full(*args, **kwargs):
@@ -165,7 +267,7 @@ class ProofTests(unittest.TestCase):
                 verify_accepted_full("synthetic", prior_inventory())
 
     def test_immutable_baseline_provenance_rejects_wrong_commit_blob_or_bytes(self):
-        data = Path(CONTROLLER).read_bytes().replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()")
+        data = upload_prefix_correction_disabled(CONTROLLER, Path(CONTROLLER).read_bytes()).replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()")
         self.assertEqual(data, verify_baseline_identity(OLD, BASELINE_BLOB, data))
         for commit, blob, content in [("0" * 40, BASELINE_BLOB, data), (OLD, "0" * 40, data), (OLD, BASELINE_BLOB, data + b"\n")]:
             with self.assertRaises(ValueError):
@@ -840,3 +942,689 @@ class DeleteCausalProofTests(unittest.TestCase):
         for changed in (corrected + b"\n", corrected.replace(b"RequireExistingObjectIdentity", b"OtherIdentity")):
             with self.assertRaises(ValueError):
                 delete_correction_disabled(changed)
+
+
+class ReviewedRequestObservationSuccessorTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedNullSigningSuccessorTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=cls + "." + method, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method in [
+                ("Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests",
+                 "RegisteredGetHealth_IdentifiesOnlyItsHostWithoutSuccessfulProbeIncidents"),
+                ("Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests",
+                 "SyntheticObservation_RequiresNativeLoopbackAndOneNonceAndPreservesThrottling"),
+                ("Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests",
+                 "DisabledSignedRead_ProducesOneSanitizedIncidentWithoutSyntheticOrHealthIdentity"),
+            ]
+        ]
+
+    def test_current_full_retains_all1663_and_exact_three_observer_facts(self):
+        rows = self.rows()
+        self.assertEqual(1666, len(rows))
+        self.assertEqual(ReviewedNullSigningSuccessorTests.rows(self), rows[:1663])
+        cls = "Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests"
+        self.assertEqual(21, sum(row["class"] == cls for row in rows[:1663]))
+        self.assertEqual(24, sum(row["class"] == cls for row in rows))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "full1666.trx"
+            ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(path)
+            self.assertEqual(rows, verify_observation_full(path, prior_inventory()))
+
+    def test_current_full_rejects_changed_old_or_observer_identities_outcomes_and_counts(self):
+        cls = "Legacy.Maliev.FileService.Tests.OpenApi.FileHostTransportHttpTests"
+        for mutation in ("old1663", "missing", "duplicate", "extra", "wrong-class", "wrong-method",
+                         "wrong-display", "arguments", "old-host-replaced", "old-other-replaced",
+                         "failed", "skipped", "passing-error"):
+            rows = self.rows()
+            if mutation == "old1663":
+                rows = rows[:1663]
+            elif mutation == "missing":
+                rows.pop()
+            elif mutation == "duplicate":
+                rows[-1] = dict(rows[-2])
+            elif mutation == "extra":
+                rows.append(dict(rows[-1]))
+            elif mutation == "wrong-class":
+                rows[-1]["class"] = "Unreviewed.Observer"
+            elif mutation == "wrong-method":
+                rows[-1]["method"] += "Renamed"
+            elif mutation in {"wrong-display", "arguments"}:
+                rows[-1]["name"] += "Renamed" if mutation == "wrong-display" else "(unexpected: True)"
+            elif mutation in {"old-host-replaced", "old-other-replaced"}:
+                victim = next(row for row in rows[:1663] if (row["class"] == cls) == (mutation == "old-host-replaced"))
+                victim["name"] = "UnreviewedReplacement"
+            elif mutation == "passing-error":
+                rows[-1]["errorInfo"] = True
+            else:
+                rows[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "changed.trx"
+                ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_observation_full(path, prior_inventory())
+
+    def test_current_full_rejects_run_errors_counter_spoof_and_broken_execution_joins(self):
+        import copy
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        original = CleanAcceptancePathTests.fixture(self, self.rows())
+        for mutation in ("run-error", "summary-error", "counter", "duplicate-summary",
+                         "missing-counter", "wrong-result-execution", "missing-entry"):
+            root = copy.deepcopy(original)
+            summary = root.find(n + "ResultSummary")
+            if mutation == "run-error":
+                ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome="Error")
+            elif mutation == "summary-error":
+                ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+            elif mutation == "counter":
+                summary.find(n + "Counters").set("passed", "1667")
+            elif mutation == "duplicate-summary":
+                root.append(copy.deepcopy(summary))
+            elif mutation == "missing-counter":
+                summary.find(n + "Counters").attrib.pop("notExecuted")
+            elif mutation == "wrong-result-execution":
+                root.find(n + "Results")[-1].set("executionId", "00000000-0000-4000-9000-999999999999")
+            else:
+                entries = root.find(n + "TestEntries")
+                entries.remove(entries[-1])
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "changed-run.trx"
+                ET.ElementTree(root).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_observation_full(path, prior_inventory())
+
+    def test_observer_enrollment_requires_exact_reviewed_source(self):
+        content = Path(REQUEST_OBSERVATION_TEST).read_bytes()
+        self.assertEqual(REQUEST_OBSERVATION_TEST_SHA256, digest(content))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / REQUEST_OBSERVATION_TEST
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+            self.assertEqual(3, sum(reviewed_request_observation_additions(root).values()))
+            for changed in (
+                content + b"\n",
+                content.replace(b'AddProvider(Observation)', b'ClearProviders()'),
+                content.replace(b'Assert.Equal(503, incident.StatusCode)', b'Assert.Equal(500, incident.StatusCode)'),
+            ):
+                path.write_bytes(changed)
+                with self.subTest(kind="source-drift"), self.assertRaises(ValueError):
+                    reviewed_request_observation_additions(root)
+
+
+class ReviewedSignedUrlValidationLoggingTests(unittest.TestCase):
+    def rows(self):
+        return ReviewedRequestObservationSuccessorTests.rows(self) + [
+            dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                 message="", stack="", errorInfo=False)
+            for cls, method, name in reviewed_validation_logging_additions().elements()
+        ]
+
+    def test_current_roster_retains_all1666_and_requires_three_validation_facts(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1669, len(rows))
+        self.assertEqual(ReviewedRequestObservationSuccessorTests.rows(self), rows[:1666])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_validation_full("controlled", prior_inventory()))
+        for mutation in ("old1666", "missing", "duplicate", "replacement", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1666":
+                changed = changed[:1666]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_validation_full("mutated", prior_inventory())
+
+    def test_enrollment_requires_the_exact_reviewed_validation_test_source(self):
+        content = Path(VALIDATION_LOGGING_TEST).read_bytes()
+        self.assertEqual(VALIDATION_LOGGING_TEST_SHA256, digest(content))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / VALIDATION_LOGGING_TEST
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+            self.assertEqual(3, sum(reviewed_validation_logging_additions(root).values()))
+            for changed in (content + b"\n", content.replace(b"LogLevel.Warning", b"LogLevel.Information")):
+                path.write_bytes(changed)
+                with self.subTest(kind="source-drift"), self.assertRaises(ValueError):
+                    reviewed_validation_logging_additions(root)
+
+
+
+
+class ReviewedUploadPrefixSuccessorTests(unittest.TestCase):
+    def prefix_rows(self):
+        return [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                     message="", stack="", errorInfo=False)
+                for cls, method, name in reviewed_upload_prefix_additions().elements()]
+
+    def rows(self):
+        return ReviewedSignedUrlValidationLoggingTests.rows(self) + self.prefix_rows()
+
+    def test_default_full_retains_all1669_and_exact_eighteen(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1687, len(rows))
+        self.assertEqual(ReviewedSignedUrlValidationLoggingTests.rows(self), rows[:1669])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_prefix_full("controlled", prior_inventory()))
+        for mutation in ("old1669", "missing", "duplicate", "extra", "replacement",
+                         "wrong-class", "wrong-method", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1669":
+                changed = changed[:1669]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "extra":
+                changed.append(dict(changed[-1]))
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation in ("wrong-class", "wrong-method"):
+                changed[-1]["class" if mutation == "wrong-class" else "method"] = "Unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_prefix_full("mutated", prior_inventory())
+
+    def test_focus18_uses_real_execution_joins_and_rejects_every_bad_outcome(self):
+        import copy
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        original = CleanAcceptancePathTests.fixture(self, self.prefix_rows())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prefix.trx"
+            ET.ElementTree(original).write(path)
+            self.assertEqual(18, len(verify_upload_prefix_focus(path)))
+            for mutation in ("missing", "duplicate", "replacement", "wrong-class", "wrong-method",
+                             "failed", "skipped", "passing-error", "execution", "entry",
+                             "run-error", "summary-error", "counter", "missing-counter"):
+                root = copy.deepcopy(original)
+                results = root.find(n + "Results")
+                definitions = root.find(n + "TestDefinitions")
+                summary = root.find(n + "ResultSummary")
+                if mutation == "missing":
+                    results.remove(results[-1])
+                elif mutation == "duplicate":
+                    results[-1].set("testId", results[-2].get("testId"))
+                elif mutation == "replacement":
+                    results[-1].set("testName", "unreviewed")
+                elif mutation in ("wrong-class", "wrong-method"):
+                    definitions[-1].find(n + "TestMethod").set(
+                        "className" if mutation == "wrong-class" else "name", "Unreviewed")
+                elif mutation in ("failed", "skipped"):
+                    results[-1].set("outcome", "Failed" if mutation == "failed" else "NotExecuted")
+                elif mutation == "passing-error":
+                    ET.SubElement(ET.SubElement(results[-1], n + "Output"), n + "ErrorInfo")
+                elif mutation == "execution":
+                    results[-1].set("executionId", results[-2].get("executionId"))
+                elif mutation == "entry":
+                    entries = root.find(n + "TestEntries")
+                    entries.remove(entries[-1])
+                elif mutation == "run-error":
+                    ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome="Error")
+                elif mutation == "summary-error":
+                    ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+                elif mutation == "counter":
+                    summary.find(n + "Counters").set("passed", "17")
+                else:
+                    summary.find(n + "Counters").attrib.pop("notExecuted")
+                ET.ElementTree(root).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_upload_prefix_focus(path)
+
+    def test_exact_five_source_inverses_preserve_original_bytes_and_reject_drift(self):
+        inventory = upload_prefix_inventory()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for source in inventory["sources"]:
+                current = Path(source["path"]).read_bytes()
+                restored = upload_prefix_correction_disabled(source["path"], current)
+                self.assertEqual(source["preSha256"], digest(restored))
+                self.assertEqual(source["preBytes"], len(restored))
+                target = root / source["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(current)
+                for changed in (current + b" ", current.replace(b"Assert.Equal", b"Assert.False", 1)
+                                if b"Assert.Equal" in current else current.replace(b"Require", b"Other", 1)):
+                    self.assertNotEqual(changed, current)
+                    with self.subTest(path=source["path"]), self.assertRaises(ValueError):
+                        upload_prefix_correction_disabled(source["path"], changed)
+            self.assertEqual(18, sum(reviewed_upload_prefix_additions(source_root=root).values()))
+            for source in inventory["sources"]:
+                target = root / source["path"]
+                original = target.read_bytes()
+                target.write_bytes(original + b" ")
+                with self.subTest(path=source["path"]), self.assertRaises(ValueError):
+                    reviewed_upload_prefix_additions(source_root=root)
+                target.write_bytes(original)
+
+    def test_inventory_and_exact_inverse_blocks_are_frozen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inventory.json"
+            path.write_bytes(Path(UPLOAD_PREFIX_INVENTORY).read_bytes() + b" ")
+            with self.assertRaises(ValueError):
+                reviewed_upload_prefix_additions(path)
+            changed = upload_prefix_inventory()
+            changed["rows"][-1]["testName"] = changed["rows"][-2]["testName"]
+            path.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                reviewed_upload_prefix_additions(path)
+
+    def test_date_baseline_preserves_prefix_overload_and_original_fourteen_filter(self):
+        current = Path(CONTROLLER).read_bytes()
+        predecessor = upload_prefix_correction_disabled(CONTROLLER, current)
+        immutable = predecessor.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()")
+        self.assertEqual(BASELINE_SHA256, digest(immutable))
+        composed = compose_upload_prefix_date_baseline(current, immutable)
+        self.assertEqual(upload_prefix_inventory()["dateBaseline"]["composedBaselineSha256"], digest(composed))
+        self.assertIn(b"out string normalizedObjectName", composed)
+        self.assertEqual(current.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()"), composed)
+        stripped = upload_prefix_correction_disabled(
+            CONTROLLER, composed.replace(b"timeProvider.GetUtcNow()", b"timeProvider.GetLocalNow()"))
+        self.assertEqual(immutable, stripped.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()"))
+        selected = local_date_focus_filter(prior_inventory())
+        self.assertEqual(4, len(selected.split("|")))
+        for row in upload_prefix_inventory()["rows"]:
+            if row["class"] == CLASS:
+                self.assertNotIn(row["method"], selected)
+        for altered in (current + b" ", current.replace(b"LastIndexOf", b"IndexOf", 1)):
+            with self.assertRaises(ValueError):
+                compose_upload_prefix_date_baseline(altered, immutable)
+        with self.assertRaises(ValueError):
+            compose_upload_prefix_date_baseline(current, immutable + b" ")
+
+    def test_focused_collector_records_actual18_without_source_or_provider_changes(self):
+        import unittest.mock
+        import prove_local_date as proof
+        rows = self.prefix_rows()
+        seen = []
+        def git_show(arguments, timeout):
+            self.assertEqual(20, timeout)
+            self.assertEqual(["git", "show"], arguments[:2])
+            return Path(arguments[2].split(":", 1)[1]).read_bytes()
+        def runner(name, arguments, seconds, evidence_output=None):
+            seen.append((name, arguments, seconds, evidence_output))
+            self.assertEqual("upload-prefix18", name)
+            self.assertEqual(120, seconds)
+            self.assertEqual(upload_prefix_focus_filter(), arguments[arguments.index("--filter") + 1])
+            ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(evidence_output / "prefix18.trx")
+            (evidence_output / "upload-prefix18.log").write_text("Synthetic parser control only")
+            return 0
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "focus"
+            with unittest.mock.patch.object(proof.subprocess, "check_output", side_effect=git_show):
+                actual = prove_upload_prefix_focus(Path("."), output, runner, ["test", "reviewed.csproj"], "a" * 40)
+            self.assertEqual(rows, actual)
+            receipt = json.loads((output / "receipt.json").read_text())
+            self.assertEqual(18, receipt["exactJoinedCasesPassed"])
+            self.assertEqual(1687, receipt["expectedFullCount"])
+            self.assertTrue(receipt["sourceUnchanged"])
+            self.assertFalse(receipt["providerCallsProven"])
+            self.assertIn("prefix18.trx", receipt["rawFiles"])
+            self.assertEqual(1, len(seen))
+
+
+class ReviewedUploadNameSizeSuccessorTests(unittest.TestCase):
+    def size_rows(self):
+        return [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                     message="", stack="", errorInfo=False)
+                for cls, method, name in reviewed_upload_size_additions().elements()]
+
+    def rows(self):
+        return ReviewedUploadPrefixSuccessorTests.rows(self) + self.size_rows()
+
+    def prefix_rows(self):
+        return ReviewedUploadPrefixSuccessorTests.prefix_rows(self)
+
+    def test_default_full_retains_all1687_and_exact_eighteen_size_cases(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1705, len(rows))
+        self.assertEqual(ReviewedUploadPrefixSuccessorTests.rows(self), rows[:1687])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_boundary_full("controlled", prior_inventory()))
+        for mutation in ("old1687", "missing", "duplicate", "extra", "replacement",
+                         "wrong-class", "wrong-method", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1687":
+                changed = changed[:1687]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "extra":
+                changed.append(dict(changed[-1]))
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation in ("wrong-class", "wrong-method"):
+                changed[-1]["class" if mutation == "wrong-class" else "method"] = "Unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_boundary_full("mutated", prior_inventory())
+
+    def test_size_focus18_requires_clean_unique_execution_joins(self):
+        import copy
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        original = CleanAcceptancePathTests.fixture(self, self.size_rows())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "size.trx"
+            ET.ElementTree(original).write(path)
+            self.assertEqual(18, len(verify_upload_size_focus(path)))
+            for mutation in ("missing", "duplicate", "replacement", "wrong-class", "wrong-method",
+                             "failed", "skipped", "passing-error", "execution", "entry",
+                             "run-error", "summary-error", "counter", "missing-counter"):
+                root = copy.deepcopy(original)
+                results = root.find(n + "Results")
+                definitions = root.find(n + "TestDefinitions")
+                summary = root.find(n + "ResultSummary")
+                if mutation == "missing":
+                    results.remove(results[-1])
+                elif mutation == "duplicate":
+                    results[-1].set("testId", results[-2].get("testId"))
+                elif mutation == "replacement":
+                    results[-1].set("testName", "unreviewed")
+                elif mutation in ("wrong-class", "wrong-method"):
+                    definitions[-1].find(n + "TestMethod").set(
+                        "className" if mutation == "wrong-class" else "name", "Unreviewed")
+                elif mutation in ("failed", "skipped"):
+                    results[-1].set("outcome", "Failed" if mutation == "failed" else "NotExecuted")
+                elif mutation == "passing-error":
+                    ET.SubElement(ET.SubElement(results[-1], n + "Output"), n + "ErrorInfo")
+                elif mutation == "execution":
+                    results[-1].set("executionId", results[-2].get("executionId"))
+                elif mutation == "entry":
+                    entries = root.find(n + "TestEntries")
+                    entries.remove(entries[-1])
+                elif mutation == "run-error":
+                    ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome="Error")
+                elif mutation == "summary-error":
+                    ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+                elif mutation == "counter":
+                    summary.find(n + "Counters").set("passed", "17")
+                else:
+                    summary.find(n + "Counters").attrib.pop("notExecuted")
+                ET.ElementTree(root).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_upload_size_focus(path)
+
+    def test_four_exact_inverses_retain_reviewed_head_and_all_historical_sources(self):
+        inventory = upload_size_inventory()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for source in inventory["sources"]:
+                current = Path(source["path"]).read_bytes()
+                previous = upload_size_correction_disabled(source["path"], current)
+                self.assertEqual(source["preSha256"], digest(previous))
+                self.assertEqual(source["preBytes"], len(previous))
+                historical = upload_prefix_correction_disabled(source["path"], current)
+                prefix_source = next(row for row in upload_prefix_inventory()["sources"] if row["path"] == source["path"])
+                self.assertEqual(prefix_source["preSha256"], digest(historical))
+                with self.assertRaises(ValueError):
+                    upload_prefix_correction_disabled(source["path"], previous)
+                target = root / source["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(current)
+                for changed in (current + b" ", previous,
+                                current.replace(b"1024", b"1025", 1) if b"1024" in current
+                                else current.replace(b"quarantineName", b"otherName", 1)):
+                    self.assertNotEqual(changed, current)
+                    with self.subTest(path=source["path"]), self.assertRaises(ValueError):
+                        upload_size_correction_disabled(source["path"], changed)
+            self.assertEqual(18, sum(reviewed_upload_size_additions(source_root=root).values()))
+            for source in inventory["sources"]:
+                target = root / source["path"]
+                original = target.read_bytes()
+                target.write_bytes(original + b" ")
+                with self.subTest(path=source["path"]), self.assertRaises(ValueError):
+                    reviewed_upload_size_additions(source_root=root)
+                target.write_bytes(original)
+
+    def test_size_inventory_and_scope_are_frozen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "size.json"
+            original = Path(UPLOAD_SIZE_INVENTORY).read_bytes()
+            for raw in (original + b" ", original.replace(b'"additionalCases": 18', b'"additionalCases": 17'),
+                        original.replace(b'"expectedFullCount": 1705', b'"expectedFullCount": 1687')):
+                path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    reviewed_upload_size_additions(path)
+
+    def test_size_collector_preserves_head_custody_and_records_actual18(self):
+        import unittest.mock
+        import prove_local_date as proof
+        rows = self.size_rows()
+        seen = []
+        def git_show(arguments, timeout):
+            self.assertEqual(20, timeout)
+            self.assertEqual(["git", "show"], arguments[:2])
+            return Path(arguments[2].split(":", 1)[1]).read_bytes()
+        def runner(name, arguments, seconds, evidence_output=None):
+            seen.append((name, arguments, seconds, evidence_output))
+            self.assertEqual("upload-name-size18", name)
+            self.assertEqual(120, seconds)
+            self.assertEqual(upload_size_focus_filter(), arguments[arguments.index("--filter") + 1])
+            ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(evidence_output / "name-size18.trx")
+            (evidence_output / "upload-name-size18.log").write_text("Synthetic parser control only")
+            return 0
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "focus"
+            with unittest.mock.patch.object(proof.subprocess, "check_output", side_effect=git_show):
+                actual = prove_upload_size_focus(Path("."), output, runner, ["test", "reviewed.csproj"], "a" * 40)
+            self.assertEqual(rows, actual)
+            receipt = json.loads((output / "receipt.json").read_text())
+            self.assertEqual(18, receipt["exactJoinedCasesPassed"])
+            self.assertEqual(1705, receipt["expectedFullCount"])
+            self.assertTrue(receipt["sourceUnchanged"])
+            self.assertFalse(receipt["providerCallsProven"])
+            self.assertIn("name-size18.trx", receipt["rawFiles"])
+            self.assertEqual(1, len(seen))
+
+
+class ReviewedPrivateConsoleSuccessorTests(unittest.TestCase):
+    def console_rows(self):
+        return [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                     message="", stack="", errorInfo=False)
+                for cls, method, name in reviewed_private_console_additions().elements()]
+
+    def rows(self):
+        return ReviewedUploadNameSizeSuccessorTests().rows() + self.console_rows()
+
+    def test_default_full_retains_all1705_and_exact_seven_private_console_cases(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1712, len(rows))
+        self.assertEqual(ReviewedUploadNameSizeSuccessorTests().rows(), rows[:1705])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_console_full("controlled", prior_inventory()))
+        for mutation in ("old1705", "missing", "duplicate", "extra", "replacement",
+                         "wrong-class", "wrong-method", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1705":
+                changed = changed[:1705]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "extra":
+                changed.append(dict(changed[-1]))
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation in ("wrong-class", "wrong-method"):
+                changed[-1]["class" if mutation == "wrong-class" else "method"] = "Unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_console_full("mutated", prior_inventory())
+
+    def test_private_console_focus7_requires_clean_unique_execution_joins(self):
+        import copy
+        n = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+        original = CleanAcceptancePathTests.fixture(self, self.console_rows())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "size.trx"
+            ET.ElementTree(original).write(path)
+            self.assertEqual(7, len(verify_private_console_focus(path)))
+            for mutation in ("missing", "duplicate", "replacement", "wrong-class", "wrong-method",
+                             "failed", "skipped", "passing-error", "execution", "entry",
+                             "run-error", "summary-error", "counter", "missing-counter"):
+                root = copy.deepcopy(original)
+                results = root.find(n + "Results")
+                definitions = root.find(n + "TestDefinitions")
+                summary = root.find(n + "ResultSummary")
+                if mutation == "missing":
+                    results.remove(results[-1])
+                elif mutation == "duplicate":
+                    results[-1].set("testId", results[-2].get("testId"))
+                elif mutation == "replacement":
+                    results[-1].set("testName", "unreviewed")
+                elif mutation in ("wrong-class", "wrong-method"):
+                    definitions[-1].find(n + "TestMethod").set(
+                        "className" if mutation == "wrong-class" else "name", "Unreviewed")
+                elif mutation in ("failed", "skipped"):
+                    results[-1].set("outcome", "Failed" if mutation == "failed" else "NotExecuted")
+                elif mutation == "passing-error":
+                    ET.SubElement(ET.SubElement(results[-1], n + "Output"), n + "ErrorInfo")
+                elif mutation == "execution":
+                    results[-1].set("executionId", results[-2].get("executionId"))
+                elif mutation == "entry":
+                    entries = root.find(n + "TestEntries")
+                    entries.remove(entries[-1])
+                elif mutation == "run-error":
+                    ET.SubElement(ET.SubElement(summary, n + "RunInfos"), n + "RunInfo", outcome="Error")
+                elif mutation == "summary-error":
+                    ET.SubElement(ET.SubElement(summary, n + "Output"), n + "ErrorInfo")
+                elif mutation == "counter":
+                    summary.find(n + "Counters").set("passed", "6")
+                else:
+                    summary.find(n + "Counters").attrib.pop("notExecuted")
+                ET.ElementTree(root).write(path)
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    verify_private_console_focus(path)
+
+    def test_private_console_sources_and_unique_program_inverse_reject_drift(self):
+        inventory = private_console_inventory()
+        program = next(source for source in inventory["sources"] if source["path"] == PRIVATE_CONSOLE_PROGRAM)
+        current_program = Path(PRIVATE_CONSOLE_PROGRAM).read_bytes()
+        previous = private_console_program_disabled(current_program)
+        self.assertEqual(program["preSha256"], digest(previous))
+        self.assertEqual(program["preBytes"], len(previous))
+        self.assertEqual(600, len(current_program) - len(previous))
+        insertion = program["inverse"][0]["post"].encode("utf-8")
+        self.assertEqual(1, current_program.count(insertion))
+        for changed in (previous, current_program + b" ", current_program + insertion,
+                        current_program.replace(b"LogLevel.Warning", b"LogLevel.Error", 1)):
+            with self.subTest(program=digest(changed)), self.assertRaises(ValueError):
+                private_console_program_disabled(changed)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for source in inventory["sources"]:
+                target = root / source["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(Path(source["path"]).read_bytes())
+            self.assertEqual(7, sum(reviewed_private_console_additions(source_root=root).values()))
+            for source in inventory["sources"]:
+                target = root / source["path"]
+                original = target.read_bytes()
+                target.write_bytes(original + b" ")
+                with self.subTest(path=source["path"]), self.assertRaises(ValueError):
+                    reviewed_private_console_additions(source_root=root)
+                target.unlink()
+                with self.subTest(missing=source["path"]), self.assertRaises(FileNotFoundError):
+                    reviewed_private_console_additions(source_root=root)
+                target.write_bytes(original)
+
+    def test_private_console_inventory_and_scope_are_frozen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "size.json"
+            original = Path(PRIVATE_CONSOLE_INVENTORY).read_bytes()
+            changed = json.loads(original)
+            changed["rows"][-1] = dict(changed["rows"][-2])
+            duplicate = json.dumps(changed).encode("utf-8")
+            changed = json.loads(original)
+            changed["sources"].pop()
+            missing_source = json.dumps(changed).encode("utf-8")
+            for raw in (original + b" ", duplicate, missing_source,
+                        original.replace(b'level: Trace', b'level: 0'),
+                        original.replace(b'"additionalCases": 7', b'"additionalCases": 6'),
+                        original.replace(b'"expectedFullCount": 1712', b'"expectedFullCount": 1705')):
+                path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    reviewed_private_console_additions(path)
+
+    def test_private_console_collector_preserves_head_custody_and_records_actual7(self):
+        import unittest.mock
+        import prove_local_date as proof
+        rows = self.console_rows()
+        seen = []
+        def git_show(arguments, timeout):
+            self.assertEqual(20, timeout)
+            self.assertEqual(["git", "show"], arguments[:2])
+            return Path(arguments[2].split(":", 1)[1]).read_bytes()
+        def runner(name, arguments, seconds, evidence_output=None):
+            seen.append((name, arguments, seconds, evidence_output))
+            self.assertEqual("private-console7", name)
+            self.assertEqual(120, seconds)
+            self.assertEqual(private_console_focus_filter(), arguments[arguments.index("--filter") + 1])
+            ET.ElementTree(CleanAcceptancePathTests.fixture(self, rows)).write(evidence_output / "private-console7.trx")
+            (evidence_output / "private-console7.log").write_text("Synthetic parser control only")
+            return 0
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "focus"
+            with unittest.mock.patch.object(proof.subprocess, "check_output", side_effect=git_show):
+                actual = prove_private_console_focus(Path("."), output, runner, ["test", "reviewed.csproj"], "a" * 40)
+            self.assertEqual(rows, actual)
+            receipt = json.loads((output / "receipt.json").read_text())
+            self.assertEqual(7, receipt["exactJoinedCasesPassed"])
+            self.assertEqual(1712, receipt["expectedFullCount"])
+            self.assertTrue(receipt["sourceUnchanged"])
+            self.assertFalse(receipt["providerCallsProven"])
+            self.assertIn("private-console7.trx", receipt["rawFiles"])
+            self.assertEqual(1, len(seen))
+
+            with unittest.mock.patch.object(proof.subprocess, "check_output", return_value=b"wrong head bytes"), \
+                    unittest.mock.patch("prove_local_date.verify_private_console_focus") as parser:
+                with self.assertRaises(ValueError):
+                    prove_private_console_focus(Path("."), Path(directory) / "wrong-head", runner,
+                                                ["test", "reviewed.csproj"], "a" * 40)
+                parser.assert_not_called()
+            with unittest.mock.patch.object(proof.subprocess, "check_output", side_effect=git_show), \
+                    unittest.mock.patch("prove_local_date.verify_private_console_focus") as parser:
+                with self.assertRaises(ValueError):
+                    prove_private_console_focus(Path("."), Path(directory) / "failed-command",
+                                                lambda *args: 1, ["test", "reviewed.csproj"], "a" * 40)
+                parser.assert_not_called()
+            replica = Path(directory) / "repo"
+            for source in private_console_inventory()["sources"]:
+                target = replica / source["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(Path(source["path"]).read_bytes())
+            def source_changing_runner(name, arguments, seconds, evidence_output=None):
+                result = runner(name, arguments, seconds, evidence_output)
+                target = replica / PRIVATE_CONSOLE_PROGRAM
+                target.write_bytes(target.read_bytes() + b" ")
+                return result
+            with unittest.mock.patch.object(proof.subprocess, "check_output", side_effect=git_show):
+                with self.assertRaises(ValueError):
+                    prove_private_console_focus(replica, Path(directory) / "changed-source",
+                                                source_changing_runner, ["test", "reviewed.csproj"], "a" * 40)

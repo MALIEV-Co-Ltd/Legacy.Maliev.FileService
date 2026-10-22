@@ -12,7 +12,7 @@ namespace Legacy.Maliev.FileService.Api.Controllers;
 [ApiController]
 [Route("uploads/[controller]")]
 [Authorize]
-public sealed class SignedUrlController(IFileService service) : ControllerBase
+public sealed class SignedUrlController(IFileService service, ILogger<SignedUrlController> logger) : ControllerBase
 {
     /// <summary>Creates a time-limited URL for a recorded clean object.</summary>
     /// <param name="bucket">The bucket.</param>
@@ -22,8 +22,17 @@ public sealed class SignedUrlController(IFileService service) : ControllerBase
     [RequirePermission(FilePermissions.Read)]
     public async Task<ActionResult<Uri>> GetSignedUrlAsync([FromQuery] string? bucket, [FromQuery] string? objectName, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(bucket) || string.IsNullOrEmpty(objectName)
-            || HttpContext?.Request.Query["bucket"].Count > 1
+        if (string.IsNullOrEmpty(bucket) || string.IsNullOrEmpty(objectName))
+        {
+            logger.LogWarning(
+                "{EventName} Operation={Operation} ValidationError={ValidationError}",
+                "UploadValidationFailure",
+                "GetSignedUrl",
+                "BucketOrObjectNameMissing");
+            return BadRequest();
+        }
+
+        if (HttpContext?.Request.Query["bucket"].Count > 1
             || HttpContext?.Request.Query["objectName"].Count > 1)
         {
             return BadRequest();

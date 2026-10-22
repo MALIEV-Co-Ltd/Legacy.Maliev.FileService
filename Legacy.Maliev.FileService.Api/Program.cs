@@ -15,7 +15,15 @@ try
     var builder = WebApplication.CreateBuilder(args);
 
     builder.AddServiceDefaults();
+    // Keep tracing and metrics services while selecting the original private console-only log contract.
+    builder.Logging.ClearProviders();
+    builder.Logging.AddConsoleFormatter<Maliev.Aspire.ServiceDefaults.Logging.PrivateFailureConsoleFormatter,
+        Microsoft.Extensions.Logging.Console.ConsoleFormatterOptions>();
+    builder.Logging.AddConsole(options => options.FormatterName =
+        Maliev.Aspire.ServiceDefaults.Logging.PrivateFailureConsoleFormatter.FormatterName);
+    builder.Logging.AddFilter<Microsoft.Extensions.Logging.Console.ConsoleLoggerProvider>(null, LogLevel.Warning);
     builder.AddDefaultApiVersioning();
+    builder.AddPrivateRequestObservation("file");
     builder.AddPostgresDbContext<FileDbContext>(connectionName: "FileDbContext");
     builder.AddStandardCache("legacy:file:");
     builder.AddStandardCors();

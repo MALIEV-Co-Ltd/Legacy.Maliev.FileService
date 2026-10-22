@@ -1,3 +1,4 @@
+using System.Text;
 using Legacy.Maliev.FileService.Application.Models;
 using Microsoft.Extensions.Options;
 
@@ -21,7 +22,10 @@ public sealed class ObjectNamePolicy(IOptions<FileStorageOptions> options, TimeP
     }
 
     /// <summary>Builds the legacy-compatible lower-case final object name.</summary>
-    public string BuildFinalObjectName(string? path, string fileName, Guid uploadId)
+    public string BuildFinalObjectName(string? path, string fileName, Guid uploadId) =>
+        BuildFinalObjectName(path, fileName, uploadId, out _);
+
+    internal string BuildFinalObjectName(string? path, string fileName, Guid uploadId, out string normalizedObjectName)
     {
         var safeFileName = Path.GetFileName(fileName?.Replace('\\', '/'));
         if (string.IsNullOrWhiteSpace(safeFileName) || safeFileName is "." or "..")
@@ -29,18 +33,43 @@ public sealed class ObjectNamePolicy(IOptions<FileStorageOptions> options, TimeP
             throw new FileUploadValidationException("File name is required");
         }
 
-        var prefix = string.IsNullOrWhiteSpace(path)
+        // Keep the existing replay fingerprint's separator aliases on one destination.
+        var customPrefix = string.IsNullOrWhiteSpace(path) ? null : path.Replace('\\', '/').Trim('/');
+        var prefix = customPrefix is null
             ? BuildLegacyDefaultPrefix(uploadId)
-            : NormalizeObjectName(path, allowTrailingSlash: true);
-        return NormalizeObjectName($"{prefix}/{safeFileName}", allowTrailingSlash: false).ToLowerInvariant();
+            : NormalizeObjectName(customPrefix, allowTrailingSlash: true);
+        var finalName = NormalizeObjectName($"{prefix}/{safeFileName}", allowTrailingSlash: false);
+        normalizedObjectName = finalName.ToLowerInvariant();
+        if (customPrefix is not null)
+        {
+            if (path is not null && path.Any(char.IsControl))
+                throw new FileUploadValidationException("Object name is invalid");
+
+            // Preserve prefix padding in storage identity, while callers guard the canonical safety name.
+            var leadingPaddingLength = customPrefix.Length - customPrefix.TrimStart().Length;
+            var trailingPaddingStart = customPrefix.TrimEnd().Length;
+            var prefixBoundary = finalName.LastIndexOf('/');
+            finalName = customPrefix[..leadingPaddingLength] + finalName.Insert(prefixBoundary, customPrefix[trailingPaddingStart..]);
+        }
+
+        return RequireObjectNameSize(finalName.ToLowerInvariant());
     }
 
     /// <summary>Builds a non-public quarantine object name.</summary>
     public string BuildQuarantineObjectName(Guid operationId, string finalObjectName) =>
-        NormalizeObjectName($"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}", allowTrailingSlash: false);
+        RequireObjectNameSize(NormalizeObjectName($"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}", allowTrailingSlash: false));
 
     /// <summary>Validates an existing object name without changing its case.</summary>
     public string RequireObjectName(string objectName) => NormalizeObjectName(objectName, allowTrailingSlash: false);
+
+    private static string RequireObjectNameSize(string objectName)
+    {
+        // The GCS UTF-8 byte limit also bounds the journals' 1024-character columns.
+        if (Encoding.UTF8.GetByteCount(objectName) > 1024)
+            throw new FileUploadValidationException("Object name is too long");
+
+        return objectName;
+    }
 
     private string BuildLegacyDefaultPrefix(Guid uploadId)
     {
