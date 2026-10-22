@@ -43,6 +43,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Check out exact CURRENT source-control base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ce183871469381eca13b359d997ad68042c4aa46
+          path: native-base
+          persist-credentials: false
       - name: Compile transport source into owned temporary output
         run: |
           python3 -B - <<'PY'
@@ -52,6 +58,8 @@ jobs:
                   py_compile.compile(str(source), cfile=str(pathlib.Path(owned)/(source.name+'.pyc')), doraise=True)
           PY
       - name: Run relevant transport and grant controls
+        env:
+          FILE_CURRENT_TEST_BASE: ${{ github.workspace }}/native-base
         run: python3 -B -m unittest discover -s scripts/tests -p 'test_file_*.py'
 
   windows-qualification:
@@ -70,7 +78,7 @@ jobs:
           path: native-base
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
       - name: Verify raw source and reconstruct reviewed fixed Windows paths
