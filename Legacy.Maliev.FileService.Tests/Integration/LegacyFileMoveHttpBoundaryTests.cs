@@ -32,6 +32,114 @@ public sealed class LegacyFileMoveHttpBoundaryTests(PostgreSqlFixture fixture)
     private const string Source = "orders/ต้นฉบับ แรก.stl";
     private const string Destination = "orders/ปลายทาง สอง.stl";
 
+    [Theory]
+    [InlineData(" orders/source.stl ", " orders/destination.stl ")]
+    [InlineData("orders\\source.stl", "orders\\destination.stl")]
+    [InlineData("/orders//source.stl", "/orders//destination.stl")]
+    [InlineData(" orders\\source.stl ", " orders\\destination.stl ")]
+    public async Task CurrentLiteralMove_PreservesBothNormalizedSiblingsAndExactGenerationBoundCoordinates(
+        string literalSource, string literalDestination)
+    {
+        const string normalizedSource = "orders/source.stl";
+        const string normalizedDestination = "orders/destination.stl";
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var context = await ContextAsync();
+        using var factory = new MoveFactory(context.Database.GetConnectionString()!)
+        {
+            ExpectedSourceObjectName = literalSource,
+            ExpectedDestinationObjectName = literalDestination,
+        };
+        context.Uploads.AddRange(
+            new Upload { Bucket = "maliev.com", Name = literalSource, Size = 3, ContentType = "model/stl" },
+            new Upload { Bucket = "maliev.com", Name = normalizedSource, Size = 4, ContentType = "model/stl" },
+            new Upload { Bucket = "maliev.com", Name = normalizedDestination, Size = 7, ContentType = "model/stl" });
+        await context.SaveChangesAsync(deadline.Token);
+        var journal = new StorageMoveJournalRepository(context, TimeProvider.System);
+        var literalProof = Guid.NewGuid();
+        var siblingProof = Guid.NewGuid();
+        foreach (var (id, name, generation) in new[]
+        {
+            (literalProof, literalSource, 31L),
+            (siblingProof, normalizedSource, 81L),
+        })
+        {
+            Assert.True(await journal.BeginAsync(id, true, "maliev.com", "_quarantine/source-" + id.ToString("N"), 17,
+                "maliev.com", name, deadline.Token));
+            await journal.CopiedAsync(id, generation, deadline.Token);
+            await journal.SourceDeletedAsync(id, deadline.Token);
+            await journal.MetadataCommittedAsync(id, deadline.Token);
+        }
+        factory.Objects.Add(literalSource, (31, new byte[] { 0, 255, 1 }));
+        factory.Objects.Add(normalizedSource, (81, new byte[] { 2, 3, 4, 5 }));
+        factory.Objects.Add(normalizedDestination, (91, new byte[] { 1, 2, 3, 4, 5, 6, 7 }));
+        using var client = factory.Client();
+        var coordinates = Coordinates();
+        coordinates["sourceObjectName"] = literalSource;
+        coordinates["destinationObjectName"] = literalDestination;
+
+        using var response = await SendAsync(client, factory.Token(), coordinates, deadline.Token);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(string.Empty, await response.Content.ReadAsStringAsync(deadline.Token));
+        Assert.False(factory.Objects.ContainsKey(literalSource));
+        Assert.Equal(47L, factory.Objects[literalDestination].Generation);
+        Assert.Equal(new byte[] { 0, 255, 1 }, factory.Objects[literalDestination].Bytes);
+        Assert.Equal(81L, factory.Objects[normalizedSource].Generation);
+        Assert.Equal(new byte[] { 2, 3, 4, 5 }, factory.Objects[normalizedSource].Bytes);
+        Assert.Equal(91L, factory.Objects[normalizedDestination].Generation);
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5, 6, 7 }, factory.Objects[normalizedDestination].Bytes);
+        var metadata = await context.Uploads.AsNoTracking().ToArrayAsync(deadline.Token);
+        Assert.Equal(3, metadata.Length);
+        Assert.DoesNotContain(metadata, row => row.Name == literalSource);
+        Assert.Equal(3L, Assert.Single(metadata, row => row.Name == literalDestination).Size);
+        Assert.Equal(4L, Assert.Single(metadata, row => row.Name == normalizedSource).Size);
+        Assert.Equal(7L, Assert.Single(metadata, row => row.Name == normalizedDestination).Size);
+        var moved = Assert.Single(await context.StorageMoveJournals.AsNoTracking()
+            .Where(row => row.OperationId != literalProof && row.OperationId != siblingProof).ToArrayAsync(deadline.Token));
+        Assert.Equal(literalSource, moved.SourceObjectName);
+        Assert.Equal(literalDestination, moved.DestinationObjectName);
+        Assert.Equal(31L, moved.SourceGeneration);
+        Assert.Equal(47L, moved.DestinationGeneration);
+        Assert.Equal("MetadataCommitted", moved.State);
+        Assert.True(moved.ScanClean);
+        var priors = await context.StorageMoveJournals.AsNoTracking()
+            .Where(row => row.OperationId == literalProof || row.OperationId == siblingProof).ToArrayAsync(deadline.Token);
+        Assert.Equal(2, priors.Length);
+        Assert.All(priors, row => { Assert.True(row.ScanClean); Assert.Equal("MetadataCommitted", row.State); });
+        var deletion = Assert.Single(factory.Deletes);
+        Assert.Equal(literalSource, deletion.Name);
+        Assert.Equal(31L, deletion.Generation);
+        Assert.Equal(1, factory.CopyCalls);
+        var wire = Assert.Single(factory.Wire.Responses);
+        Assert.Equal(HttpMethod.Put, wire.Method);
+        Assert.Contains("sourceObjectName=" + Uri.EscapeDataString(literalSource), wire.Uri.Query, StringComparison.Ordinal);
+        Assert.Contains("destinationObjectName=" + Uri.EscapeDataString(literalDestination), wire.Uri.Query, StringComparison.Ordinal);
+        AssertRealRuntime(factory);
+    }
+
+    [Theory]
+    [InlineData("sourceObjectName", "control")]
+    [InlineData("destinationObjectName", "control")]
+    [InlineData("sourceObjectName", "reserved")]
+    [InlineData("destinationObjectName", "reserved")]
+    public async Task CurrentLiteralMove_SafetyAdmissionPreservesSourceBeforeAnySdkEffect(string field, string kind)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var context = await ContextAsync();
+        using var factory = new MoveFactory(context.Database.GetConnectionString()!);
+        var proofId = await SeedAsync(context, factory);
+        using var client = factory.Client();
+        var coordinates = Coordinates();
+        coordinates[field] = kind == "control" ? "\n" + coordinates[field] : " /CUSTOMER-DOCUMENTS\\23//exact.stl ";
+
+        using var response = await SendAsync(client, factory.Token(), coordinates, deadline.Token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertUntouchedAsync(context, factory, proofId);
+        Assert.Equal(new byte[] { 0, 255, 1 }, factory.Objects[Source].Bytes);
+        AssertRealRuntime(factory);
+    }
+
     [Fact]
     public async Task EncodedCoordinates_MoveExactCommittedGenerationAndMetadataThroughActual204()
     {
@@ -294,6 +402,8 @@ public sealed class LegacyFileMoveHttpBoundaryTests(PostgreSqlFixture fixture)
     private sealed class MoveFactory(string connection, string fault = "none") : WebApplicationFactory<Program>
     {
         private readonly RSA signingKey = RSA.Create(2048);
+        public string ExpectedSourceObjectName { get; init; } = Source;
+        public string ExpectedDestinationObjectName { get; init; } = Destination;
         public Mock<StorageClient> Sdk { get; } = new(MockBehavior.Strict);
         public Mock<UrlSigner.IBlobSigner> Signer { get; } = new(MockBehavior.Strict);
         public Mock<IUploadIdempotencyStore> Checkpoints { get; } = new(MockBehavior.Strict);
@@ -373,8 +483,8 @@ public sealed class LegacyFileMoveHttpBoundaryTests(PostgreSqlFixture fixture)
                 .Returns<string, string, string, string, CopyObjectOptions, CancellationToken>(async (_, source, _, target, options, token) =>
                 {
                     CopyCalls++;
-                    Assert.Equal(Source, source);
-                    Assert.Equal(Destination, target);
+                    Assert.Equal(ExpectedSourceObjectName, source);
+                    Assert.Equal(ExpectedDestinationObjectName, target);
                     Assert.Equal(31L, options.SourceGeneration);
                     Assert.Equal(31L, options.IfSourceGenerationMatch);
                     Assert.Equal(0L, options.IfGenerationMatch);
@@ -389,7 +499,7 @@ public sealed class LegacyFileMoveHttpBoundaryTests(PostgreSqlFixture fixture)
                 .Returns<string, string, DeleteObjectOptions, CancellationToken>(async (_, name, options, token) =>
                 {
                     Deletes.Add((name, options.IfGenerationMatch));
-                    Assert.Equal(name == Source ? 31L : 47L, options.IfGenerationMatch);
+                    Assert.Equal(name == ExpectedSourceObjectName ? 31L : 47L, options.IfGenerationMatch);
                     if (name == Source && fault == "wait-delete") await WaitForAbortAsync(token);
                     if (name == Source && fault == "delete-rejected") throw ApiError(HttpStatusCode.Forbidden);
                     if (!Objects.TryGetValue(name, out var item)) throw ApiError(HttpStatusCode.NotFound);
@@ -411,8 +521,14 @@ public sealed class LegacyFileMoveHttpBoundaryTests(PostgreSqlFixture fixture)
 
         protected override void Dispose(bool disposing)
         {
-            base.Dispose(disposing);
-            if (disposing) signingKey.Dispose();
+            try
+            {
+                base.Dispose(disposing);
+            }
+            finally
+            {
+                if (disposing) signingKey.Dispose();
+            }
         }
     }
 }

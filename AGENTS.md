@@ -10,7 +10,8 @@ This public repository is the sanitized .NET 10 compatibility extraction of
   legacy `Resources` credentials, or generated secret-audit evidence.
 - Use Google Application Default Credentials and GKE Workload Identity only.
 - Preserve `/Uploads`, `/uploads/SignedUrl`, multipart field `files`, legacy query
-  names, PascalCase response JSON, and the 200 MB aggregate upload limit.
+  names, PascalCase response JSON, and the 100 MiB aggregate file-payload limit.
+  The HTTP multipart request ceiling is 101 MiB, including a 1 MiB envelope allowance.
 - Every upload must remain private until a complete-file malware scan returns clean.
   Scanner unavailable, timeout, error, or unknown results fail closed.
 - Signed URLs require clean `Upload` metadata and expire within seven days.

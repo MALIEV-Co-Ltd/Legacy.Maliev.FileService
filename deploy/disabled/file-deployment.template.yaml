@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/part-of: maliev-legacy
   annotations:
     legacy.maliev.com/deployment-enabled: "false"
+    legacy.maliev.com/source-single-replica-target: "1"
 spec:
   replicas: 0
   selector:

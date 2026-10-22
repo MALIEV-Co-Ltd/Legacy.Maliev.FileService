@@ -204,7 +204,7 @@ public sealed class FileControllerContractTests
         var service = new Mock<IFileService>();
         service.Setup(value => value.GetSignedUrlAsync("maliev.com", "part.stl", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new MalwareScannerUnavailableException("Legacy file writes are disabled."));
-        var controller = new SignedUrlController(service.Object);
+        var controller = new SignedUrlController(service.Object, NullLogger<SignedUrlController>.Instance);
 
         var result = await controller.GetSignedUrlAsync("maliev.com", "part.stl", default);
 

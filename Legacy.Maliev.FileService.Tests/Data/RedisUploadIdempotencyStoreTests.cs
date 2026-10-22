@@ -5,10 +5,13 @@ using Legacy.Maliev.FileService.Data;
 using Legacy.Maliev.FileService.Application.Models;
 using System.Text.Json;
 using StackExchange.Redis;
+using StackExchange.Redis.Profiling;
+using System.Diagnostics;
+using Xunit.Abstractions;
 
 namespace Legacy.Maliev.FileService.Tests.Data;
 
-public sealed class RedisUploadIdempotencyStoreTests : IAsyncLifetime
+public sealed class RedisUploadIdempotencyStoreTests(ITestOutputHelper output) : IAsyncLifetime
 {
     private readonly IContainer container = new ContainerBuilder("redis:8-alpine").WithPortBinding(6379, true).WithWaitStrategy(Wait.ForUnixContainer().UntilInternalTcpPortIsAvailable(6379)).Build();
     private IConnectionMultiplexer? connection;
@@ -58,7 +61,7 @@ public sealed class RedisUploadIdempotencyStoreTests : IAsyncLifetime
     public async Task SupersededWorker_CannotChangeNewReservationOrItsLease(string operation)
     {
         var store = new RedisUploadIdempotencyStore(connection);
-        var old = await store.AcquireAsync("FENCE", "old-payload", "orders/old", default);
+        var old = await AcquireFirstWithDiagnosticsAsync(store);
         await store.ReleaseAsync("FENCE", old.ReservationId!, default);
         var current = await store.AcquireAsync("FENCE", "new-payload", "orders/new", default);
         var database = connection!.GetDatabase();
@@ -111,6 +114,88 @@ public sealed class RedisUploadIdempotencyStoreTests : IAsyncLifetime
         Assert.Equal("orders/42", replay.EffectivePath);
         Assert.Equal(JsonSerializer.Serialize(response), JsonSerializer.Serialize(replay.Response));
         Assert.False(await connection!.GetDatabase().KeyExistsAsync("legacy:file:idempotency:v1:UNKNOWN:lease"));
+    }
+
+    private async Task<UploadAcquireResult> AcquireFirstWithDiagnosticsAsync(RedisUploadIdempotencyStore store)
+    {
+        var profile = new ProfilingSession(null);
+        var profileLifetime = new FirstAcquisitionProfile(profile);
+        var clock = Stopwatch.StartNew();
+        var diagnosticFailures = new List<Exception>();
+        Exception? primaryFailure = null;
+        try
+        {
+            CaptureDiagnostic(() => connection!.RegisterProfiler(profileLifetime.GetActiveSession), diagnosticFailures);
+            CaptureDiagnostic(() => output.WriteLine(JsonSerializer.Serialize(new
+            { phase = "first-acquire-start", connected = connection!.IsConnected })), diagnosticFailures);
+            var result = await store.AcquireAsync("FENCE", "old-payload", "orders/old", default);
+            CaptureDiagnostic(() => output.WriteLine(JsonSerializer.Serialize(new
+            { phase = "first-acquire-result", state = result.State.ToString() })), diagnosticFailures);
+            return result;
+        }
+        catch (Exception failure)
+        {
+            primaryFailure = failure;
+            CaptureDiagnostic(() => output.WriteLine(JsonSerializer.Serialize(new
+            {
+                phase = "first-acquire-failure",
+                category = failure.GetType().Name,
+                abortedCreateThenMissingCheckpoint = failure is InvalidOperationException
+                    && failure.Message == "Upload checkpoint changed during acquisition.",
+            })), diagnosticFailures);
+            throw;
+        }
+        finally
+        {
+            // Stop new collection before finishing or emitting diagnostics. The
+            // registered provider returns null for every later fixture operation.
+            profileLifetime.Stop();
+            // Only command names and durations: never endpoints, keys, arguments,
+            // fingerprints, response bodies or exception messages.
+            CaptureDiagnostic(() =>
+            {
+                var commands = profile.FinishProfiling().Take(32).Select(command => new
+                {
+                    command = command.Command,
+                    elapsedMs = command.ElapsedTime.TotalMilliseconds,
+                    enqueueMs = command.CreationToEnqueued.TotalMilliseconds,
+                    sendMs = command.EnqueuedToSending.TotalMilliseconds,
+                    responseMs = command.SentToResponse.TotalMilliseconds,
+                    completionMs = command.ResponseToCompletion.TotalMilliseconds,
+                }).ToArray();
+                output.WriteLine(JsonSerializer.Serialize(new
+                {
+                    phase = "first-acquire-end",
+                    elapsedMs = clock.Elapsed.TotalMilliseconds,
+                    connected = connection!.IsConnected,
+                    commands,
+                }));
+            }, diagnosticFailures);
+            CompleteDiagnostics(primaryFailure, diagnosticFailures);
+        }
+    }
+
+    internal sealed class FirstAcquisitionProfile(ProfilingSession session)
+    {
+        private ProfilingSession? active = session;
+
+        // Redis accepts a null session to disable profiling for a command.
+        public ProfilingSession GetActiveSession() => Volatile.Read(ref active)!;
+
+        public void Stop() => Interlocked.Exchange(ref active, null);
+    }
+
+    internal static void CaptureDiagnostic(Action action, List<Exception> failures)
+    {
+        try { action(); }
+        catch (Exception failure) { failures.Add(failure); }
+    }
+
+    internal static void CompleteDiagnostics(Exception? primaryFailure, List<Exception> diagnosticFailures)
+    {
+        if (diagnosticFailures.Count != 0)
+            throw new AggregateException("Redis test diagnostics failed.", primaryFailure is null
+                ? diagnosticFailures : new[] { primaryFailure }.Concat(diagnosticFailures));
     }
 
     private static UploadResultResponse Response() => new([new("maliev.com", "orders/part.stl", new Uri("https://storage.test/signed?token=exact"))]);

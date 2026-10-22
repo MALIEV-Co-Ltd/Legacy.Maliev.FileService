@@ -38,6 +38,83 @@ public sealed class FileApplicationServiceTests
         Assert.Equal(new Uri($"https://storage.test/{metadata.Name}"), response.Uri);
     }
 
+    /// <summary>Retains the literal custom-prefix coordinate through promotion, metadata response loss, and deterministic recovery.</summary>
+    /// <param name="path">The padded custom prefix supplied to both the upload and its recovery attempt.</param>
+    /// <param name="expectedObjectName">The independently derived lower-case destination retaining the source prefix padding.</param>
+    /// <returns>A task that completes after checking literal metadata, journal, and generation-bound recovery coordinates.</returns>
+    [Theory]
+    [InlineData(" Uploads/Customer ", " uploads/customer /part.stl")]
+    [InlineData("Uploads/Customer\u00a0", "uploads/customer\u00a0/part.stl")]
+    public async Task UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate(string path, string expectedObjectName)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+        var files = new IUploadFile[] { new MemoryUploadFile("PART.STL", "model/stl", [1, 2, 3]) };
+
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>
+            service.UploadAsync("maliev.com", path, files, operationId, default));
+
+        Assert.Equal(expectedObjectName, Assert.Single(storage.Moved).DestinationObjectName);
+        Assert.Equal(expectedObjectName, Assert.Single(repository.Uploads).Name);
+        var journal = Assert.IsType<RecordingMoveJournal>(storage.Journal);
+        var evidence = Assert.Single(journal.Evidence).Value;
+        Assert.Equal(expectedObjectName, evidence.DestinationObjectName);
+        Assert.Equal($"_quarantine/{operationId:N}/{expectedObjectName}", evidence.SourceObjectName);
+
+        Assert.Null(await service.ReconcileUploadAsync("maliev.com", path.Trim(), files, operationId, default));
+        Assert.Empty(storage.GenerationSigned);
+        repository.ThrowAfterAdd = false;
+        var recovered = await service.ReconcileUploadAsync("maliev.com", path, files, operationId, default);
+
+        Assert.NotNull(recovered);
+        Assert.Equal(expectedObjectName, Assert.Single(recovered.Object).ObjectName);
+        var signed = Assert.Single(storage.GenerationSigned);
+        Assert.Equal(expectedObjectName, signed.ObjectName);
+        Assert.Equal(31, signed.Generation);
+        Assert.Equal(1, repository.AddRangeCallCount);
+        Assert.Single(repository.Uploads);
+        Assert.Single(journal.Evidence);
+    }
+
+
+    /// <summary>Rejects padded reserved roots before upload or recovery crosses a storage boundary.</summary>
+    /// <param name="path">The padded protected namespace supplied as a custom prefix.</param>
+    /// <param name="reconcile">Whether to exercise recovery instead of initial upload.</param>
+    /// <returns>A task that completes after checking rejection and untouched recording boundaries.</returns>
+    [Theory]
+    [InlineData(" customer-documents ", false)]
+    [InlineData(" customer-documents ", true)]
+    [InlineData(" / customer-documents ", false)]
+    [InlineData(" / customer-documents ", true)]
+    public async Task UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(string path, bool reconcile)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+        var files = new IUploadFile[] { new MemoryUploadFile("PART.STL", "model/stl", [1]) };
+
+        if (reconcile)
+        {
+            await Assert.ThrowsAsync<FileUploadValidationException>(() =>
+                service.ReconcileUploadAsync("maliev.com", path, files, operationId, default));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<FileUploadValidationException>(() =>
+                service.UploadAsync("maliev.com", path, files, operationId, default));
+        }
+
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(storage.Moved);
+        Assert.Empty(storage.Signed);
+        Assert.Empty(storage.GenerationSigned);
+        Assert.Empty(repository.Uploads);
+        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);
+    }
+
     [Fact]
     public async Task UploadAsync_InfectedFile_FailsClosedAndDeletesQuarantine()
     {
@@ -205,6 +282,88 @@ public sealed class FileApplicationServiceTests
         Assert.Single(storage.Signed);
     }
 
+    [Theory]
+    [InlineData(32L)]
+    [InlineData(999999L)]
+    public async Task ReconcileUploadAsync_ReplacementAfterEvidenceRead_SignsOnlyAcknowledgedGeneration(long replacement)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.NewGuid();
+        var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+        storage.ReplacementAfterEvidence = replacement;
+
+        var result = await service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default);
+
+        Assert.NotNull(result);
+        Assert.Single(result.Object);
+        Assert.Equal(replacement, storage.LiveGeneration);
+        var signed = Assert.Single(storage.GenerationSigned);
+        Assert.Equal(31, signed.Generation);
+        Assert.Equal("maliev.com", signed.Bucket);
+        Assert.Equal(Assert.Single(repository.Uploads).Name, signed.ObjectName);
+        Assert.Equal(1, storage.NameOnlySignCalls);
+        Assert.Empty(storage.Deleted);
+    }
+
+    [Fact]
+    public async Task ReconcileUploadAsync_StableEvidence_UsesGenerationSigner()
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.NewGuid();
+        var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+
+        Assert.NotNull(await service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default));
+        Assert.Equal(31, Assert.Single(storage.GenerationSigned).Generation);
+        Assert.Equal(1, storage.NameOnlySignCalls);
+    }
+
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(-1L)]
+    public async Task ReconcileUploadAsync_NonpositiveJournalGeneration_RefusesBeforeReadingOrSigning(long generation)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.NewGuid();
+        var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+        var journal = Assert.IsType<RecordingMoveJournal>(storage.Journal);
+        var entry = Assert.Single(journal.Evidence);
+        journal.Evidence[entry.Key] = entry.Value with { DestinationGeneration = generation };
+        storage.LiveGeneration = generation;
+
+        Assert.Null(await service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default));
+        Assert.Equal(0, storage.EvidenceReads);
+        Assert.Empty(storage.GenerationSigned);
+        Assert.Equal(1, storage.NameOnlySignCalls);
+        Assert.Empty(storage.Deleted);
+    }
+
+    [Fact]
+    public async Task ReconcileUploadAsync_GenerationSignerFailure_PreservesCauseAndRecoveryObjects()
+    {
+        var signingFailure = new IOException("recovery signing unavailable");
+        var storage = new RecordingStorage { SignedUrlFailure = signingFailure, SignedUrlFailureCall = 2 };
+        var repository = new RecordingRepository { ThrowAfterAdd = true };
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var operationId = Guid.NewGuid();
+        var files = new IUploadFile[] { new MemoryUploadFile("part.step", "application/step", [1, 2, 3]) };
+        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync("maliev.com", "orders/42", files, operationId, default));
+
+        Assert.Same(signingFailure, await Assert.ThrowsAsync<IOException>(() => service.ReconcileUploadAsync("maliev.com", "orders/42", files, operationId, default)));
+        Assert.Equal(31, Assert.Single(storage.GenerationSigned).Generation);
+        Assert.Equal(1, storage.NameOnlySignCalls);
+        Assert.Single(repository.Uploads);
+        Assert.Empty(storage.Deleted);
+    }
+
     [Fact]
     public async Task MoveAsync_MetadataCommitResponseLost_ReportsUnknownWithJournalEvidence()
     {
@@ -228,6 +387,75 @@ public sealed class FileApplicationServiceTests
         Assert.Contains(storage.Journal!.Evidence.Values, evidence => evidence.State == "Unknown"
             && evidence.DestinationGeneration == 31);
         Assert.Equal(prior.Value, storage.Journal.Evidence[prior.Key]);
+    }
+
+    [Fact]
+    public async Task UploadAsync_NullSignedUri_CompensatesEveryExactPromotionBeforeMetadata()
+    {
+        var storage = new RecordingStorage { NullSignedUriCall = 2 };
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var failure = await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [
+                new MemoryUploadFile("first.step", "application/step", [1, 2, 3]),
+                new MemoryUploadFile("second.step", "application/step", [4, 5, 6]),
+            ],
+            CancellationToken.None));
+
+        Assert.IsType<InvalidOperationException>(failure.InnerException);
+        Assert.Equal(2, storage.NameOnlySignCalls);
+        Assert.Equal(2, storage.Moved.Count);
+        Assert.Equal(new[]
+        {
+            ("maliev.com", "orders/42/first.step"),
+            ("maliev.com", "orders/42/second.step"),
+        }, storage.Deleted);
+        Assert.Equal(new long[] { 31, 31 }, storage.DeletedGenerations);
+        Assert.Equal(0, storage.NameOnlyDeleteCalls);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+        Assert.Equal(2, storage.Journal!.Evidence.Count);
+        Assert.All(storage.Journal.Evidence.Values, evidence =>
+        {
+            Assert.Equal("CompensatedRemoved", evidence.State);
+            Assert.Equal(31, evidence.DestinationGeneration);
+        });
+    }
+
+    [Fact]
+    public async Task UploadAsync_NullSignedUriAndCleanupFailure_RetainsBothCausesWithoutMetadata()
+    {
+        var cleanupFailure = new IOException("controlled conditional cleanup failure");
+        var storage = new RecordingStorage { NullSignedUriCall = 1 };
+        storage.DeleteFailures["orders/42/part.step"] = cleanupFailure;
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+
+        var failure = await Assert.ThrowsAsync<UploadRollbackException>(() => service.UploadAsync(
+            "maliev.com",
+            "orders/42",
+            [new MemoryUploadFile("part.step", "application/step", [1, 2, 3])],
+            CancellationToken.None));
+
+        Assert.IsType<InvalidOperationException>(failure.UploadFailure);
+        var cleanup = Assert.Single(failure.CleanupFailures);
+        Assert.Same(cleanupFailure, cleanup.Cause);
+        var causes = Assert.IsType<AggregateException>(failure.InnerException).InnerExceptions;
+        Assert.Collection(causes,
+            cause => Assert.Same(failure.UploadFailure, cause),
+            cause => Assert.Same(cleanupFailure, cause));
+        Assert.Equal("maliev.com", cleanup.Bucket);
+        Assert.Equal("orders/42/part.step", cleanup.ObjectName);
+        Assert.Equal(("maliev.com", "orders/42/part.step"), Assert.Single(storage.Deleted));
+        Assert.Equal(31, Assert.Single(storage.DeletedGenerations));
+        Assert.Equal(1, storage.NameOnlySignCalls);
+        Assert.Equal(0, storage.NameOnlyDeleteCalls);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+        Assert.Equal("CompensationUnknown", Assert.Single(storage.Journal!.Evidence.Values).State);
     }
 
     [Fact]
@@ -401,18 +629,128 @@ public sealed class FileApplicationServiceTests
         Assert.Empty(repository.Uploads);
     }
 
+    /// <summary>Rejects an invalid complete batch before any recovery intent, scanner, journal or storage call.</summary>
+    /// <param name="scenario">An overflowing final name, quarantine name, later filename or configured prefix.</param>
+    /// <returns>A task completing after the validation failure and untouched boundaries are checked.</returns>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(int scenario)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);
+        var scans = 0;
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean), () => scans++),
+            repository, intents: intents.Object, quarantinePrefix: scenario == 4 ? new string('q', 1000) : "_quarantine");
+        var path = scenario switch
+        {
+            0 => new string(' ', 1015) + "A",
+            1 => new string(' ', 970) + "A",
+            2 => new string('\u00a0', 485) + "A",
+            _ => "A",
+        };
+        IUploadFile[] files = scenario == 3
+            ? [new MemoryUploadFile("PART.STL", "model/stl", [1]),
+               new MemoryUploadFile(new string('f', 980) + ".STL", "model/stl", [2])]
+            : [new MemoryUploadFile("PART.STL", "model/stl", [1])];
+
+        await Assert.ThrowsAsync<FileUploadValidationException>(() =>
+            service.UploadAsync("maliev.com", path, files, Guid.Empty, default));
+
+        intents.VerifyNoOtherCalls();
+        Assert.Equal(0, scans);
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(storage.Moved);
+        Assert.Empty(storage.Deleted);
+        Assert.Empty(storage.Signed);
+        Assert.Empty(repository.Uploads);
+        Assert.Equal(0, repository.AddRangeCallCount);
+        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);
+    }
+
+    /// <summary>Retains exact legal padding at the complete quarantine byte limit through journal and metadata submission.</summary>
+    /// <param name="scenario">The ASCII or multibyte padding boundary.</param>
+    /// <returns>A task completing after the unchanged literal upload coordinates are verified.</returns>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity(int scenario)
+    {
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);
+        var path = scenario == 0 ? new string(' ', 969) + "A" : new string('\u00a0', 484) + "AA";
+        var expected = scenario == 0 ? new string(' ', 969) + "a/part.stl" : new string('\u00a0', 484) + "aa/part.stl";
+        var operationId = Guid.Parse("5d034fac-25b1-4ba0-bfe2-502ab26471ca");
+
+        var result = await service.UploadAsync("maliev.com", path,
+            [new MemoryUploadFile("PART.STL", "model/stl", [1])], operationId, default);
+
+        var quarantine = Assert.Single(storage.Uploaded).ObjectName;
+        Assert.Equal($"_quarantine/{operationId:N}/{expected}", quarantine);
+        Assert.Equal(1024, System.Text.Encoding.UTF8.GetByteCount(quarantine));
+        Assert.Equal(expected, Assert.Single(storage.Moved).DestinationObjectName);
+        Assert.Equal(expected, Assert.Single(repository.Uploads).Name);
+        Assert.Equal(expected, Assert.Single(result.Object).ObjectName);
+        var evidence = Assert.Single(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence).Value;
+        Assert.Equal(quarantine, evidence.SourceObjectName);
+        Assert.Equal(expected, evidence.DestinationObjectName);
+        Assert.Equal("MetadataCommitted", evidence.State);
+    }
+
+    /// <summary>Releases replay reservations after deterministic name rejection, so retries never enter unknown reconciliation.</summary>
+    /// <returns>A task completing after two rejected attempts release their reservations without storage effects.</returns>
+    [Fact]
+    public async Task UploadAsync_OversizedCoordinate_ReleasesReplayReservationOnEveryAttempt()
+    {
+        var path = new string(' ', 970) + "A";
+        var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);
+        store.Setup(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult(new UploadAcquireResult(UploadAcquireState.Acquired, "reservation", EffectivePath: path)));
+        store.Setup(value => value.RenewAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).Returns(Task.FromResult(true));
+        store.Setup(value => value.ReleaseAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);
+        var storage = new RecordingStorage();
+        var repository = new RecordingRepository();
+        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository, intents: intents.Object);
+        var coordinator = new IdempotentUploadCoordinator(store.Object, new UploadSnapshotCapture());
+        IUploadFile[] files = [new MemoryUploadFile("PART.STL", "model/stl", [1])];
+
+        for (var attempt = 0; attempt < 2; attempt++)
+            await Assert.ThrowsAsync<FileUploadValidationException>(() => coordinator.ExecuteAsync(
+                "intranet-service", "workflow-byte-boundary", "maliev.com", path, files,
+                (operationId, effectivePath, captured, token) => service.UploadAsync("maliev.com", effectivePath, captured, operationId, token),
+                (_, _, _, _) => throw new InvalidOperationException("Validation must never require reconciliation"), default));
+
+        store.Verify(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));
+        store.Verify(value => value.RenewAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));
+        store.Verify(value => value.ReleaseAsync(Moq.It.IsAny<string>(), "reservation", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));
+        store.VerifyNoOtherCalls();
+        intents.VerifyNoOtherCalls();
+        Assert.Empty(storage.Uploaded);
+        Assert.Empty(storage.Moved);
+        Assert.Empty(repository.Uploads);
+        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);
+    }
+
     private static FileApplicationService CreateService(
         RecordingStorage storage,
         IFileSafetyScanner scanner,
         RecordingRepository repository,
-        bool writesEnabled = true)
+        bool writesEnabled = true,
+        IQuarantineUploadIntent? intents = null,
+        string quarantinePrefix = "_quarantine")
     {
         var options = Options.Create(new FileStorageOptions
         {
             Enabled = true,
             WritesEnabled = writesEnabled,
             AllowedBuckets = ["maliev.com"],
-            QuarantinePrefix = "_quarantine",
+            QuarantinePrefix = quarantinePrefix,
             SignedUrlHours = 168,
         });
         var time = new FakeTimeProvider(Now);
@@ -427,7 +765,7 @@ public sealed class FileApplicationServiceTests
             options,
             new LegacyFileRuntimeGate(options),
             NullLogger<FileApplicationService>.Instance,
-            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);
+            intents ?? new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);
     }
 
     private sealed class MemoryUploadFile(string name, string contentType, byte[] bytes) : IUploadFile
@@ -532,6 +870,10 @@ public sealed class FileApplicationServiceTests
     {
         public RecordingMoveJournal? Journal { get; set; }
         public long LiveGeneration { get; set; } = 31;
+        public long? ReplacementAfterEvidence { get; set; }
+        public int EvidenceReads { get; private set; }
+        public int NameOnlySignCalls { get; private set; }
+        public List<(string Bucket, string ObjectName, long Generation)> GenerationSigned { get; } = [];
         public List<(string Bucket, string ObjectName)> Uploaded { get; } = [];
         public List<(string SourceObjectName, string DestinationObjectName)> Moved { get; } = [];
         public List<(string Bucket, string ObjectName)> Deleted { get; } = [];
@@ -542,6 +884,7 @@ public sealed class FileApplicationServiceTests
         public bool CleanupObservedCancellation { get; private set; }
         public Exception? SignedUrlFailure { get; init; }
         public int SignedUrlFailureCall { get; init; }
+        public int NullSignedUriCall { get; init; }
         public CancellationTokenSource? RequestCancellation { get; init; }
         public bool DeleteResult { get; init; } = true;
         public Exception? MoveFailure { get; init; }
@@ -611,14 +954,28 @@ public sealed class FileApplicationServiceTests
 
         public void SeedLive(string bucket, string name, long size) => sizes[(bucket, name)] = size;
 
-        public Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken) =>
-            Task.FromResult(sizes.TryGetValue((bucket, objectName), out var size)
-                ? new StorageObjectEvidence(LiveGeneration, size) : null);
+        public Task<StorageObjectEvidence?> GetEvidenceAsync(string bucket, string objectName, CancellationToken cancellationToken)
+        {
+            EvidenceReads++;
+            StorageObjectEvidence? evidence = sizes.TryGetValue((bucket, objectName), out var size)
+                ? new StorageObjectEvidence(LiveGeneration, size) : null;
+            if (ReplacementAfterEvidence is long replacement) LiveGeneration = replacement;
+            return Task.FromResult(evidence);
+        }
 
-        public Task<Uri> CreateSignedGenerationReadUriAsync(string bucket, string objectName, long generation, TimeSpan duration, CancellationToken token) =>
-            CreateSignedReadUriAsync(bucket, objectName, duration, token);
+        public Task<Uri> CreateSignedGenerationReadUriAsync(string bucket, string objectName, long generation, TimeSpan duration, CancellationToken token)
+        {
+            GenerationSigned.Add((bucket, objectName, generation));
+            return SignCore(bucket, objectName);
+        }
 
         public Task<Uri> CreateSignedReadUriAsync(string bucket, string objectName, TimeSpan duration, CancellationToken cancellationToken)
+        {
+            NameOnlySignCalls++;
+            return SignCore(bucket, objectName);
+        }
+
+        private Task<Uri> SignCore(string bucket, string objectName)
         {
             Signed.Add((bucket, objectName));
             if (SignedUrlFailure is not null && Signed.Count == SignedUrlFailureCall)
@@ -626,6 +983,9 @@ public sealed class FileApplicationServiceTests
                 RequestCancellation?.Cancel();
                 return Task.FromException<Uri>(SignedUrlFailure);
             }
+
+            // Deliberately broken signer boundary: nonnullable annotation is not a runtime guarantee.
+            if (Signed.Count == NullSignedUriCall) return Task.FromResult<Uri>(null!);
 
             return Task.FromResult(new Uri($"https://storage.test/{objectName}"));
         }
