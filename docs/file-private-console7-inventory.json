@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "1441096b66de526c4e5cca40f4f64647da9c68cb",
+  "baselineTree": "0f97ebac55ab74a709a636739c5a53d1abd89380",
+  "baselineFullCount": 1705,
+  "additionalCases": 7,
+  "expectedFullCount": 1712,
+  "sourceOnlyForecast": true,
+  "dependencies": {
+    "serviceDefaultsCommit": "7edcd961024868513fd5f373cab3dcb261197f77",
+    "privateFormatterBlob": "6a56c6fd079e52ea8f36a76778a22ee37a6aec76",
+    "changed": false
+  },
+  "displayCalibration": {
+    "acceptedInventoryBlob": "2d46cf222e89fc2eb668fa672b3a51555f23b35a",
+    "rule": "Accepted xUnit TRX inventory displays enums by name (expectedLevel: Critical); six LogLevel rows use Trace, Debug, Information, Warning, Error, Critical with severity null or quoted literal. Exact joined identities remain mandatory."
+  },
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Api/Program.cs",
+      "preGitBlob": "074e0424d738f769ea2f4471fe9466e6a0787d28",
+      "postGitBlob": "aa14153f68fa88fb07576b35324c94bb96fd0221",
+      "preSha256": "ba3f67b07864ba8156fb96fe6536b3978b8cac5f78cac948aca77ddb0dbe6285",
+      "postSha256": "21431d920ad306a47b090f2899bd15fcc973f758efda14ceb8e74010100085ee",
+      "preBytes": 4235,
+      "postBytes": 4835,
+      "inverse": [
+        {
+          "post": "    // Keep tracing and metrics services while selecting the original private console-only log contract.\n    builder.Logging.ClearProviders();\n    builder.Logging.AddConsoleFormatter<Maliev.Aspire.ServiceDefaults.Logging.PrivateFailureConsoleFormatter,\n        Microsoft.Extensions.Logging.Console.ConsoleFormatterOptions>();\n    builder.Logging.AddConsole(options => options.FormatterName =\n        Maliev.Aspire.ServiceDefaults.Logging.PrivateFailureConsoleFormatter.FormatterName);\n    builder.Logging.AddFilter<Microsoft.Extensions.Logging.Console.ConsoleLoggerProvider>(null, LogLevel.Warning);\n",
+          "pre": ""
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Api/FilePrivateConsoleConsumerTests.cs",
+      "preGitBlob": null,
+      "postGitBlob": "1e79078c8d7cf4d7de2622e6fc4c24c45cbe0088",
+      "preSha256": null,
+      "postSha256": "cdb6f355d4d319df2a77e61f6fb4e42ee9309d63f55f045706f753de568c124d",
+      "preBytes": null,
+      "postBytes": 18350,
+      "inverse": []
+    },
+    {
+      "path": "docs/file-private-console-source-449.md",
+      "preGitBlob": null,
+      "postGitBlob": "849d3bcfcffd5fada65cb298d0d1fe85d2caf2cc",
+      "preSha256": null,
+      "postSha256": "e7c4e494ca392a26e1f4fb732530651ac701150127a6afb4179e017c197a05e4",
+      "preBytes": null,
+      "postBytes": 3658,
+      "inverse": []
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels(level: Trace, severity: null)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels(level: Debug, severity: null)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels(level: Information, severity: null)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels(level: Warning, severity: \"WARNING\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels(level: Error, severity: \"ERROR\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_PrivateConsoleRejectsArbitraryTextAndSuccessLevels(level: Critical, severity: \"CRITICAL\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests",
+      "method": "ActualProgram_ExistingResponsesAndFailureEventsRemainPrivate",
+      "testName": "Legacy.Maliev.FileService.Tests.Api.FilePrivateConsoleConsumerTests.ActualProgram_ExistingResponsesAndFailureEventsRemainPrivate",
+      "executions": 1
+    }
+  ]
+}

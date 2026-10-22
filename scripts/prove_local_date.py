@@ -743,9 +743,105 @@ def reviewed_validation_logging_additions(source_root=None):
                    for method in VALIDATION_LOGGING_METHODS)
 
 
+
+PRIVATE_CONSOLE_INVENTORY = "docs/file-private-console7-inventory.json"
+PRIVATE_CONSOLE_INVENTORY_SHA256 = "41f37316bc394b9b1a9c765d4b6a484dc8c0c0bb0c086e9d132549b486971220"
+PRIVATE_CONSOLE_PROGRAM = "Legacy.Maliev.FileService.Api/Program.cs"
+PRIVATE_CONSOLE_TEST = "Legacy.Maliev.FileService.Tests/Api/FilePrivateConsoleConsumerTests.cs"
+PRIVATE_CONSOLE_DOC = "docs/file-private-console-source-449.md"
+
+
+def private_console_inventory(inventory_path=None):
+    raw = Path(inventory_path or PRIVATE_CONSOLE_INVENTORY).read_bytes()
+    require(digest(raw) == PRIVATE_CONSOLE_INVENTORY_SHA256, "Reviewed private console inventory changed")
+    inventory = json.loads(raw)
+    require(inventory["schemaVersion"] == 1 and inventory["baselineFullCount"] == 1705
+            and inventory["additionalCases"] == 7 and inventory["expectedFullCount"] == 1712,
+            "Reviewed private console scope changed")
+    sources = inventory["sources"]
+    require(len(sources) == 3 and {source["path"] for source in sources}
+            == {PRIVATE_CONSOLE_PROGRAM, PRIVATE_CONSOLE_TEST, PRIVATE_CONSOLE_DOC},
+            "Reviewed private console source roster changed")
+    return inventory
+
+
+def private_console_program_disabled(corrected, inventory_path=None):
+    source = next(source for source in private_console_inventory(inventory_path)["sources"]
+                  if source["path"] == PRIVATE_CONSOLE_PROGRAM)
+    require(digest(corrected) == source["postSha256"] and len(corrected) == source["postBytes"],
+            "Reviewed private console Program changed")
+    require(len(source["inverse"]) == 1, "Exact private console insertion required")
+    operation = source["inverse"][0]
+    after, before = operation["post"].encode("utf-8"), operation["pre"].encode("utf-8")
+    require(len(after) == 600 and not before and corrected.count(after) == 1,
+            "Unique 600-byte private console insertion changed")
+    restored = corrected.replace(after, before, 1)
+    require(digest(restored) == source["preSha256"] and len(restored) == source["preBytes"],
+            "Private console inverse differs from immutable Program")
+    return restored
+
+
+def reviewed_private_console_additions(inventory_path=None, source_root=None):
+    inventory = private_console_inventory(inventory_path)
+    root = Path(source_root or ".")
+    for source in inventory["sources"]:
+        current = (root / source["path"]).read_bytes()
+        require(digest(current) == source["postSha256"] and len(current) == source["postBytes"],
+                "Reviewed private console source changed")
+        if source["path"] == PRIVATE_CONSOLE_PROGRAM:
+            private_console_program_disabled(current, inventory_path)
+    identities = Counter()
+    for row in inventory["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["executions"] == 1 and identity not in identities, "Duplicate private console identity")
+        identities[identity] = 1
+    require(sum(identities.values()) == 7, "Exact seven private console identities required")
+    return identities
+
+
+def private_console_focus_filter(inventory_path=None):
+    methods = sorted({row["class"] + "." + row["method"]
+                      for row in private_console_inventory(inventory_path)["rows"]})
+    require(len(methods) == 2, "Exact two private console methods required")
+    return "|".join("FullyQualifiedName=" + method for method in methods)
+
+
+def verify_private_console_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    expected = reviewed_private_console_additions()
+    require(len(rows) == 7 and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+            and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Exact seven joined private console cases must pass without errors or skips")
+    return rows
+
+
+def prove_private_console_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    inventory = private_console_inventory()
+    sources = {source["path"]: (repo / source["path"]).read_bytes() for source in inventory["sources"]}
+    reviewed_private_console_additions(source_root=repo)
+    for path, content in sources.items():
+        require(subprocess.check_output(["git", "show", head + ":" + path], timeout=20) == content,
+                "Private console source differs from proposed head")
+    require(run("private-console7", tests + ["--filter", private_console_focus_filter(),
+            "--logger", "trx;LogFileName=private-console7.trx", "--results-directory", str(output)], 120, output) == 0,
+            "Private console focus failed")
+    rows = verify_private_console_focus(output / "private-console7.trx")
+    require(all((repo / path).read_bytes() == content for path, content in sources.items()),
+            "Private console focus changed source")
+    receipt = {"head": head, "exactJoinedCasesPassed": len(rows), "baselineFullCount": 1705,
+               "expectedFullCount": 1712, "inventorySha256": PRIVATE_CONSOLE_INVENTORY_SHA256,
+               "sourceSha256": {path: digest(content) for path, content in sources.items()},
+               "sourceUnchanged": True, "providerCallsProven": False,
+               "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir()
+                            if p.suffix in {".trx", ".log"}}}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return rows
+
+
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
                 include_redis_models=True, include_synchronous_signing=True, include_null_signing=True, include_request_observation=True,
-                include_validation_logging=True, include_upload_prefix=True, include_upload_size=True):
+                include_validation_logging=True, include_upload_prefix=True, include_upload_size=True, include_private_console=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -760,10 +856,11 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     validation_additions = reviewed_validation_logging_additions() if observation_additions and include_validation_logging else Counter()
     prefix_additions = reviewed_upload_prefix_additions() if validation_additions and include_upload_prefix else Counter()
     size_additions = reviewed_upload_size_additions() if prefix_additions and include_upload_size else Counter()
-    expected_count = 1705 if size_additions else 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    console_additions = reviewed_private_console_additions() if size_additions and include_private_console else Counter()
+    expected_count = 1712 if console_additions else 1705 if size_additions else 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions + size_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions + size_additions + console_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
@@ -1192,6 +1289,8 @@ def main():
     prove_upload_prefix_focus(repo, root / "upload-prefix-focus", run, tests, head)
     commands = []
     prove_upload_size_focus(repo, root / "upload-name-size-focus", run, tests, head)
+    commands = []
+    prove_private_console_focus(repo, root / "private-console-focus", run, tests, head)
     commands = []
     date_filter = local_date_focus_filter(inventory)
     error = None
