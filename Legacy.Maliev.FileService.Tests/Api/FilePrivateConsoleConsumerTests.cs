@@ -227,7 +227,7 @@ public sealed class FilePrivateConsoleConsumerTests(FileOpenApiPostgresFixture d
             {
                 if (throwApplicationFailure)
                     Service.Setup(service => service.GetSignedUrlAsync("maliev.com", "private-file.stl", It.IsAny<CancellationToken>()))
-                        .Throws(new InvalidOperationException(Canary));
+                        .Throws(new IOException(Canary));
                 Factory = new ConsoleFactory(connectionString, signingKey, throwApplicationFailure ? Service.Object : null);
             }
             catch { signingKey.Dispose(); throw; }

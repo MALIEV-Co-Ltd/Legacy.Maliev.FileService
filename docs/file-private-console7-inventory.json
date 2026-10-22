@@ -34,11 +34,11 @@
     {
       "path": "Legacy.Maliev.FileService.Tests/Api/FilePrivateConsoleConsumerTests.cs",
       "preGitBlob": null,
-      "postGitBlob": "1e79078c8d7cf4d7de2622e6fc4c24c45cbe0088",
+      "postGitBlob": "fee86510168ac02eb9a8b038363f0ec11ffd7686",
       "preSha256": null,
-      "postSha256": "cdb6f355d4d319df2a77e61f6fb4e42ee9309d63f55f045706f753de568c124d",
+      "postSha256": "af4760166864d19d6e0983cd2bf6d2e6a7e2246d5ae8abcc00e82ae37560392d",
       "preBytes": null,
-      "postBytes": 18350,
+      "postBytes": 18336,
       "inverse": []
     },
     {

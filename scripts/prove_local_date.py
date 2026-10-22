@@ -745,7 +745,7 @@ def reviewed_validation_logging_additions(source_root=None):
 
 
 PRIVATE_CONSOLE_INVENTORY = "docs/file-private-console7-inventory.json"
-PRIVATE_CONSOLE_INVENTORY_SHA256 = "41f37316bc394b9b1a9c765d4b6a484dc8c0c0bb0c086e9d132549b486971220"
+PRIVATE_CONSOLE_INVENTORY_SHA256 = "1fdf4cf83ed0584cb9090f0f8ac790c11b3661ad50a06b467d729f398a0092ef"
 PRIVATE_CONSOLE_PROGRAM = "Legacy.Maliev.FileService.Api/Program.cs"
 PRIVATE_CONSOLE_TEST = "Legacy.Maliev.FileService.Tests/Api/FilePrivateConsoleConsumerTests.cs"
 PRIVATE_CONSOLE_DOC = "docs/file-private-console-source-449.md"
