@@ -101,16 +101,16 @@ public sealed class LegacyUploadHealthHttpTests
     {
         await using var factory = new HealthFactory(HealthStatus.Healthy, configuredProxy: true);
         foreach (var scheme in new string?[] { "http", null, "not a scheme", "https,http" })
-        foreach (var path in new[] { "/uploads/liveness", "/uploads/readiness", "/UpLoAdS/LiVeNeSs", "/UpLoAdS/ReAdInEsS" })
-        {
-            var before = factory.Probe.Calls;
-            var context = await SendThroughProxyAsync(factory, path, scheme);
-            Assert.Equal(200, context.Response.StatusCode);
-            Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
-            Assert.Equal(0, context.Response.Headers.Location.Count);
-            Assert.Equal(0, context.Response.Headers["Strict-Transport-Security"].Count);
-            Assert.Equal(before + (path.EndsWith("readiness", StringComparison.OrdinalIgnoreCase) ? 2 : 0), factory.Probe.Calls);
-        }
+            foreach (var path in new[] { "/uploads/liveness", "/uploads/readiness", "/UpLoAdS/LiVeNeSs", "/UpLoAdS/ReAdInEsS" })
+            {
+                var before = factory.Probe.Calls;
+                var context = await SendThroughProxyAsync(factory, path, scheme);
+                Assert.Equal(200, context.Response.StatusCode);
+                Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+                Assert.Equal(0, context.Response.Headers.Location.Count);
+                Assert.Equal(0, context.Response.Headers["Strict-Transport-Security"].Count);
+                Assert.Equal(before + (path.EndsWith("readiness", StringComparison.OrdinalIgnoreCase) ? 2 : 0), factory.Probe.Calls);
+            }
     }
 
     [Fact]
@@ -118,13 +118,13 @@ public sealed class LegacyUploadHealthHttpTests
     {
         await using var factory = new HealthFactory(HealthStatus.Healthy, configuredProxy: true);
         foreach (var scheme in new string?[] { "http", null, "not a scheme", "https,http" })
-        foreach (var path in new[] { "/uploads/liveness/", "/uploads/readiness/", "/uploads/liveness-more", "/uploads/readiness/child", "/uploads/SignedUrl", "/Uploads" })
-        {
-            var context = await SendThroughProxyAsync(factory, path, scheme);
-            Assert.Equal(426, context.Response.StatusCode);
-            Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
-            Assert.Equal(0, context.Response.Headers.Location.Count);
-        }
+            foreach (var path in new[] { "/uploads/liveness/", "/uploads/readiness/", "/uploads/liveness-more", "/uploads/readiness/child", "/uploads/SignedUrl", "/Uploads" })
+            {
+                var context = await SendThroughProxyAsync(factory, path, scheme);
+                Assert.Equal(426, context.Response.StatusCode);
+                Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+                Assert.Equal(0, context.Response.Headers.Location.Count);
+            }
         Assert.Equal(0, factory.Probe.Calls);
     }
 

@@ -842,7 +842,7 @@ def prove_private_console_focus(repo, output, run, tests, head):
 LEGACY_HEALTH_SOURCES = {
     "Legacy.Maliev.FileService.Api/Http/FileHostTransportPolicy.cs": "85ef07c266f2dff726d30f7e8d61e0b1b4a0577bdd5dd1e6bcffb2c0c337f81c",
     "Legacy.Maliev.FileService.Api/Controllers/LegacyUploadHealthController.cs": "9c88fccbc710c71572d5f5ccb01392e407de28863c27404f9fb916871574dce1",
-    "Legacy.Maliev.FileService.Tests/OpenApi/LegacyUploadHealthHttpTests.cs": "c9a589bdc3f56942b532e28b19d049d5ef20b2862becfa910aa34cdbd12cb6f5",
+    "Legacy.Maliev.FileService.Tests/OpenApi/LegacyUploadHealthHttpTests.cs": "1fccbb62c46f99ecba8590507b8d65c897c7cb284d94339820379edd0120c39b",
 }
 LEGACY_HEALTH_CLASS = "Legacy.Maliev.FileService.Tests.OpenApi.LegacyUploadHealthHttpTests"
 LEGACY_HEALTH_METHODS = (
