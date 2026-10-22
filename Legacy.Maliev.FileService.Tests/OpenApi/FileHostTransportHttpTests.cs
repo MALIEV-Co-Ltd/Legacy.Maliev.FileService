@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.TestHost;
@@ -147,8 +148,132 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         Assert.Throws<OptionsValidationException>(() => factory.CreateClient());
     }
 
+    [Fact]
+    public async Task RegisteredGetHealth_IdentifiesOnlyItsHostWithoutSuccessfulProbeIncidents()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var factory = Factory(observe: true);
+        using var client = factory.CreateClient();
+        string? instance = null;
+        foreach (var path in new[] { "/file/liveness", "/file/readiness", "/file/liveness" })
+        {
+            using var response = await client.GetAsync(path, deadline.Token);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var current = Assert.Single(response.Headers.GetValues("X-Maliev-Health-Instance"));
+            Assert.True(Guid.TryParseExact(current, "N", out _));
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            instance ??= current;
+            Assert.Equal(instance, current);
+        }
+        await using var other = Factory(observe: true);
+        using var otherClient = other.CreateClient();
+        using var independent = await otherClient.GetAsync("/file/liveness", deadline.Token);
+        Assert.NotEqual(instance, Assert.Single(independent.Headers.GetValues("X-Maliev-Health-Instance")));
+        foreach (var path in new[] { "/file/aspire-liveness", "/file/openapi/v1.json", "/not-a-health-endpoint", ApiPath })
+        {
+            using var response = await client.GetAsync(path, deadline.Token);
+            Assert.False(response.Headers.Contains("X-Maliev-Health-Instance"));
+            Assert.False(response.Headers.Contains("X-Maliev-Diagnostic-Id"));
+        }
+        using var post = await client.PostAsync("/file/liveness", null, deadline.Token);
+        Assert.False(post.Headers.Contains("X-Maliev-Health-Instance"));
+        Assert.Empty(factory.Observation.Snapshot());
+        Assert.Empty(other.Observation.Snapshot());
+        Assert.False(factory.Observation.Overflowed);
+        Assert.False(other.Observation.Overflowed);
+    }
+
+    [Fact]
+    public async Task SyntheticObservation_RequiresNativeLoopbackAndOneNonceAndPreservesThrottling()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var factory = Factory(observe: true);
+        using var client = factory.CreateClient();
+        using var health = await client.GetAsync("/file/liveness", deadline.Token);
+        var instance = Assert.Single(health.Headers.GetValues("X-Maliev-Health-Instance"));
+        const string path = "/internal/diagnostics/observability";
+        const string nonce = "0123456789abcdef0123456789abcdef";
+        foreach (var denied in new[]
+        {
+            (Remote: (string?)Caller, Nonce: (string?)nonce, Method: "GET", Duplicate: false),
+            (Remote: (string?)null, Nonce: (string?)nonce, Method: "GET", Duplicate: false),
+            (Remote: (string?)"127.0.0.1", Nonce: (string?)null, Method: "GET", Duplicate: false),
+            (Remote: (string?)"127.0.0.1", Nonce: (string?)"invalid", Method: "GET", Duplicate: false),
+            (Remote: (string?)"127.0.0.1", Nonce: (string?)nonce, Method: "POST", Duplicate: false),
+            (Remote: (string?)"127.0.0.1", Nonce: (string?)nonce, Method: "GET", Duplicate: true),
+        })
+        {
+            var response = await factory.Server.SendAsync(context =>
+            {
+                ConfigureRequest(context, path, denied.Remote, "http", null, false, factory);
+                context.Request.Method = denied.Method;
+                context.Request.Headers["X-Forwarded-For"] = "127.0.0.1";
+                if (denied.Nonce is not null)
+                    context.Request.Headers["X-Maliev-Diagnostic-Id"] = denied.Duplicate
+                        ? new Microsoft.Extensions.Primitives.StringValues([denied.Nonce, denied.Nonce])
+                        : denied.Nonce;
+            }, deadline.Token);
+            Assert.Equal(404, response.Response.StatusCode);
+            Assert.False(response.Response.Headers.ContainsKey("X-Maliev-Health-Instance"));
+            Assert.False(response.Response.Headers.ContainsKey("X-Maliev-Diagnostic-Id"));
+        }
+        Assert.Empty(factory.Observation.Snapshot());
+        var admitted = await factory.Server.SendAsync(context =>
+        {
+            ConfigureRequest(context, path, "127.0.0.1", "http", null, false, factory);
+            context.Request.Headers["X-Maliev-Diagnostic-Id"] = nonce;
+        }, deadline.Token);
+        Assert.Equal(500, admitted.Response.StatusCode);
+        Assert.Equal(instance, admitted.Response.Headers["X-Maliev-Health-Instance"].ToString());
+        Assert.Equal(nonce, admitted.Response.Headers["X-Maliev-Diagnostic-Id"].ToString());
+        Assert.Equal("no-store", admitted.Response.Headers.CacheControl.ToString());
+        Assert.Equal("noindex", admitted.Response.Headers["X-Robots-Tag"].ToString());
+        Assert.Equal(new[] { LogLevel.Warning, LogLevel.Error, LogLevel.Critical },
+            factory.Observation.Snapshot().Select(entry => entry.Level));
+        var throttled = await factory.Server.SendAsync(context =>
+        {
+            ConfigureRequest(context, path, "127.0.0.1", "http", null, false, factory);
+            context.Request.Headers["X-Maliev-Diagnostic-Id"] = nonce;
+        }, deadline.Token);
+        Assert.Equal(429, throttled.Response.StatusCode);
+        Assert.False(throttled.Response.Headers.ContainsKey("X-Maliev-Health-Instance"));
+        Assert.False(throttled.Response.Headers.ContainsKey("X-Maliev-Diagnostic-Id"));
+        Assert.Equal(new[] { LogLevel.Warning, LogLevel.Error, LogLevel.Critical },
+            factory.Observation.Snapshot().Select(entry => entry.Level));
+        Assert.False(factory.Observation.Overflowed);
+    }
+
+    [Fact]
+    public async Task DisabledSignedRead_ProducesOneSanitizedIncidentWithoutSyntheticOrHealthIdentity()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var factory = Factory(observe: true);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", factory.Token());
+        using var response = await client.GetAsync(
+            "/uploads/SignedUrl?bucket=synthetic-private-marker&objectName=synthetic-confidential-marker.stl", deadline.Token);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.False(response.Headers.Contains("X-Maliev-Health-Instance"));
+        Assert.False(response.Headers.Contains("X-Maliev-Diagnostic-Id"));
+        var body = await response.Content.ReadAsStringAsync(deadline.Token);
+        using var problem = JsonDocument.Parse(body);
+        Assert.Equal(503, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("Legacy file service unavailable", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal("File storage is temporarily unavailable.", problem.RootElement.GetProperty("detail").GetString());
+        Assert.DoesNotContain("synthetic-private-marker", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic-confidential-marker", body, StringComparison.Ordinal);
+        var incident = Assert.Single(factory.Observation.Snapshot());
+        Assert.Equal(LogLevel.Error, incident.Level);
+        Assert.Equal("HandledOperationFailure", incident.EventName);
+        Assert.Equal("HttpResponse", incident.Operation);
+        Assert.Equal(503, incident.StatusCode);
+        Assert.Equal(new[] { "EventName", "Operation", "StatusCode", "{OriginalFormat}" }, incident.Keys);
+        Assert.False(factory.Observation.Overflowed);
+    }
+
     private FileHostFactory Factory(bool configuredProxy = true, string environment = "Production",
-        string policy = "InternalHttpWithTrustedEdgeHttps") => new(database.ConnectionString, configuredProxy, environment, policy);
+        string policy = "InternalHttpWithTrustedEdgeHttps", bool observe = false) =>
+        new(database.ConnectionString, configuredProxy, environment, policy, observe: observe);
 
     private static Task<HttpContext> SendAsync(FileHostFactory factory, string path, string? remote,
         string scheme = "http", string? forwardedScheme = null, bool bearer = false, bool spoofOriginal = false) =>
@@ -202,22 +327,64 @@ public sealed class FileHostTransportHttpTests(FileOpenApiPostgresFixture databa
         Assert.Equal(HttpStatusCode.ServiceUnavailable, expired.StatusCode);
     }
 
+    // Capture only bounded event metadata, never formatter output, exception details or request values.
+    private sealed class ObservationCapture : ILoggerProvider
+    {
+        private readonly object gate = new();
+        private readonly List<Entry> entries = [];
+        public bool Overflowed { get; private set; }
+        public sealed record Entry(LogLevel Level, string? EventName, string? Operation, int? StatusCode, string[] Keys);
+        public Entry[] Snapshot()
+        {
+            lock (gate) return entries.ToArray();
+        }
+        public ILogger CreateLogger(string categoryName) => new CaptureLogger(this,
+            categoryName == "Maliev.Aspire.ServiceDefaults.Diagnostics.PrivateRequestObservation",
+            categoryName == "Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware");
+        public void Dispose() { }
+
+        private sealed class CaptureLogger(ObservationCapture owner, bool observation, bool framework) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => (observation || framework) && logLevel >= LogLevel.Warning;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (!IsEnabled(logLevel)) return;
+                var properties = observation && state is IEnumerable<KeyValuePair<string, object?>> values
+                    ? values.ToArray() : [];
+                var entry = new Entry(logLevel,
+                    properties.SingleOrDefault(pair => pair.Key == "EventName").Value as string,
+                    properties.SingleOrDefault(pair => pair.Key == "Operation").Value as string,
+                    properties.SingleOrDefault(pair => pair.Key == "StatusCode").Value is int status ? status : null,
+                    properties.Select(pair => pair.Key).Order(StringComparer.Ordinal).ToArray());
+                lock (owner.gate)
+                {
+                    if (owner.entries.Count == 16) owner.Overflowed = true;
+                    else owner.entries.Add(entry);
+                }
+            }
+        }
+    }
+
     private sealed class HostedClock : TimeProvider
     {
         public DateTimeOffset Current { get; set; } = DateTimeOffset.UtcNow;
         public override DateTimeOffset GetUtcNow() => Current;
     }
 
-    private sealed class FileHostFactory(string connectionString, bool configuredProxy, string environment, string policy, HostedClock? hostedClock = null)
+    private sealed class FileHostFactory(string connectionString, bool configuredProxy, string environment, string policy, HostedClock? hostedClock = null, bool observe = false)
         : WebApplicationFactory<Program>
     {
         private const string Issuer = "https://file-host-policy-fixture.invalid";
         private const string Audience = "file-host-policy";
         private readonly RSA signingKey = RSA.Create(2048);
+        public ObservationCapture Observation { get; } = new();
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment(environment);
+            if (observe) builder.ConfigureLogging(logging => logging.AddProvider(Observation));
             var settings = new Dictionary<string, string?>
             {
                 ["ConnectionStrings:FileDbContext"] = connectionString,
