@@ -149,6 +149,201 @@ def verify_focus_rows(rows, baseline, inventory=None):
     return rows
 
 
+
+UPLOAD_PREFIX_INVENTORY = "docs/upload-prefix18-inventory.json"
+UPLOAD_PREFIX_INVENTORY_SHA256 = "99aa875fdecc1b9e1e0539879d09c4d3e5671748fa7b12aaaf54e6caa62a191c"
+
+
+def upload_prefix_inventory(inventory_path=None):
+    raw = Path(inventory_path or UPLOAD_PREFIX_INVENTORY).read_bytes()
+    require(digest(raw) == UPLOAD_PREFIX_INVENTORY_SHA256, "Reviewed upload prefix inventory changed")
+    inventory = json.loads(raw)
+    require(inventory["schemaVersion"] == 1 and inventory["baselineFullCount"] == 1669
+            and inventory["additionalCases"] == 18 and inventory["expectedFullCount"] == 1687
+            and len(inventory["sources"]) == 5, "Reviewed upload prefix scope changed")
+    return inventory
+
+
+def upload_prefix_correction_disabled(path, corrected, inventory_path=None):
+    inventory = upload_prefix_inventory(inventory_path)
+    matches = [source for source in inventory["sources"] if source["path"] == path]
+    require(len(matches) == 1, "Unknown reviewed upload prefix source")
+    source = matches[0]
+    # Historical proof controls can supply the exact immutable predecessor.
+    if digest(corrected) == source["preSha256"] and len(corrected) == source["preBytes"]:
+        return corrected
+    require(digest(corrected) == source["postSha256"] and len(corrected) == source["postBytes"],
+            "Reviewed upload prefix source changed")
+    disabled = corrected
+    for operation in source["inverse"]:
+        after, before = operation["post"].encode("utf-8"), operation["pre"].encode("utf-8")
+        require(after and disabled.count(after) == 1, "Reviewed upload prefix inverse block changed")
+        disabled = disabled.replace(after, before, 1)
+    require(digest(disabled) == source["preSha256"] and len(disabled) == source["preBytes"],
+            "Upload prefix inverse differs from immutable predecessor")
+    return disabled
+
+
+def reviewed_upload_prefix_additions(inventory_path=None, source_root=None):
+    inventory = upload_prefix_inventory(inventory_path)
+    root = Path(source_root or ".")
+    for source in inventory["sources"]:
+        current = (root / source["path"]).read_bytes()
+        require(digest(current) == source["postSha256"] and len(current) == source["postBytes"],
+                "Reviewed upload prefix source changed")
+        upload_prefix_correction_disabled(source["path"], current, inventory_path)
+    identities = Counter()
+    for row in inventory["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["executions"] == 1 and identity not in identities, "Duplicate upload prefix identity")
+        identities[identity] = 1
+    require(sum(identities.values()) == 18, "Exact eighteen upload prefix identities required")
+    return identities
+
+
+def upload_prefix_focus_filter(inventory_path=None):
+    inventory = upload_prefix_inventory(inventory_path)
+    methods = sorted({row["class"] + "." + row["method"] for row in inventory["rows"]})
+    require(len(methods) == 6, "Exact six upload prefix methods required")
+    return "|".join("FullyQualifiedName=" + method for method in methods)
+
+
+def local_date_focus_filter(inventory):
+    methods = sorted({row["className"] + "." + row["method"] for row in inventory["rows"]
+                      if row["className"] == CLASS} | {CLASS + "." + METHOD})
+    return "|".join("FullyQualifiedName=" + method for method in methods)
+
+
+def compose_upload_prefix_date_baseline(corrected, immutable):
+    require(verify_baseline_identity(OLD, BASELINE_BLOB, immutable) == immutable,
+            "Immutable UTC baseline identity changed")
+    prior = upload_prefix_correction_disabled(CONTROLLER, corrected)
+    require(prior.count(b"timeProvider.GetLocalNow()") == 1
+            and prior.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()") == immutable,
+            "Prefix inverse does not restore immutable UTC baseline")
+    require(corrected.count(b"timeProvider.GetLocalNow()") == 1, "Exact local date call required")
+    composed = corrected.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()")
+    require(digest(composed) == upload_prefix_inventory()["dateBaseline"]["composedBaselineSha256"],
+            "Composed UTC baseline with prefix overload changed")
+    return composed
+
+
+def verify_upload_prefix_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    expected = reviewed_upload_prefix_additions()
+    require(len(rows) == 18 and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected,
+            "Exact eighteen joined upload prefix cases required")
+    require(all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Upload prefix focus must pass without errors or skips")
+    return rows
+
+
+def prove_upload_prefix_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    inventory = upload_prefix_inventory()
+    sources = {source["path"]: (repo / source["path"]).read_bytes() for source in inventory["sources"]}
+    reviewed_upload_prefix_additions(source_root=repo)
+    for path, content in sources.items():
+        require(subprocess.check_output(["git", "show", head + ":" + path], timeout=20) == content,
+                "Upload prefix source differs from proposed head")
+    require(run("upload-prefix18", tests + ["--filter", upload_prefix_focus_filter(),
+            "--logger", "trx;LogFileName=prefix18.trx", "--results-directory", str(output)], 120, output) == 0,
+            "Upload prefix focus failed")
+    rows = verify_upload_prefix_focus(output / "prefix18.trx")
+    require(all((repo / path).read_bytes() == content for path, content in sources.items()),
+            "Upload prefix focus changed source")
+    receipt = {"head": head, "exactJoinedCasesPassed": len(rows), "baselineFullCount": 1669,
+               "expectedFullCount": 1687, "inventorySha256": UPLOAD_PREFIX_INVENTORY_SHA256,
+               "sourceSha256": {path: digest(content) for path, content in sources.items()},
+               "sourceUnchanged": True, "providerCallsProven": False,
+               "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir()
+                            if p.suffix in {".trx", ".log"}}}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return rows
+
+UPLOAD_SIZE_INVENTORY = "docs/upload-name-size18-inventory.json"
+UPLOAD_SIZE_INVENTORY_SHA256 = "eff17d7d68e4c2edc95dd5663bf7d274a2e983ff658953607eed303ed30eb147"
+
+
+def upload_size_inventory(inventory_path=None):
+    raw = Path(inventory_path or UPLOAD_SIZE_INVENTORY).read_bytes()
+    require(digest(raw) == UPLOAD_SIZE_INVENTORY_SHA256, "Reviewed upload name size inventory changed")
+    inventory = json.loads(raw)
+    require(inventory["schemaVersion"] == 1 and inventory["baselineFullCount"] == 1687
+            and inventory["additionalCases"] == 18 and inventory["expectedFullCount"] == 1705
+            and len(inventory["sources"]) == 4, "Reviewed upload name size scope changed")
+    return inventory
+
+
+def upload_size_correction_disabled(path, corrected, inventory_path=None):
+    matches = [source for source in upload_size_inventory(inventory_path)["sources"] if source["path"] == path]
+    require(len(matches) == 1, "Unknown reviewed upload name size source")
+    source = matches[0]
+    require(digest(corrected) == source["postSha256"] and len(corrected) == source["postBytes"],
+            "Reviewed upload name size source changed")
+    disabled = corrected
+    for operation in source["inverse"]:
+        after, before = operation["post"].encode("utf-8"), operation["pre"].encode("utf-8")
+        require(after and disabled.count(after) == 1, "Reviewed upload name size inverse changed")
+        disabled = disabled.replace(after, before, 1)
+    require(digest(disabled) == source["preSha256"] and len(disabled) == source["preBytes"],
+            "Upload name size inverse differs from immutable predecessor")
+    return disabled
+
+
+def reviewed_upload_size_additions(inventory_path=None, source_root=None):
+    inventory = upload_size_inventory(inventory_path)
+    root = Path(source_root or ".")
+    for source in inventory["sources"]:
+        upload_size_correction_disabled(source["path"], (root / source["path"]).read_bytes(), inventory_path)
+    identities = Counter()
+    for row in inventory["rows"]:
+        identity = (row["class"], row["method"], row["testName"])
+        require(row["executions"] == 1 and identity not in identities, "Duplicate upload name size identity")
+        identities[identity] = 1
+    require(sum(identities.values()) == 18, "Exact eighteen upload name size identities required")
+    return identities
+
+
+def upload_size_focus_filter(inventory_path=None):
+    methods = sorted({row["class"] + "." + row["method"] for row in upload_size_inventory(inventory_path)["rows"]})
+    require(len(methods) == 5, "Exact five upload name size methods required")
+    return "|".join("FullyQualifiedName=" + method for method in methods)
+
+
+def verify_upload_size_focus(path):
+    rows = read_trx(path, strict_clean_run=True)
+    expected = reviewed_upload_size_additions()
+    require(len(rows) == 18 and Counter((row["class"], row["method"], row["name"]) for row in rows) == expected
+            and all(row["outcome"] == "Passed" and not row["errorInfo"] for row in rows),
+            "Exact eighteen joined upload name size cases must pass without errors or skips")
+    return rows
+
+
+def prove_upload_size_focus(repo, output, run, tests, head):
+    output.mkdir(exist_ok=False)
+    inventory = upload_size_inventory()
+    sources = {source["path"]: (repo / source["path"]).read_bytes() for source in inventory["sources"]}
+    reviewed_upload_size_additions(source_root=repo)
+    for path, content in sources.items():
+        require(subprocess.check_output(["git", "show", head + ":" + path], timeout=20) == content,
+                "Upload name size source differs from proposed head")
+    require(run("upload-name-size18", tests + ["--filter", upload_size_focus_filter(),
+            "--logger", "trx;LogFileName=name-size18.trx", "--results-directory", str(output)], 120, output) == 0,
+            "Upload name size focus failed")
+    rows = verify_upload_size_focus(output / "name-size18.trx")
+    require(all((repo / path).read_bytes() == content for path, content in sources.items()),
+            "Upload name size focus changed source")
+    receipt = {"head": head, "exactJoinedCasesPassed": len(rows), "baselineFullCount": 1687,
+               "expectedFullCount": 1705, "inventorySha256": UPLOAD_SIZE_INVENTORY_SHA256,
+               "sourceSha256": {path: digest(content) for path, content in sources.items()},
+               "sourceUnchanged": True, "providerCallsProven": False,
+               "rawFiles": {p.name: digest(p.read_bytes()) for p in output.iterdir()
+                            if p.suffix in {".trx", ".log"}}}
+    (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return rows
+
+
 UPLOAD_COORDINATE_INVENTORY = "docs/upload-coordinate25-inventory.json"
 UPLOAD_COORDINATE_INVENTORY_SHA256 = "7f5a674e1c538bc5cd989e4001f1674aab4717382175175c7d09e7e82ac87972"
 UPLOAD_COORDINATE_TEST = "Legacy.Maliev.FileService.Tests/Api/FileUploadRouteHttpAdmissionTests.cs"
@@ -201,6 +396,7 @@ NULL_SIGNING_METHODS = (
 
 
 def null_signing_tests_disabled(corrected):
+    corrected = upload_prefix_correction_disabled(RECONCILE_GENERATION_TEST, corrected)
     require(digest(corrected) == NULL_SIGNING_TEST_SHA256, "Reviewed reconciliation test source changed")
     first = b"\n    [Fact]\n    public async Task " + NULL_SIGNING_METHODS[0].encode() + b"()"
     following = b"\n    [Fact]\n    public async Task UploadAsync_ConfirmedSigningFailure_CompensatesExactPromotedGenerationsBeforeMetadata()"
@@ -223,6 +419,7 @@ def null_signing_tests_disabled(corrected):
 
 
 def null_signing_correction_disabled(corrected):
+    corrected = upload_prefix_correction_disabled(DELETE_SERVICE, corrected)
     require(digest(corrected) == NULL_SIGNING_SERVICE_SHA256, "Reviewed null signing service source changed")
     guarded = b'''                    var uri = await storage.CreateSignedReadUriAsync(uploadBucket, uploadName, duration, cancellationToken)
                         ?? throw new InvalidOperationException("Upload signing returned no URI.");'''
@@ -548,7 +745,7 @@ def reviewed_validation_logging_additions(source_root=None):
 
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
                 include_redis_models=True, include_synchronous_signing=True, include_null_signing=True, include_request_observation=True,
-                include_validation_logging=True):
+                include_validation_logging=True, include_upload_prefix=True, include_upload_size=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -561,14 +758,17 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     null_additions = reviewed_null_signing_additions() if sync_additions and include_null_signing else Counter()
     observation_additions = reviewed_request_observation_additions() if null_additions and include_request_observation else Counter()
     validation_additions = reviewed_validation_logging_additions() if observation_additions and include_validation_logging else Counter()
-    expected_count = 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    prefix_additions = reviewed_upload_prefix_additions() if validation_additions and include_upload_prefix else Counter()
+    size_additions = reviewed_upload_size_additions() if prefix_additions and include_upload_size else Counter()
+    expected_count = 1705 if size_additions else 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions + size_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")
-    verify_focus_rows([r for r in rows if r["class"] == CLASS], False, inventory)
+    verify_focus_rows([r for r in rows if r["class"] == CLASS
+                       and (r["class"], r["method"], r["name"]) not in prefix_additions + size_additions], False, inventory)
     return rows
 
 
@@ -957,9 +1157,7 @@ def main():
     require(subprocess.check_output(["git", "show", head + ":" + CONTROLLER], timeout=20) == corrected
             and subprocess.check_output(["git", "show", head + ":" + TEST], timeout=20) == test_bytes, "Dirty source inputs")
     original = fetch_baseline(output)
-    require(corrected.count(b"timeProvider.GetLocalNow()") == 1 and
-            corrected.replace(b"timeProvider.GetLocalNow()", b"timeProvider.GetUtcNow()") == original,
-            "Correction-disabled policy is not exact accepted source")
+    composed_baseline = compose_upload_prefix_date_baseline(corrected, original)
     inventory = json.loads((repo / "docs/local-date-prior1567-inventory.json").read_text())
     original_full = [p for p in root.rglob("*.trx") if output not in p.parents]
     require(len(original_full) == 1, "Expected one original full-suite TRX")
@@ -991,15 +1189,20 @@ def main():
              "-p:UseLocalMalievDependencies=true", "-p:GITHUB_ACTIONS=false", "-p:UseSharedCompilation=false", "-nodeReuse:false", "-warnaserror"]
     tests = ["test", "Legacy.Maliev.FileService.Tests/Legacy.Maliev.FileService.Tests.csproj", "--configuration", "Release",
              "--no-build", "--no-restore", "--disable-build-servers", "-p:UseLocalMalievDependencies=true", "-p:GITHUB_ACTIONS=false", "-p:VSTestCollect="]
+    prove_upload_prefix_focus(repo, root / "upload-prefix-focus", run, tests, head)
+    commands = []
+    prove_upload_size_focus(repo, root / "upload-name-size-focus", run, tests, head)
+    commands = []
+    date_filter = local_date_focus_filter(inventory)
     error = None
     try:
-        require(run("candidate-focus", tests + ["--filter", "FullyQualifiedName~ObjectNamePolicyTests", "--logger", "trx;LogFileName=candidate.trx", "--results-directory", str(output)], 120) == 0, "Candidate focus failed")
+        require(run("candidate-focus", tests + ["--filter", date_filter, "--logger", "trx;LogFileName=candidate.trx", "--results-directory", str(output)], 120) == 0, "Candidate focus failed")
         verify_focus(output / "candidate.trx", False)
-        controller.write_bytes(original)
+        controller.write_bytes(composed_baseline)
         require(run("baseline-build", build, 180) == 0, "Baseline build failed")
         build_ok(output / "baseline-build.log")
-        require(test.read_bytes() == test_bytes and controller.read_bytes() == original, "Baseline source changed")
-        require(run("baseline-focus", tests + ["--filter", "FullyQualifiedName~ObjectNamePolicyTests", "--logger", "trx;LogFileName=baseline.trx", "--results-directory", str(output)], 120) == 1, "Baseline exit is not exactly one")
+        require(test.read_bytes() == test_bytes and controller.read_bytes() == composed_baseline, "Baseline source changed")
+        require(run("baseline-focus", tests + ["--filter", date_filter, "--logger", "trx;LogFileName=baseline.trx", "--results-directory", str(output)], 120) == 1, "Baseline exit is not exactly one")
         verify_focus(output / "baseline.trx", True)
     except BaseException as exception:
         error = exception
@@ -1016,7 +1219,10 @@ def main():
     restored = verify_full(output / "restored-full.trx", inventory)
     require(controller.read_bytes() == corrected and test.read_bytes() == test_bytes, "Final source identity changed")
     receipt = {"head": head, "baselineControllerSource": OLD, "correctedControllerSha256": digest(corrected),
-               "baselineControllerSha256": digest(original), "immutableTestSha256": digest(test_bytes),
+               "baselineControllerSha256": digest(composed_baseline),
+               "immutableBaselineControllerSha256": digest(original), "immutableBaselineBlob": BASELINE_BLOB,
+               "baselineComposition": "Reviewed prefix overload retained; only GetLocalNow changed to GetUtcNow",
+               "immutableTestSha256": digest(test_bytes),
                "baselineSixLocalFailedEightControlsPassed": True, "candidateFourteenPassed": True, "restoredFullPassed": len(restored),
                "prior1567IdentitiesRetained": True, "originalFullTrxSha256": digest(original_full[0].read_bytes()),
                "sourceRestored": True, "commands": commands,

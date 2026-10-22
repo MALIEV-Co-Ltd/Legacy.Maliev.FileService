@@ -1,0 +1,283 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0f5e345e7608fe5ae525923388faf3a1885e5908",
+  "sourceTree": "ce728af8a962d8217bf099f95ffa5f7a5163ded3",
+  "baselineFullCount": 1669,
+  "additionalCases": 18,
+  "expectedFullCount": 1687,
+  "sources": [
+    {
+      "path": "Legacy.Maliev.FileService.Application/Services/ObjectNamePolicy.cs",
+      "preGitBlob": "8ff030998a191dddf62eebc51f1c09dfe439dfce",
+      "postGitBlob": "62d5af43c200c3352f2c1a5480d0da750781ed83",
+      "preSha256": "20c413c5e134de76ab9b2a66b368c3637a14c6c30776fe5984c52fddb425ff95",
+      "postSha256": "dc6a7134757be444e7cc149200b1184169db4f5e10303eb93d2494b494074ed8",
+      "preBytes": 2816,
+      "postBytes": 4357,
+      "inverse": [
+        {
+          "post": "    private static string RequireObjectNameSize(string objectName)\n    {\n        // The GCS UTF-8 byte limit also bounds the journals' 1024-character columns.\n        if (Encoding.UTF8.GetByteCount(objectName) > 1024)\n            throw new FileUploadValidationException(\"Object name is too long\");\n\n        return objectName;\n    }\n\n    private string BuildLegacyDefaultPrefix(Guid uploadId)",
+          "pre": "    private string BuildLegacyDefaultPrefix(Guid uploadId)"
+        },
+        {
+          "post": "        RequireObjectNameSize(NormalizeObjectName($\"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}\", allowTrailingSlash: false));",
+          "pre": "        NormalizeObjectName($\"{options.QuarantinePrefix}/{operationId:N}/{finalObjectName}\", allowTrailingSlash: false);"
+        },
+        {
+          "post": "        return RequireObjectNameSize(finalName.ToLowerInvariant());",
+          "pre": "        return finalName.ToLowerInvariant();"
+        },
+        {
+          "post": "using System.Text;\nusing Legacy.Maliev.FileService.Application.Models;",
+          "pre": "using Legacy.Maliev.FileService.Application.Models;"
+        },
+        {
+          "post": "    public string BuildFinalObjectName(string? path, string fileName, Guid uploadId) =>\n        BuildFinalObjectName(path, fileName, uploadId, out _);\n\n    internal string BuildFinalObjectName(string? path, string fileName, Guid uploadId, out string normalizedObjectName)\n    {\n        var safeFileName = Path.GetFileName(fileName?.Replace('\\\\', '/'));\n        if (string.IsNullOrWhiteSpace(safeFileName) || safeFileName is \".\" or \"..\")\n        {\n            throw new FileUploadValidationException(\"File name is required\");\n        }\n\n        // Keep the existing replay fingerprint's separator aliases on one destination.\n        var customPrefix = string.IsNullOrWhiteSpace(path) ? null : path.Replace('\\\\', '/').Trim('/');\n        var prefix = customPrefix is null\n            ? BuildLegacyDefaultPrefix(uploadId)\n            : NormalizeObjectName(customPrefix, allowTrailingSlash: true);\n        var finalName = NormalizeObjectName($\"{prefix}/{safeFileName}\", allowTrailingSlash: false);\n        normalizedObjectName = finalName.ToLowerInvariant();\n        if (customPrefix is not null)\n        {\n            if (path is not null && path.Any(char.IsControl))\n                throw new FileUploadValidationException(\"Object name is invalid\");\n\n            // Preserve prefix padding in storage identity, while callers guard the canonical safety name.\n            var leadingPaddingLength = customPrefix.Length - customPrefix.TrimStart().Length;\n            var trailingPaddingStart = customPrefix.TrimEnd().Length;\n            var prefixBoundary = finalName.LastIndexOf('/');\n            finalName = customPrefix[..leadingPaddingLength] + finalName.Insert(prefixBoundary, customPrefix[trailingPaddingStart..]);\n        }\n\n        return finalName.ToLowerInvariant();\n    }\n\n",
+          "pre": "    public string BuildFinalObjectName(string? path, string fileName, Guid uploadId)\n    {\n        var safeFileName = Path.GetFileName(fileName?.Replace('\\\\', '/'));\n        if (string.IsNullOrWhiteSpace(safeFileName) || safeFileName is \".\" or \"..\")\n        {\n            throw new FileUploadValidationException(\"File name is required\");\n        }\n\n        var prefix = string.IsNullOrWhiteSpace(path)\n            ? BuildLegacyDefaultPrefix(uploadId)\n            : NormalizeObjectName(path, allowTrailingSlash: true);\n        return NormalizeObjectName($\"{prefix}/{safeFileName}\", allowTrailingSlash: false).ToLowerInvariant();\n    }\n\n"
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Application/Services/FileApplicationService.cs",
+      "preGitBlob": "627cc44ede9485fd758c1e398f7ac1caf902fc22",
+      "postGitBlob": "bb9dce564d56f6e2ac14a3816bf0d9d9dedda5b2",
+      "preSha256": "971371b3fb0531a7a0f76399779a3de9ce73675f44e8c45bb9317c2369ce90bd",
+      "postSha256": "c4c9b56db6f9f93a202ab3b1fe61b3a5ae631acaf9b6c2cbbae3761cf8434ad9",
+      "preBytes": 22461,
+      "postBytes": 22884,
+      "inverse": [
+        {
+          "post": "                || move.SourceObjectName != quarantineName",
+          "pre": "                || move.SourceObjectName != names.BuildQuarantineObjectName(operationId, objectName)"
+        },
+        {
+          "post": "            RequireGenericObject(normalizedObjectName);\n            var quarantineName = names.BuildQuarantineObjectName(operationId, objectName);\n            var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);",
+          "pre": "            RequireGenericObject(normalizedObjectName);\n            var move = await moveJournal.FindAsync(MoveId(operationId, objectName), cancellationToken);"
+        },
+        {
+          "post": "            foreach (var (file, finalName, quarantineName) in destinations)\n            {",
+          "pre": "            foreach (var file in files)\n            {\n                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);\n                RequireGenericObject(normalizedObjectName);\n                var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);"
+        },
+        {
+          "post": "        files = snapshot;\n\n        // Validate every exact coordinate before persisting any intent or uploading a batch member.\n        var destinations = files.Select(file =>\n        {\n            var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);\n            RequireGenericObject(normalizedObjectName);\n            var quarantineName = names.BuildQuarantineObjectName(operationId, finalName);\n            return (File: file, FinalName: finalName, QuarantineName: quarantineName);\n        }).ToArray();\n\n        var promoted",
+          "pre": "        files = snapshot;\n\n        var promoted"
+        },
+        {
+          "post": "                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);\n                RequireGenericObject(normalizedObjectName);",
+          "pre": "                var finalName = names.BuildFinalObjectName(path, file.FileName, operationId);\n                RequireGenericObject(finalName);"
+        },
+        {
+          "post": "            var objectName = names.BuildFinalObjectName(path, file.FileName, operationId, out var normalizedObjectName);\n            RequireGenericObject(normalizedObjectName);",
+          "pre": "            var objectName = names.BuildFinalObjectName(path, file.FileName, operationId);\n            RequireGenericObject(objectName);"
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Application/ObjectNamePolicyTests.cs",
+      "preGitBlob": "10789963068c5ad38637b7007e121b6c19500966",
+      "postGitBlob": "52c6d52f9bde4eaa73fe8283b76f8e3b67ccdb22",
+      "preSha256": "f0987bc10f6d58a485dbbb38cdcdae22656fbaa41a123c784c5fbc33989e5d6f",
+      "postSha256": "3e67c325ecd6e5bcd4506804851109211d9ec7f8d315d8113221e173a4f2ce8b",
+      "preBytes": 3196,
+      "postBytes": 8279,
+      "inverse": [
+        {
+          "post": "    /// <summary>Checks the UTF-8 limit after restoring literal prefix padding and lower-casing.</summary>\n    /// <param name=\"scenario\">The exact or overflowing ASCII or multibyte padding boundary.</param>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    [InlineData(2)]\n    [InlineData(3)]\n    public void BuildFinalObjectName_ReconstructedUtf8Boundary_PreservesOrRejects(int scenario)\n    {\n        var (padding, count, accepted, expectedBytes) = scenario switch\n        {\n            0 => (' ', 1014, true, 1024),\n            1 => (' ', 1015, false, 1025),\n            2 => ('\\u00a0', 507, true, 1024),\n            _ => ('\\u00a0', 508, false, 1026),\n        };\n        var path = new string(padding, count) + \"A\";\n        var expected = new string(padding, count) + \"a/part.stl\";\n        Assert.Equal(expectedBytes, System.Text.Encoding.UTF8.GetByteCount(expected));\n\n        if (accepted)\n            Assert.Equal(expected, policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty));\n        else\n            Assert.Throws<FileUploadValidationException>(() => policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty));\n    }\n\n    /// <summary>Counts the actual configured quarantine prefix and operation identity in the storage byte boundary.</summary>\n    /// <param name=\"scenario\">The exact or overflowing ASCII, multibyte or custom quarantine prefix case.</param>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    [InlineData(2)]\n    [InlineData(3)]\n    [InlineData(4)]\n    [InlineData(5)]\n    public void BuildQuarantineObjectName_CompleteUtf8Boundary_PreservesOrRejects(int scenario)\n    {\n        var (path, quarantinePrefix, accepted, expectedBytes) = scenario switch\n        {\n            0 => (new string(' ', 969) + \"A\", \"_quarantine\", true, 1024),\n            1 => (new string(' ', 970) + \"A\", \"_quarantine\", false, 1025),\n            2 => (new string('\\u00a0', 484) + \"AA\", \"_quarantine\", true, 1024),\n            3 => (new string('\\u00a0', 485) + \"A\", \"_quarantine\", false, 1025),\n            4 => (new string(' ', 880) + \"A\", new string('q', 100), true, 1024),\n            _ => (new string(' ', 881) + \"A\", new string('q', 100), false, 1025),\n        };\n        var localPolicy = new ObjectNamePolicy(Options.Create(new FileStorageOptions\n        {\n            AllowedBuckets = [\"maliev.com\"],\n            QuarantinePrefix = quarantinePrefix,\n        }), TimeProvider.System);\n        var finalName = localPolicy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty);\n        var expected = $\"{quarantinePrefix}/{Guid.Empty:N}/{finalName}\";\n        Assert.Equal(expectedBytes, System.Text.Encoding.UTF8.GetByteCount(expected));\n\n        if (accepted)\n            Assert.Equal(expected, localPolicy.BuildQuarantineObjectName(Guid.Empty, finalName));\n        else\n            Assert.Throws<FileUploadValidationException>(() => localPolicy.BuildQuarantineObjectName(Guid.Empty, finalName));\n    }\n\n    [Fact]\n    public void RequireBucket_UnknownBucket_Rejects()",
+          "pre": "    [Fact]\n    public void RequireBucket_UnknownBucket_Rejects()"
+        },
+        {
+          "post": "    /// <summary>Preserves padding in an explicit source-compatible custom upload prefix.</summary>\n    /// <param name=\"path\">The literal custom prefix whose spaces belong to the selected storage object.</param>\n    /// <param name=\"expectedObjectName\">The independently derived lower-case object name retaining the original prefix padding.</param>\n    [Theory]\n    [InlineData(\" Uploads/Customer \", \" uploads/customer /part.stl\")]\n    [InlineData(\"Uploads/Customer\\u00a0\", \"uploads/customer\\u00a0/part.stl\")]\n    public void BuildFinalObjectName_CustomPath_PreservesOriginalPadding(string path, string expectedObjectName)\n    {\n        var actual = policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty);\n\n        Assert.Equal(expectedObjectName, actual);\n    }\n\n",
+          "pre": ""
+        },
+        {
+          "post": "    /// <summary>Rejects traversal and raw controls before padding can become an upload object coordinate.</summary>\n    /// <param name=\"path\">The unsafe custom prefix that must fail the established upload safety checks.</param>\n    [Theory]\n    [InlineData(\"/\")]\n    [InlineData(\"\\\\\\\\\")]\n    [InlineData(\" ../escape \")]\n    [InlineData(\"\\tUploads/Customer\")]\n    [InlineData(\"Uploads/Customer\\n\")]\n    [InlineData(\"Uploads/\\u0001/Customer\")]\n    public void BuildFinalObjectName_PaddedUnsafePath_Rejects(string path)\n    {\n        Assert.Throws<FileUploadValidationException>(() => policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty));\n    }\n\n",
+          "pre": ""
+        },
+        {
+          "post": "    /// <summary>Restores outer padding at the validated prefix boundary after leading separator cleanup exposes spaces.</summary>\n    /// <param name=\"path\">The custom prefix whose separator cleanup can shorten its validated form.</param>\n    /// <param name=\"expectedObjectName\">The destination retaining established separator normalization and any outer prefix padding.</param>\n    [Theory]\n    [InlineData(\"/          A\", \"          a/part.stl\")]\n    [InlineData(\"/ A \", \" a /part.stl\")]\n    public void BuildFinalObjectName_SeparatorExposedPadding_UsesValidatedPrefixBoundary(string path, string expectedObjectName)\n    {\n        Assert.Equal(expectedObjectName, policy.BuildFinalObjectName(path, \"PART.STL\", Guid.Empty));\n    }\n\n",
+          "pre": ""
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Application/FileApplicationServiceTests.cs",
+      "preGitBlob": "9cbaee9d3925e436d563b767754fd71ab0d092eb",
+      "postGitBlob": "6a932e4a0e992c14c62ae8891101a92926f821f3",
+      "preSha256": "d85a574d93ed0c409bf9e291ef66dec80eb031c9a5a4063025c95e3a90b4e9c9",
+      "postSha256": "da6d6f148482c86d901f1d74dd9b423b75d20d65d40e34cc09062c319ceaaef3",
+      "preBytes": 41583,
+      "postBytes": 52915,
+      "inverse": [
+        {
+          "post": ".Returns(Task.FromResult(true));",
+          "pre": ".ReturnsAsync(true);"
+        },
+        {
+          "post": ".Returns(Task.FromResult(new UploadAcquireResult(UploadAcquireState.Acquired, \"reservation\", EffectivePath: path)));",
+          "pre": ".ReturnsAsync(new UploadAcquireResult(UploadAcquireState.Acquired, \"reservation\", EffectivePath: path));"
+        },
+        {
+          "post": "            intents ?? new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);",
+          "pre": "            new RecordingQuarantineUploadIntent(), new UploadSnapshotCapture(), moveJournal);"
+        },
+        {
+          "post": "            QuarantinePrefix = quarantinePrefix,",
+          "pre": "            QuarantinePrefix = \"_quarantine\","
+        },
+        {
+          "post": "        bool writesEnabled = true,\n        IQuarantineUploadIntent? intents = null,\n        string quarantinePrefix = \"_quarantine\")\n",
+          "pre": "        bool writesEnabled = true)\n"
+        },
+        {
+          "post": "    /// <summary>Rejects an invalid complete batch before any recovery intent, scanner, journal or storage call.</summary>\n    /// <param name=\"scenario\">An overflowing final name, quarantine name, later filename or configured prefix.</param>\n    /// <returns>A task completing after the validation failure and untouched boundaries are checked.</returns>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    [InlineData(2)]\n    [InlineData(3)]\n    [InlineData(4)]\n    public async Task UploadAsync_OversizedCoordinate_RejectsWholeBatchBeforeIntent(int scenario)\n    {\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);\n        var scans = 0;\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean), () => scans++),\n            repository, intents: intents.Object, quarantinePrefix: scenario == 4 ? new string('q', 1000) : \"_quarantine\");\n        var path = scenario switch\n        {\n            0 => new string(' ', 1015) + \"A\",\n            1 => new string(' ', 970) + \"A\",\n            2 => new string('\\u00a0', 485) + \"A\",\n            _ => \"A\",\n        };\n        IUploadFile[] files = scenario == 3\n            ? [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1]),\n               new MemoryUploadFile(new string('f', 980) + \".STL\", \"model/stl\", [2])]\n            : [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1])];\n\n        await Assert.ThrowsAsync<FileUploadValidationException>(() =>\n            service.UploadAsync(\"maliev.com\", path, files, Guid.Empty, default));\n\n        intents.VerifyNoOtherCalls();\n        Assert.Equal(0, scans);\n        Assert.Empty(storage.Uploaded);\n        Assert.Empty(storage.Moved);\n        Assert.Empty(storage.Deleted);\n        Assert.Empty(storage.Signed);\n        Assert.Empty(repository.Uploads);\n        Assert.Equal(0, repository.AddRangeCallCount);\n        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);\n    }\n\n    /// <summary>Retains exact legal padding at the complete quarantine byte limit through journal and metadata submission.</summary>\n    /// <param name=\"scenario\">The ASCII or multibyte padding boundary.</param>\n    /// <returns>A task completing after the unchanged literal upload coordinates are verified.</returns>\n    [Theory]\n    [InlineData(0)]\n    [InlineData(1)]\n    public async Task UploadAsync_ExactQuarantineByteLimit_PreservesLiteralIdentity(int scenario)\n    {\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);\n        var path = scenario == 0 ? new string(' ', 969) + \"A\" : new string('\\u00a0', 484) + \"AA\";\n        var expected = scenario == 0 ? new string(' ', 969) + \"a/part.stl\" : new string('\\u00a0', 484) + \"aa/part.stl\";\n        var operationId = Guid.Parse(\"5d034fac-25b1-4ba0-bfe2-502ab26471ca\");\n\n        var result = await service.UploadAsync(\"maliev.com\", path,\n            [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1])], operationId, default);\n\n        var quarantine = Assert.Single(storage.Uploaded).ObjectName;\n        Assert.Equal($\"_quarantine/{operationId:N}/{expected}\", quarantine);\n        Assert.Equal(1024, System.Text.Encoding.UTF8.GetByteCount(quarantine));\n        Assert.Equal(expected, Assert.Single(storage.Moved).DestinationObjectName);\n        Assert.Equal(expected, Assert.Single(repository.Uploads).Name);\n        Assert.Equal(expected, Assert.Single(result.Object).ObjectName);\n        var evidence = Assert.Single(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence).Value;\n        Assert.Equal(quarantine, evidence.SourceObjectName);\n        Assert.Equal(expected, evidence.DestinationObjectName);\n        Assert.Equal(\"MetadataCommitted\", evidence.State);\n    }\n\n    /// <summary>Releases replay reservations after deterministic name rejection, so retries never enter unknown reconciliation.</summary>\n    /// <returns>A task completing after two rejected attempts release their reservations without storage effects.</returns>\n    [Fact]\n    public async Task UploadAsync_OversizedCoordinate_ReleasesReplayReservationOnEveryAttempt()\n    {\n        var path = new string(' ', 970) + \"A\";\n        var store = new Moq.Mock<IUploadIdempotencyStore>(Moq.MockBehavior.Strict);\n        store.Setup(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()))\n            .ReturnsAsync(new UploadAcquireResult(UploadAcquireState.Acquired, \"reservation\", EffectivePath: path));\n        store.Setup(value => value.RenewAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>())).ReturnsAsync(true);\n        store.Setup(value => value.ReleaseAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);\n        var intents = new Moq.Mock<IQuarantineUploadIntent>(Moq.MockBehavior.Strict);\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository, intents: intents.Object);\n        var coordinator = new IdempotentUploadCoordinator(store.Object, new UploadSnapshotCapture());\n        IUploadFile[] files = [new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1])];\n\n        for (var attempt = 0; attempt < 2; attempt++)\n            await Assert.ThrowsAsync<FileUploadValidationException>(() => coordinator.ExecuteAsync(\n                \"intranet-service\", \"workflow-byte-boundary\", \"maliev.com\", path, files,\n                (operationId, effectivePath, captured, token) => service.UploadAsync(\"maliev.com\", effectivePath, captured, operationId, token),\n                (_, _, _, _) => throw new InvalidOperationException(\"Validation must never require reconciliation\"), default));\n\n        store.Verify(value => value.AcquireAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), path, Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));\n        store.Verify(value => value.RenewAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));\n        store.Verify(value => value.ReleaseAsync(Moq.It.IsAny<string>(), \"reservation\", Moq.It.IsAny<CancellationToken>()), Moq.Times.Exactly(2));\n        store.VerifyNoOtherCalls();\n        intents.VerifyNoOtherCalls();\n        Assert.Empty(storage.Uploaded);\n        Assert.Empty(storage.Moved);\n        Assert.Empty(repository.Uploads);\n        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);\n    }\n\n    private static FileApplicationService CreateService(",
+          "pre": "    private static FileApplicationService CreateService("
+        },
+        {
+          "post": "    /// <summary>Retains the literal custom-prefix coordinate through promotion, metadata response loss, and deterministic recovery.</summary>\n    /// <param name=\"path\">The padded custom prefix supplied to both the upload and its recovery attempt.</param>\n    /// <param name=\"expectedObjectName\">The independently derived lower-case destination retaining the source prefix padding.</param>\n    /// <returns>A task that completes after checking literal metadata, journal, and generation-bound recovery coordinates.</returns>\n    [Theory]\n    [InlineData(\" Uploads/Customer \", \" uploads/customer /part.stl\")]\n    [InlineData(\"Uploads/Customer\\u00a0\", \"uploads/customer\\u00a0/part.stl\")]\n    public async Task UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate(string path, string expectedObjectName)\n    {\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository { ThrowAfterAdd = true };\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);\n        var operationId = Guid.Parse(\"5d034fac-25b1-4ba0-bfe2-502ab26471ca\");\n        var files = new IUploadFile[] { new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1, 2, 3]) };\n\n        await Assert.ThrowsAsync<UploadOutcomeUnknownException>(() =>\n            service.UploadAsync(\"maliev.com\", path, files, operationId, default));\n\n        Assert.Equal(expectedObjectName, Assert.Single(storage.Moved).DestinationObjectName);\n        Assert.Equal(expectedObjectName, Assert.Single(repository.Uploads).Name);\n        var journal = Assert.IsType<RecordingMoveJournal>(storage.Journal);\n        var evidence = Assert.Single(journal.Evidence).Value;\n        Assert.Equal(expectedObjectName, evidence.DestinationObjectName);\n        Assert.Equal($\"_quarantine/{operationId:N}/{expectedObjectName}\", evidence.SourceObjectName);\n\n        Assert.Null(await service.ReconcileUploadAsync(\"maliev.com\", path.Trim(), files, operationId, default));\n        Assert.Empty(storage.GenerationSigned);\n        repository.ThrowAfterAdd = false;\n        var recovered = await service.ReconcileUploadAsync(\"maliev.com\", path, files, operationId, default);\n\n        Assert.NotNull(recovered);\n        Assert.Equal(expectedObjectName, Assert.Single(recovered.Object).ObjectName);\n        var signed = Assert.Single(storage.GenerationSigned);\n        Assert.Equal(expectedObjectName, signed.ObjectName);\n        Assert.Equal(31, signed.Generation);\n        Assert.Equal(1, repository.AddRangeCallCount);\n        Assert.Single(repository.Uploads);\n        Assert.Single(journal.Evidence);\n    }\n\n",
+          "pre": ""
+        },
+        {
+          "post": "\n    /// <summary>Rejects padded reserved roots before upload or recovery crosses a storage boundary.</summary>\n    /// <param name=\"path\">The padded protected namespace supplied as a custom prefix.</param>\n    /// <param name=\"reconcile\">Whether to exercise recovery instead of initial upload.</param>\n    /// <returns>A task that completes after checking rejection and untouched recording boundaries.</returns>\n    [Theory]\n    [InlineData(\" customer-documents \", false)]\n    [InlineData(\" customer-documents \", true)]\n    [InlineData(\" / customer-documents \", false)]\n    [InlineData(\" / customer-documents \", true)]\n    public async Task UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(string path, bool reconcile)\n    {\n        var storage = new RecordingStorage();\n        var repository = new RecordingRepository();\n        var service = CreateService(storage, new StubScanner(new(FileSafetyVerdict.Clean)), repository);\n        var operationId = Guid.Parse(\"5d034fac-25b1-4ba0-bfe2-502ab26471ca\");\n        var files = new IUploadFile[] { new MemoryUploadFile(\"PART.STL\", \"model/stl\", [1]) };\n\n        if (reconcile)\n        {\n            await Assert.ThrowsAsync<FileUploadValidationException>(() =>\n                service.ReconcileUploadAsync(\"maliev.com\", path, files, operationId, default));\n        }\n        else\n        {\n            await Assert.ThrowsAsync<FileUploadValidationException>(() =>\n                service.UploadAsync(\"maliev.com\", path, files, operationId, default));\n        }\n\n        Assert.Empty(storage.Uploaded);\n        Assert.Empty(storage.Moved);\n        Assert.Empty(storage.Signed);\n        Assert.Empty(storage.GenerationSigned);\n        Assert.Empty(repository.Uploads);\n        Assert.Empty(Assert.IsType<RecordingMoveJournal>(storage.Journal).Evidence);\n    }\n\n",
+          "pre": ""
+        }
+      ]
+    },
+    {
+      "path": "Legacy.Maliev.FileService.Tests/Application/IdempotentUploadCoordinatorTests.cs",
+      "preGitBlob": "280c3764b5fb42c4152ad1391ea4f114654bd51e",
+      "postGitBlob": "ab453eeaa2a534b1d03b621043d2e41607dd3cba",
+      "preSha256": "99dfad523d462c71bae8cc7aff9695adb810b6a4a55a450f50fe55559dc6de27",
+      "postSha256": "955f19d46d6f7f294edfbd0e76b03244d59ec0784dc8cc0c9ae25711753d2e66",
+      "preBytes": 17249,
+      "postBytes": 19288,
+      "inverse": [
+        {
+          "post": "\n    /// <summary>Keeps slash aliases of a padded prefix on one literal destination and one execution.</summary>\n    /// <param name=\"firstPath\">The first custom prefix stored with the replay identity.</param>\n    /// <param name=\"retryPath\">The equivalent prefix used by the retry.</param>\n    /// <returns>A task that completes after checking the literal destination and completed response replay.</returns>\n    [Theory]\n    [InlineData(\"/ A \", \" A \")]\n    [InlineData(\" A \", \"/ A \")]\n    public async Task PaddedPrefixSlashAlias_ReplaysSameLiteralDestination(string firstPath, string retryPath)\n    {\n        var store = new MemoryStore();\n        var coordinator = new IdempotentUploadCoordinator(store, new UploadSnapshotCapture());\n        var policy = new ObjectNamePolicy(Microsoft.Extensions.Options.Options.Create(\n            new FileStorageOptions { AllowedBuckets = [\"maliev.com\"] }), TimeProvider.System);\n        var executions = 0;\n\n        var first = await Run(firstPath);\n        var replay = await Run(retryPath);\n\n        Assert.Equal(\" a /part.stl\", Assert.Single(first.Object).ObjectName);\n        Assert.Equal(\" a /part.stl\", policy.BuildFinalObjectName(retryPath, \"PART.STL\", Guid.Empty));\n        Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(replay));\n        Assert.Equal(1, executions);\n        Assert.Equal(\"completed\", store.State);\n\n        Task<UploadResultResponse> Run(string path) => coordinator.ExecuteAsync(\n            \"intranet-service\", \"workflow-42\", \"maliev.com\", path, [new File(\"PART.STL\", \"model/stl\", [1])],\n            (operationId, effectivePath, _, _) =>\n            {\n                executions++;\n                return Task.FromResult(new UploadResultResponse([new(\"maliev.com\",\n                    policy.BuildFinalObjectName(effectivePath, \"PART.STL\", operationId), new Uri(\"https://storage.test/signed\"))]));\n            },\n            (_, _, _, _) => throw new InvalidOperationException(\"Completed replay must not reconcile.\"),\n            default);\n    }\n\n",
+          "pre": ""
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_CustomPath_PreservesOriginalPadding",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_CustomPath_PreservesOriginalPadding(path: \" Uploads/Customer \", expectedObjectName: \" uploads/customer /part.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_CustomPath_PreservesOriginalPadding",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_CustomPath_PreservesOriginalPadding(path: \"Uploads/Customer \", expectedObjectName: \"uploads/customer /part.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_PaddedUnsafePath_Rejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_PaddedUnsafePath_Rejects(path: \"/\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_PaddedUnsafePath_Rejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_PaddedUnsafePath_Rejects(path: \"\\\\\\\\\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_PaddedUnsafePath_Rejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_PaddedUnsafePath_Rejects(path: \" ../escape \")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_PaddedUnsafePath_Rejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_PaddedUnsafePath_Rejects(path: \"\\tUploads/Customer\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_PaddedUnsafePath_Rejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_PaddedUnsafePath_Rejects(path: \"Uploads/Customer\\n\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_PaddedUnsafePath_Rejects",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_PaddedUnsafePath_Rejects(path: \"Uploads/\\x01/Customer\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_SeparatorExposedPadding_UsesValidatedPrefixBoundary",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_SeparatorExposedPadding_UsesValidatedPrefixBoundary(path: \"/          A\", expectedObjectName: \"          a/part.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests",
+      "method": "BuildFinalObjectName_SeparatorExposedPadding_UsesValidatedPrefixBoundary",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.ObjectNamePolicyTests.BuildFinalObjectName_SeparatorExposedPadding_UsesValidatedPrefixBoundary(path: \"/ A \", expectedObjectName: \" a /part.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate(path: \" Uploads/Customer \", expectedObjectName: \" uploads/customer /part.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAndReconcile_CustomPrefixPadding_PreservesLiteralCoordinate(path: \"Uploads/Customer \", expectedObjectName: \"uploads/customer /part.stl\")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(path: \" customer-documents \", reconcile: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(path: \" customer-documents \", reconcile: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(path: \" / customer-documents \", reconcile: False)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests",
+      "method": "UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.FileApplicationServiceTests.UploadAndReconcile_PaddedReservedRoot_RejectsBeforeStorage(path: \" / customer-documents \", reconcile: True)",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.IdempotentUploadCoordinatorTests",
+      "method": "PaddedPrefixSlashAlias_ReplaysSameLiteralDestination",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.IdempotentUploadCoordinatorTests.PaddedPrefixSlashAlias_ReplaysSameLiteralDestination(firstPath: \"/ A \", retryPath: \" A \")",
+      "executions": 1
+    },
+    {
+      "class": "Legacy.Maliev.FileService.Tests.Application.IdempotentUploadCoordinatorTests",
+      "method": "PaddedPrefixSlashAlias_ReplaysSameLiteralDestination",
+      "testName": "Legacy.Maliev.FileService.Tests.Application.IdempotentUploadCoordinatorTests.PaddedPrefixSlashAlias_ReplaysSameLiteralDestination(firstPath: \" A \", retryPath: \"/ A \")",
+      "executions": 1
+    }
+  ],
+  "dateBaseline": {
+    "immutableCommit": "9bf31c5ab0f72ef1fcbd6afbde4d51da59ec6826",
+    "immutableBlob": "ef56c94c81e3f70285df9ec102ee070935990f18",
+    "immutableSha256": "581a73156f78913cff6acd86f375ddf9f777d6a0458959fd17e182e629a655db",
+    "composedBaselineSha256": "fd4f8753dfcdbe81d92e0be0ebad9da636f99bc7f34ae5c27c0c7629d8f53b32"
+  },
+  "displayCalibration": {
+    "status": "source-derived exact names; actual hosted TRX must agree",
+    "priorInventory": "docs/local-date-prior1567-inventory.json",
+    "escapes": "Prior inventory uses escaped backslash, tab/newline and \\x01 C0. NBSP remains literal Unicode per xUnit formatter; no normalization fallback.",
+    "formatterSource": "https://github.com/xunit/assert.xunit/blob/main/Sdk/ArgumentFormatter.cs"
+  }
+}
