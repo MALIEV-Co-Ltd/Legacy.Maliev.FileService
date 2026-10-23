@@ -6,7 +6,12 @@ from prove_local_date import verify_full as verify_validation_full
 from prove_local_date import verify_signing_focus as verify_current_signing_focus
 
 
-verify_console_full = verify_validation_full
+verify_health_full = verify_validation_full
+
+
+def verify_console_full(*args, **kwargs):
+    # Every accepted 1712-or-earlier control keeps its original exact roster.
+    return verify_health_full(*args, include_legacy_health=False, **kwargs)
 
 
 def verify_boundary_full(*args, **kwargs):
@@ -1628,3 +1633,59 @@ class ReviewedPrivateConsoleSuccessorTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     prove_private_console_focus(replica, Path(directory) / "changed-source",
                                                 source_changing_runner, ["test", "reviewed.csproj"], "a" * 40)
+
+class ReviewedLegacyHealthSuccessorTests(unittest.TestCase):
+    def rows(self):
+        rows = ReviewedPrivateConsoleSuccessorTests().rows()
+        return rows + [dict(**{"class": cls}, method=method, name=name, outcome="Passed",
+                            message="", stack="", errorInfo=False)
+                       for cls, method, name in reviewed_legacy_health_additions().elements()]
+
+    def test_current_full_retains_all1712_and_exact_five_health_cases(self):
+        import unittest.mock
+        rows = self.rows()
+        self.assertEqual(1717, len(rows))
+        self.assertEqual(ReviewedPrivateConsoleSuccessorTests().rows(), rows[:1712])
+        with unittest.mock.patch("prove_local_date.read_trx", return_value=rows):
+            self.assertEqual(rows, verify_health_full("controlled", prior_inventory()))
+        for mutation in ("old1712", "missing", "duplicate", "extra", "replacement",
+                         "wrong-class", "wrong-method", "failed", "skipped", "passing-error"):
+            changed = [dict(row) for row in rows]
+            if mutation == "old1712":
+                changed = changed[:1712]
+            elif mutation == "missing":
+                changed.pop()
+            elif mutation == "duplicate":
+                changed[-1] = dict(changed[-2])
+            elif mutation == "extra":
+                changed.append(dict(changed[-1]))
+            elif mutation == "replacement":
+                changed[-1]["name"] = "unreviewed"
+            elif mutation in ("wrong-class", "wrong-method"):
+                changed[-1]["class" if mutation == "wrong-class" else "method"] = "Unreviewed"
+            elif mutation == "passing-error":
+                changed[-1]["errorInfo"] = True
+            else:
+                changed[-1]["outcome"] = "Failed" if mutation == "failed" else "NotExecuted"
+            with self.subTest(mutation=mutation), unittest.mock.patch("prove_local_date.read_trx", return_value=changed):
+                with self.assertRaises(ValueError):
+                    verify_health_full("mutated", prior_inventory())
+
+    def test_health_enrollment_requires_all_three_exact_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in LEGACY_HEALTH_SOURCES:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(Path(name).read_bytes())
+            self.assertEqual(5, sum(reviewed_legacy_health_additions(root).values()))
+            for name in LEGACY_HEALTH_SOURCES:
+                target = root / name
+                original = target.read_bytes()
+                target.write_bytes(original + b" ")
+                with self.subTest(changed=name), self.assertRaises(ValueError):
+                    reviewed_legacy_health_additions(root)
+                target.unlink()
+                with self.subTest(missing=name), self.assertRaises(FileNotFoundError):
+                    reviewed_legacy_health_additions(root)
+                target.write_bytes(original)

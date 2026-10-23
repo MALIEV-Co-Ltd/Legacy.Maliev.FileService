@@ -839,9 +839,32 @@ def prove_private_console_focus(repo, output, run, tests, head):
     return rows
 
 
+LEGACY_HEALTH_SOURCES = {
+    "Legacy.Maliev.FileService.Api/Http/FileHostTransportPolicy.cs": "85ef07c266f2dff726d30f7e8d61e0b1b4a0577bdd5dd1e6bcffb2c0c337f81c",
+    "Legacy.Maliev.FileService.Api/Controllers/LegacyUploadHealthController.cs": "9c88fccbc710c71572d5f5ccb01392e407de28863c27404f9fb916871574dce1",
+    "Legacy.Maliev.FileService.Tests/OpenApi/LegacyUploadHealthHttpTests.cs": "1fccbb62c46f99ecba8590507b8d65c897c7cb284d94339820379edd0120c39b",
+}
+LEGACY_HEALTH_CLASS = "Legacy.Maliev.FileService.Tests.OpenApi.LegacyUploadHealthHttpTests"
+LEGACY_HEALTH_METHODS = (
+    "LegacyAndCurrentLiveness_StayAnonymousAndNeverEvaluateDependencies",
+    "LegacyReadiness_PreservesUnhealthyStatusAndHidesPrivateDetails",
+    "LegacyReadiness_EvaluatesUntaggedChecksUnderCurrentStrongerPolicy",
+    "TrustedHttpEdge_ExactLegacyProbesRemainReachableForEveryUnprovenScheme",
+    "TrustedHttpEdge_NearHealthAndBusinessPathsRemainHttpsGatedBeforeAuthentication",
+)
+
+
+def reviewed_legacy_health_additions(source_root=None):
+    root = Path(source_root or ".")
+    for path, expected_hash in LEGACY_HEALTH_SOURCES.items():
+        require(digest((root / path).read_bytes()) == expected_hash, "Reviewed legacy health source changed")
+    return Counter((LEGACY_HEALTH_CLASS, method, LEGACY_HEALTH_CLASS + "." + method)
+                   for method in LEGACY_HEALTH_METHODS)
+
+
 def verify_full(path, inventory, include_literal_delete=True, include_signed_download=True, include_literal_move=True,
                 include_redis_models=True, include_synchronous_signing=True, include_null_signing=True, include_request_observation=True,
-                include_validation_logging=True, include_upload_prefix=True, include_upload_size=True, include_private_console=True):
+                include_validation_logging=True, include_upload_prefix=True, include_upload_size=True, include_private_console=True, include_legacy_health=True):
     rows = read_trx(path, strict_clean_run=True)
     additions = reviewed_upload_additions()
     reconcile_additions = reviewed_reconcile_additions()
@@ -857,10 +880,11 @@ def verify_full(path, inventory, include_literal_delete=True, include_signed_dow
     prefix_additions = reviewed_upload_prefix_additions() if validation_additions and include_upload_prefix else Counter()
     size_additions = reviewed_upload_size_additions() if prefix_additions and include_upload_size else Counter()
     console_additions = reviewed_private_console_additions() if size_additions and include_private_console else Counter()
-    expected_count = 1712 if console_additions else 1705 if size_additions else 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
+    health_additions = reviewed_legacy_health_additions() if console_additions and include_legacy_health else Counter()
+    expected_count = 1717 if health_additions else 1712 if console_additions else 1705 if size_additions else 1687 if prefix_additions else 1669 if validation_additions else 1666 if observation_additions else 1663 if null_additions else 1661 if sync_additions else 1655 if redis_additions else 1648 if move_additions else 1640 if signed_additions else 1637 if include_literal_delete else 1614
     require(len(rows) == expected_count and all(r["outcome"] == "Passed" and not r["errorInfo"] for r in rows), "Full suite must pass exact reviewed roster")
     prior = Counter({(r["className"], r["method"], r["testName"]): r["executions"] for r in inventory["rows"]})
-    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions + size_additions + console_additions
+    expected = prior + new_identities() + additions + reconcile_additions + startup_additions + literal_additions + signed_additions + move_additions + redis_additions + sync_additions + null_additions + observation_additions + validation_additions + prefix_additions + size_additions + console_additions + health_additions
     require(sum(prior.values()) == 1567 and sum(expected.values()) == expected_count
             and Counter((r["class"], r["method"], r["name"]) for r in rows) == expected,
             "Full suite changed accepted1637 or reviewed signed download identities")

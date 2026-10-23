@@ -80,7 +80,9 @@ internal static class FileHostTransportPolicy
             context.Request.Headers.Remove(OriginalSchemeHeader);
             var probe = context.Request.Path.Equals("/file/liveness", StringComparison.OrdinalIgnoreCase)
                 || context.Request.Path.Equals("/file/readiness", StringComparison.OrdinalIgnoreCase)
-                || context.Request.Path.Equals("/file/aspire-liveness", StringComparison.OrdinalIgnoreCase);
+                || context.Request.Path.Equals("/file/aspire-liveness", StringComparison.OrdinalIgnoreCase)
+                || context.Request.Path.Equals("/uploads/liveness", StringComparison.OrdinalIgnoreCase)
+                || context.Request.Path.Equals("/uploads/readiness", StringComparison.OrdinalIgnoreCase);
             if (context.Items[TrustedEdgeKey] is true && !probe
                 && (context.Items[ValidEdgeSchemeKey] is not true || !accepted || !context.Request.IsHttps))
             {
