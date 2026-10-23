@@ -59,8 +59,14 @@ public sealed class DormantFileDeploymentManifestTests
         Assert.Equal("legacy-maliev-file", Scalar(metadata, "name"));
         Assert.Equal("maliev-legacy", Scalar(metadata, "namespace"));
         Assert.Equal("false", Scalar(Mapping(metadata, "annotations"), "legacy.maliev.com/deployment-enabled"));
+        Assert.Equal("1", Scalar(Mapping(metadata, "annotations"), "legacy.maliev.com/source-single-replica-target"));
         var spec = Mapping(root, "spec");
         Assert.Equal("0", Scalar(spec, "replicas"));
+        var strategy = Mapping(spec, "strategy");
+        Assert.Equal("RollingUpdate", Scalar(strategy, "type"));
+        var rollingUpdate = Mapping(strategy, "rollingUpdate");
+        Assert.Equal("1", Scalar(rollingUpdate, "maxSurge"));
+        Assert.Equal("0", Scalar(rollingUpdate, "maxUnavailable"));
         var template = Mapping(spec, "template");
         Assert.Equal(Scalar(Mapping(Mapping(spec, "selector"), "matchLabels"), "app.kubernetes.io/name"),
             Scalar(Mapping(Mapping(template, "metadata"), "labels"), "app.kubernetes.io/name"));
