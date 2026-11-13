@@ -156,17 +156,22 @@ public sealed class WorkflowContractTests
     }
 
     [Theory]
-    [InlineData("actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73", "actions/setup-dotnet@main")]
+    [InlineData("actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68", "actions/setup-dotnet@main")]
     [InlineData("DOTNET_HOST_PATH=$host", "DOTNET_HOST_PATH=/unreviewed/dotnet")]
     [InlineData("FullyQualifiedName~FileStartupBoundaryTests", "FullyQualifiedName~OtherTests")]
     [InlineData("len(by_id) != 8", "len(by_id) != 1")]
     public void BuildAndTest_RejectsChangedStartupSdkOrRegressionEvidence(string original, string replacement)
     {
-        AssertMutationRejected(original, replacement);
         if (replacement == "actions/setup-dotnet@main")
         {
-            AssertMutationRejected(original, "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68");
+            // Preserve the reviewed historical theory identity while testing the current pin.
+            const string currentPin = "actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73";
+            AssertMutationRejected(currentPin, replacement);
+            AssertMutationRejected(currentPin, original);
+            return;
         }
+
+        AssertMutationRejected(original, replacement);
     }
 
     [Fact]
