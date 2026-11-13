@@ -156,7 +156,8 @@ public sealed class WorkflowContractTests
     }
 
     [Theory]
-    [InlineData("actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68", "actions/setup-dotnet@main")]
+    [InlineData("actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73", "actions/setup-dotnet@main")]
+    [InlineData("actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73", "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68")]
     [InlineData("DOTNET_HOST_PATH=$host", "DOTNET_HOST_PATH=/unreviewed/dotnet")]
     [InlineData("FullyQualifiedName~FileStartupBoundaryTests", "FullyQualifiedName~OtherTests")]
     [InlineData("len(by_id) != 8", "len(by_id) != 1")]
@@ -543,7 +544,7 @@ internal static partial class WorkflowContractValidator
         if (name == "Select the hosted SDK for owned startup children")
         {
             return keys.SetEquals(["name", "uses", "with"])
-                && (GetOptional(step, "uses") as YamlScalarNode)?.Value == "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68"
+                && (GetOptional(step, "uses") as YamlScalarNode)?.Value == "actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73"
                 && GetOptional(step, "with") is YamlMappingNode inputs && inputs.Children.Count == 1
                 && (GetOptional(inputs, "dotnet-version") as YamlScalarNode)?.Value == "10.0.x";
         }
