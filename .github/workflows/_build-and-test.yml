@@ -25,14 +25,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults
-          ref: 7edcd961024868513fd5f373cab3dcb261197f77
+          ref: 173d63218d9142b34075bca87f5c6d933bcbdfb6
           path: .dependencies/Legacy.Maliev.ServiceDefaults
           persist-credentials: false
       - name: Check out Legacy.Maliev.CompatibilityContracts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: MALIEV-Co-Ltd/Legacy.Maliev.CompatibilityContracts
-          ref: 78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7
+          ref: fe17b8cea8ace3eef5434f8b29c9038f5c975613
           path: .dependencies/Legacy.Maliev.CompatibilityContracts
           persist-credentials: false
       - name: Check out approved offline image-plan producer
@@ -56,7 +56,7 @@ jobs:
       - name: Select the hosted SDK for owned startup children
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       - name: Supply the exact job SDK host to startup fixtures
         shell: bash
         run: |
@@ -67,6 +67,7 @@ jobs:
         uses: MALIEV-Co-Ltd/Legacy.Maliev.Workflows/actions/dotnet-validate@e3a6093324a24968876782153286f52db8b29fd8
         with:
           solution: Legacy.Maliev.FileService.slnx
+          dotnet-version: '11.0.x'
           use-local-maliev-dependencies: 'true'
       - name: Require original eight and seven additional startup boundary regressions
         shell: bash

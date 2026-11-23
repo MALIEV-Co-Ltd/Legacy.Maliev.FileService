@@ -88,8 +88,8 @@ public sealed class PublishWorkflowPermissionContractTests
         Assert.Equal("legacy-production", Scalar(inputs, "environment"));
         Assert.Equal("${{ vars.LEGACY_WORKLOAD_IDENTITY_PROVIDER }}", Scalar(inputs, "workload-identity-provider"));
         Assert.Equal("${{ vars.LEGACY_FILE_PUBLISHER_SERVICE_ACCOUNT }}", Scalar(inputs, "service-account"));
-        Assert.Equal("7edcd961024868513fd5f373cab3dcb261197f77", Scalar(inputs, "legacy-service-defaults-ref"));
-        Assert.Equal("78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7", Scalar(inputs, "compatibility-contracts-ref"));
+        Assert.Equal("173d63218d9142b34075bca87f5c6d933bcbdfb6", Scalar(inputs, "legacy-service-defaults-ref"));
+        Assert.Equal("fe17b8cea8ace3eef5434f8b29c9038f5c975613", Scalar(inputs, "compatibility-contracts-ref"));
     }
 
     private static YamlMappingNode Parse()

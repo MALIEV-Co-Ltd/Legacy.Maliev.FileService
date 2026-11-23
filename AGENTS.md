@@ -1,6 +1,6 @@
 # Legacy.Maliev.FileService
 
-This public repository is the sanitized .NET 10 compatibility extraction of
+This public repository is the sanitized .NET 11 compatibility extraction of
 `Maliev.UploadService` from the private `R:\maliev-web` monorepo.
 
 ## Non-negotiable boundaries
@@ -20,7 +20,7 @@ This public repository is the sanitized .NET 10 compatibility extraction of
 
 ## Service conventions
 
-- Runtime: .NET 10.
+- Runtime: .NET 11.
 - API documentation: Scalar/OpenAPI through `Maliev.Aspire.ServiceDefaults`; no Swagger.
 - Logging: built-in `ILogger<T>` at warning/error for actionable failures only.
 - Auth: granular `legacy-file.uploads.*` permissions on every business endpoint.
