@@ -45,8 +45,12 @@ public sealed class LegacyLiteralDeleteHttpBoundaryTests(PostgreSqlFixture fixtu
         await context.SaveChangesAsync(deadline.Token);
         await using var factory = new DeleteFactory(context.Database.GetConnectionString()!, literal, decoy,
             literalExists, decoyExists);
+        factory.UseKestrel(0);
         using var client = factory.Client();
-        using var response = await client.DeleteAsync("/Uploads?bucket=maliev.com&objectName=" + Uri.EscapeDataString(literal), deadline.Token);
+        var relative = "/Uploads?bucket=maliev.com&objectName=" + Uri.EscapeDataString(literal);
+        var exactUri = new Uri(new Uri(client.BaseAddress!, relative).OriginalString,
+            new UriCreationOptions { DangerousDisablePathAndQueryCanonicalization = true });
+        using var response = await client.DeleteAsync(exactUri, deadline.Token);
 
         Assert.Equal(literalExists ? HttpStatusCode.NoContent : HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(literalExists ? new[] { literal } : Array.Empty<string>(), factory.Deletes);

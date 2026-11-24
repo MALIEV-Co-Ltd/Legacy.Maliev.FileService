@@ -14,6 +14,8 @@ namespace Legacy.Maliev.FileService.Tests.Application;
 public sealed class InstantQuoteFileServiceTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-18T12:00:00Z");
+    // The final base64url sextet must have zero padding bits for a 32-byte token.
+    private static readonly string ValidSessionToken = new string('t', 42) + "s";
 
     [Fact]
     public async Task ReadCleanUpload_ReturnsOnlyExactOwnedGenerationAfterDigestVerification()
@@ -29,7 +31,7 @@ public sealed class InstantQuoteFileServiceTests
 
         var result = await CreateService(repository, storage).ReadCleanAsync(
             upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43), upload.Id, CancellationToken.None);
+            ValidSessionToken, upload.Id, CancellationToken.None);
         await using var content = result.Content;
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy);
@@ -62,13 +64,13 @@ public sealed class InstantQuoteFileServiceTests
         {
             await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
                 .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                    new string('t', 43), upload.Id, CancellationToken.None));
+                    ValidSessionToken, upload.Id, CancellationToken.None));
         }
         else
         {
             await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage)
                 .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                    new string('t', 43), upload.Id, CancellationToken.None));
+                    ValidSessionToken, upload.Id, CancellationToken.None));
         }
 
         Assert.Equal(expectedDownloads, storage.DownloadCount);
@@ -90,7 +92,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
             .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43), upload.Id, CancellationToken.None));
+                ValidSessionToken, upload.Id, CancellationToken.None));
         Assert.Equal(0, storage.DownloadCount);
     }
 
@@ -103,7 +105,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
             .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43), upload.Id, CancellationToken.None));
+                ValidSessionToken, upload.Id, CancellationToken.None));
         Assert.Equal(0, storage.DownloadCount);
     }
 
@@ -121,7 +123,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage)
             .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43), upload.Id, CancellationToken.None));
+                ValidSessionToken, upload.Id, CancellationToken.None));
     }
 
     [Fact]
@@ -138,7 +140,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage)
             .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43), upload.Id, CancellationToken.None));
+                ValidSessionToken, upload.Id, CancellationToken.None));
         Assert.Equal(1, storage.DownloadCount);
     }
 
@@ -175,7 +177,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository, storage)
             .ReadCleanAsync(upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43), upload.Id, CancellationToken.None));
+                ValidSessionToken, upload.Id, CancellationToken.None));
         Assert.Equal(1, storage.DownloadCount);
     }
 
@@ -203,7 +205,8 @@ public sealed class InstantQuoteFileServiceTests
     [Fact]
     public async Task LifecycleLogs_ContainOnlyOpaqueWorkflowDiagnosticsAndNoSensitiveUploadValues()
     {
-        const string token = "sensitive-session-token-value-123456789012";
+        var token = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("synthetic-sensitive-token")))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
         const string idempotencyKey = "sensitive-idempotency-key";
         const string customerFileName = "sensitive-customer-part.stl";
         var bytes = BinaryStl();
@@ -320,7 +323,7 @@ public sealed class InstantQuoteFileServiceTests
             CreateService(repository).UploadAsync(
                 repository.VerifySessionResult.Id,
                 new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43), new string('i', 16), sha, new MemoryStream(bytes),
+                ValidSessionToken, new string('i', 16), sha, new MemoryStream(bytes),
                 new InstantQuoteUploadMetadata("part.stl", "model/stl"), CancellationToken.None));
     }
 
@@ -342,7 +345,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
             CreateService(repository).FinalizeAsync(
-                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]),
                 CancellationToken.None));
     }
@@ -359,7 +362,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() =>
             CreateService(repository).RemoveAsync(
-                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 upload.Id, CancellationToken.None));
     }
 
@@ -377,7 +380,7 @@ public sealed class InstantQuoteFileServiceTests
         var response = await service.UploadAsync(
             repository.VerifySessionResult.Id,
             owner,
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             expectedSha,
             new NonSeekableStream(bytes),
@@ -408,7 +411,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuotePayloadTooLargeException>(() => service.UploadAsync(
             repository.VerifySessionResult.Id,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             new string('a', 64),
             new GeneratedStream(InstantQuoteFileContract.MaximumUploadBytes + 1),
@@ -426,7 +429,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuotePayloadTooLargeException>(() => service.UploadAsync(
             repository.VerifySessionResult.Id,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             new string('a', 64),
             Stream.Null,
@@ -446,7 +449,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuoteValidationException>(() => CreateService(repository, storage).UploadAsync(
             repository.VerifySessionResult.Id,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             sha,
             new ValidationAtEndStream(bytes),
@@ -475,7 +478,7 @@ public sealed class InstantQuoteFileServiceTests
         var response = await CreateService(repository).UploadAsync(
             stored.SessionId,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             stored.ExpectedSha256,
             new MemoryStream(BinaryStl()),
@@ -506,7 +509,7 @@ public sealed class InstantQuoteFileServiceTests
         var response = await CreateService(repository, storage).UploadAsync(
             stored.SessionId,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             stored.ExpectedSha256,
             Stream.Null,
@@ -536,7 +539,7 @@ public sealed class InstantQuoteFileServiceTests
         var exception = await Record.ExceptionAsync(() => service.UploadAsync(
             stored.SessionId,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             stored.ExpectedSha256,
             new MemoryStream(BinaryStl()),
@@ -568,7 +571,7 @@ public sealed class InstantQuoteFileServiceTests
         var response = await service.UploadAsync(
             stored.SessionId,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             stored.ExpectedSha256,
             new MemoryStream(BinaryStl()),
@@ -608,7 +611,7 @@ public sealed class InstantQuoteFileServiceTests
         storage.Seed(BinaryStl());
 
         var exception = await Record.ExceptionAsync(() => CreateService(repository, storage).UploadAsync(
-            stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
             new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
             CancellationToken.None));
@@ -639,7 +642,7 @@ public sealed class InstantQuoteFileServiceTests
             };
             var storage = new FakeStorage { MetadataException = failure };
             return await Record.ExceptionAsync(() => CreateService(repository, storage).UploadAsync(
-                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
                 new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
                 CancellationToken.None));
@@ -676,7 +679,7 @@ public sealed class InstantQuoteFileServiceTests
         storage.Seed(bytes);
 
         var operation = CreateService(repository, storage).UploadAsync(
-            stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
             new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
             CancellationToken.None);
@@ -714,7 +717,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
             CreateService(repository, storage).UploadAsync(
-                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
                 new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
                 CancellationToken.None));
@@ -750,7 +753,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
             CreateService(repository, storage).UploadAsync(
-                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
                 new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
                 CancellationToken.None));
@@ -789,7 +792,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
             CreateService(repository, storage).UploadAsync(
-                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('i', 16), sha, new MemoryStream(invalidBytes),
                 new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType),
                 CancellationToken.None));
@@ -816,7 +819,7 @@ public sealed class InstantQuoteFileServiceTests
         var response = await service.UploadAsync(
             stored.SessionId,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             stored.ExpectedSha256,
             new MemoryStream(BinaryStl()),
@@ -842,7 +845,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() =>
             CreateService(repository, storage, scanner).UploadAsync(
-                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                stored.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('i', 16), stored.ExpectedSha256, new MemoryStream(BinaryStl()),
                 new InstantQuoteUploadMetadata(stored.OriginalFileName, stored.ValidatedContentType), CancellationToken.None));
 
@@ -871,7 +874,7 @@ public sealed class InstantQuoteFileServiceTests
             response = await service.FinalizeAsync(
                 upload.SessionId,
                 new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43),
+                ValidSessionToken,
                 new string('k', 16),
                 new FinalizeInstantQuoteFilesRequest(requestId, [upload.Id]),
                 CancellationToken.None);
@@ -908,7 +911,7 @@ public sealed class InstantQuoteFileServiceTests
         };
 
         await Assert.ThrowsAsync<InstantQuoteReplayConflictException>(() => CreateService(repository).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16),
             new FinalizeInstantQuoteFilesRequest(1002, [upload.Id]),
             CancellationToken.None));
@@ -936,7 +939,7 @@ public sealed class InstantQuoteFileServiceTests
         var storage = new FakeStorage();
 
         await Assert.ThrowsAsync<InstantQuoteReplayConflictException>(() => CreateService(repository, storage).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(losingRequestId, [upload.Id]),
             CancellationToken.None));
 
@@ -964,7 +967,7 @@ public sealed class InstantQuoteFileServiceTests
         var exception = await Record.ExceptionAsync(() => service.UploadAsync(
             repository.VerifySessionResult.Id,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('i', 16),
             sha,
             new MemoryStream(bytes),
@@ -986,7 +989,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => serviceContext.Service.UploadAsync(
             serviceContext.Repository.VerifySessionResult!.Id,
-            new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+            new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
             new string('a', 64), new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
             CancellationToken.None));
 
@@ -1004,7 +1007,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => CreateService(repository, storage).UploadAsync(
             repository.VerifySessionResult.Id,
-            new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+            new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
             new string('a', 64), new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
             CancellationToken.None));
 
@@ -1024,7 +1027,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteUnsafeContentException>(() => serviceContext.Service.UploadAsync(
             serviceContext.Repository.VerifySessionResult!.Id,
-            new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+            new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
             sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
             CancellationToken.None));
 
@@ -1047,7 +1050,7 @@ public sealed class InstantQuoteFileServiceTests
             CreateService(repository, storage, scanner).UploadAsync(
                 repository.VerifySessionResult.Id,
                 new InstantQuoteOwner("https://issuer.example|user-42", true),
-                new string('t', 43),
+                ValidSessionToken,
                 new string('i', 16),
                 sha,
                 new NonSeekableStream(bytes),
@@ -1075,7 +1078,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => service.UploadAsync(
             repository.VerifySessionResult.Id,
-            new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+            new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
             sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
             cancellation.Token));
 
@@ -1103,7 +1106,7 @@ public sealed class InstantQuoteFileServiceTests
         };
 
         var response = await CreateService(repository, storage).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(requestId, [upload.Id]), CancellationToken.None);
 
         Assert.Equal(destination, Assert.Single(response.Files).ObjectName);
@@ -1131,7 +1134,7 @@ public sealed class InstantQuoteFileServiceTests
 
         await Assert.ThrowsAsync<InstantQuoteAmbiguousOutcomeException>(() =>
             CreateService(repository, storage).FinalizeAsync(
-                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+                upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
                 new string('k', 16), new FinalizeInstantQuoteFilesRequest(requestId, [upload.Id]),
                 CancellationToken.None));
 
@@ -1150,7 +1153,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuoteAmbiguousOutcomeException>(() =>
             CreateService(repository, storage).UploadAsync(
                 repository.VerifySessionResult.Id,
-                new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+                new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
                 sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
                 CancellationToken.None));
 
@@ -1171,7 +1174,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             CreateService(repository, storage).UploadAsync(
                 repository.VerifySessionResult.Id,
-                new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+                new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
                 sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("part.stl", "model/stl"),
                 cancellation.Token));
 
@@ -1197,7 +1200,7 @@ public sealed class InstantQuoteFileServiceTests
 
         var operation = service.UploadAsync(
             repository.VerifySessionResult.Id,
-            new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43), new string('i', 16),
+            new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken, new string('i', 16),
             sha, new MemoryStream(bytes), new InstantQuoteUploadMetadata("large.stl", "model/stl"),
             CancellationToken.None);
 
@@ -1223,7 +1226,7 @@ public sealed class InstantQuoteFileServiceTests
         var service = CreateService(repository);
 
         var exception = await Record.ExceptionAsync(() => service.FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]),
             CancellationToken.None));
 
@@ -1254,7 +1257,7 @@ public sealed class InstantQuoteFileServiceTests
         };
 
         var response = await CreateService(repository, storage).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(requestId, [upload.Id]), CancellationToken.None);
 
         Assert.Equal(upload.FinalObjectName, Assert.Single(response.Files).ObjectName);
@@ -1287,7 +1290,7 @@ public sealed class InstantQuoteFileServiceTests
         };
 
         var response = await CreateService(repository, storage).FinalizeAsync(
-            finalized.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            finalized.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(requestId, [finalized.Id, clean.Id]),
             CancellationToken.None);
 
@@ -1305,13 +1308,13 @@ public sealed class InstantQuoteFileServiceTests
         var service = CreateService(repository);
 
         await Assert.ThrowsAsync<InstantQuoteValidationException>(() => service.FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(0, []), CancellationToken.None));
         await Assert.ThrowsAsync<InstantQuoteValidationException>(() => service.FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(-1, [upload.Id, upload.Id]), CancellationToken.None));
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => service.FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]), CancellationToken.None));
         Assert.Equal(0, repository.ReserveFinalizationCount);
     }
@@ -1327,7 +1330,7 @@ public sealed class InstantQuoteFileServiceTests
         await Assert.ThrowsAsync<InstantQuoteValidationException>(() => CreateService(repository).FinalizeAsync(
             repository.VerifySessionResult.Id,
             new InstantQuoteOwner("https://issuer.example|user-42", true),
-            new string('t', 43),
+            ValidSessionToken,
             new string('k', 16),
             new FinalizeInstantQuoteFilesRequest(1001, fileIds),
             CancellationToken.None));
@@ -1347,7 +1350,7 @@ public sealed class InstantQuoteFileServiceTests
         };
 
         await Assert.ThrowsAsync<InstantQuoteOwnershipException>(() => CreateService(repository).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]), CancellationToken.None));
         Assert.Equal(0, repository.ReserveFinalizationCount);
     }
@@ -1369,7 +1372,7 @@ public sealed class InstantQuoteFileServiceTests
         var storage = new FakeStorage { PromotionException = promotionFails ? new IOException("copy failed") : null };
 
         await Assert.ThrowsAsync<InstantQuoteAmbiguousOutcomeException>(() => CreateService(repository, storage).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]), CancellationToken.None));
 
         Assert.Equal(InstantQuoteWorkflowState.Unknown, repository.SavedFinalization?.Finalization.State);
@@ -1404,7 +1407,7 @@ public sealed class InstantQuoteFileServiceTests
         };
         using var callerCancellation = new CancellationTokenSource();
         var operation = CreateService(repository, storage).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]), callerCancellation.Token);
         await metadataStarted.Task;
 
@@ -1454,7 +1457,7 @@ public sealed class InstantQuoteFileServiceTests
             CleanupTimeout = TimeSpan.FromSeconds(5),
         };
         var operation = CreateService(repository, storage, options: options, timeProvider: time).FinalizeAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             new string('k', 16), new FinalizeInstantQuoteFilesRequest(1001, [upload.Id]), CancellationToken.None);
         await metadataStarted.Task;
 
@@ -1482,7 +1485,7 @@ public sealed class InstantQuoteFileServiceTests
         var storage = new FakeStorage();
 
         await CreateService(repository, storage).RemoveAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             upload.Id, CancellationToken.None);
 
         Assert.Equal(1, storage.DeleteCount);
@@ -1508,7 +1511,7 @@ public sealed class InstantQuoteFileServiceTests
         var storage = new FakeStorage { DeleteException = new IOException("delete failed") };
 
         await Assert.ThrowsAsync<InstantQuoteDependencyUnavailableException>(() => CreateService(repository, storage).RemoveAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             upload.Id, CancellationToken.None));
 
         var claimed = Assert.Single(repository.SavedUploads);
@@ -1529,7 +1532,7 @@ public sealed class InstantQuoteFileServiceTests
         var storage = new FakeStorage();
 
         await CreateService(repository, storage).RemoveAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             upload.Id, CancellationToken.None);
 
         Assert.Equal(0, storage.DeleteCount);
@@ -1553,7 +1556,7 @@ public sealed class InstantQuoteFileServiceTests
         var storage = new FakeStorage();
 
         var exception = await Record.ExceptionAsync(() => CreateService(repository, storage).RemoveAsync(
-            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), new string('t', 43),
+            upload.SessionId, new InstantQuoteOwner("https://issuer.example|user-42", true), ValidSessionToken,
             upload.Id, CancellationToken.None));
 
         Assert.IsType(exceptionType, exception);
@@ -1608,7 +1611,7 @@ public sealed class InstantQuoteFileServiceTests
         Guid.Parse("11111111-1111-1111-1111-111111111111"),
         "https://issuer.example|user-42",
         true,
-        SHA256.HashData(Encoding.UTF8.GetBytes(token ?? new string('t', 43))),
+        SHA256.HashData(Encoding.UTF8.GetBytes(token ?? ValidSessionToken)),
         Now.AddHours(1),
         Now);
 

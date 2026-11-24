@@ -140,9 +140,10 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
                 ? new Dictionary<string, long> { [normalized] = 47 }
                 : new Dictionary<string, long>(),
         };
+        factory.UseKestrel(0);
         using var client = factory.Client();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        using var response = await client.GetAsync(Query("/uploads/SignedUrl", literal), deadline.Token);
+        using var response = await client.GetAsync(ExactQuery(client, Query("/uploads/SignedUrl", literal)), deadline.Token);
 
         var expectedStatus = literalExists ? HttpStatusCode.OK : HttpStatusCode.NotFound;
         Assert.True(response.StatusCode == expectedStatus,
@@ -207,9 +208,10 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
         var literal = alias == "padding" ? "  _quarantine/" + suffix + "  " : "///_quarantine//" + suffix;
         await SeedAsync(context, literal);
         await using var factory = new SignedReadFactory(context.Database.GetConnectionString()!, literal);
+        factory.UseKestrel(0);
         using var client = factory.Client();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        using var response = await client.GetAsync(Query("/uploads/SignedUrl", literal), deadline.Token);
+        using var response = await client.GetAsync(ExactQuery(client, Query("/uploads/SignedUrl", literal)), deadline.Token);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal(0, factory.GetCalls);
@@ -516,6 +518,11 @@ public sealed class LegacySignedReadHttpBoundaryTests(PostgreSqlFixture fixture)
 
     private static string Name() => "orders/" + Guid.NewGuid().ToString("N") + "/ชิ้นงาน.step";
     private static string Query(string route, string name) => route + "?bucket=private&objectName=" + Uri.EscapeDataString(name);
+
+    // Preserve the escaped trailing spaces in Unicode object names on the wire.
+    private static Uri ExactQuery(HttpClient client, string relative) =>
+        new(new Uri(client.BaseAddress!, relative).OriginalString,
+            new UriCreationOptions { DangerousDisablePathAndQueryCanonicalization = true });
 
     private static async Task SeedAsync(FileDbContext context, string name, string state = "clean", long generation = 31)
     {
