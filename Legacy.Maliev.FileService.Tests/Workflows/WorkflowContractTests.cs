@@ -145,8 +145,8 @@ public sealed class WorkflowContractTests
     public void BuildAndTest_RejectsCommentedDependencySha()
     {
         AssertMutationRejected(
-            "ref: 7edcd961024868513fd5f373cab3dcb261197f77",
-            "ref: main # 7edcd961024868513fd5f373cab3dcb261197f77");
+            "ref: 173d63218d9142b34075bca87f5c6d933bcbdfb6",
+            "ref: main # 173d63218d9142b34075bca87f5c6d933bcbdfb6");
     }
 
     [Theory]
@@ -395,7 +395,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.ServiceDefaults",
-                ["ref"] = "7edcd961024868513fd5f373cab3dcb261197f77",
+                ["ref"] = "173d63218d9142b34075bca87f5c6d933bcbdfb6",
                 ["path"] = ".dependencies/Legacy.Maliev.ServiceDefaults",
                 ["persist-credentials"] = "false",
             });
@@ -405,7 +405,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["repository"] = "MALIEV-Co-Ltd/Legacy.Maliev.CompatibilityContracts",
-                ["ref"] = "78e48ffc4ee000df0510cba5e7c7a3c4c4d539d7",
+                ["ref"] = "fe17b8cea8ace3eef5434f8b29c9038f5c975613",
                 ["path"] = ".dependencies/Legacy.Maliev.CompatibilityContracts",
                 ["persist-credentials"] = "false",
             });
@@ -452,6 +452,7 @@ internal static partial class WorkflowContractValidator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["solution"] = "Legacy.Maliev.FileService.slnx",
+                ["dotnet-version"] = "11.0.x",
                 ["use-local-maliev-dependencies"] = "true",
             });
     }
@@ -557,7 +558,7 @@ internal static partial class WorkflowContractValidator
             return keys.SetEquals(["name", "uses", "with"])
                 && (GetOptional(step, "uses") as YamlScalarNode)?.Value == "actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73"
                 && GetOptional(step, "with") is YamlMappingNode inputs && inputs.Children.Count == 1
-                && (GetOptional(inputs, "dotnet-version") as YamlScalarNode)?.Value == "10.0.x";
+                && (GetOptional(inputs, "dotnet-version") as YamlScalarNode)?.Value == "11.0.x";
         }
         var focus = name == "Require original eight and seven additional startup boundary regressions";
         if (name != "Supply the exact job SDK host to startup fixtures" && !focus) return false;

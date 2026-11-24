@@ -6,6 +6,7 @@ using Legacy.Maliev.FileService.Application.Models;
 using System.Text.Json;
 using StackExchange.Redis;
 using StackExchange.Redis.Profiling;
+using Moq;
 using System.Diagnostics;
 using Xunit.Abstractions;
 
@@ -17,6 +18,73 @@ public sealed class RedisUploadIdempotencyStoreTests(ITestOutputHelper output) :
     private IConnectionMultiplexer? connection;
     public async Task InitializeAsync() { await container.StartAsync(); connection = await ConnectionMultiplexer.ConnectAsync($"{container.Hostname}:{container.GetMappedPublicPort(6379)},abortConnect=false"); }
     public async Task DisposeAsync() { if (connection is not null) { await connection.CloseAsync(); connection.Dispose(); } await container.DisposeAsync(); }
+
+    [Fact]
+    public async Task ExpiryTransition_RechecksLeaseAndSnapshotAtomically()
+    {
+        var database = connection!.GetDatabase();
+        RedisKey key = "legacy:file:idempotency:v1:EXPIRY-RACE";
+        RedisKey lease = "legacy:file:idempotency:v1:EXPIRY-RACE:lease";
+        await database.StringSetAsync(key, "old", TimeSpan.FromHours(24));
+        await database.StringSetAsync(lease, "owner", TimeSpan.FromMinutes(1));
+
+        Assert.False(await RedisUploadIdempotencyStore.ReplaceExpiredAsync(database, key, lease, "old", "unknown", "owner", default));
+        Assert.Equal("old", (string?)await database.StringGetAsync(key));
+
+        await database.KeyDeleteAsync(lease);
+        await database.StringSetAsync(key, "new", TimeSpan.FromHours(24));
+        Assert.False(await RedisUploadIdempotencyStore.ReplaceExpiredAsync(database, key, lease, "old", "unknown", "owner", default));
+        Assert.Equal("new", (string?)await database.StringGetAsync(key));
+
+        Assert.True(await RedisUploadIdempotencyStore.ReplaceExpiredAsync(database, key, lease, "new", "unknown", "owner", default));
+        Assert.Equal("unknown", (string?)await database.StringGetAsync(key));
+        var ttl = await database.KeyTimeToLiveAsync(key);
+        Assert.NotNull(ttl);
+        Assert.InRange(ttl.GetValueOrDefault(), TimeSpan.FromHours(23), TimeSpan.FromHours(24));
+    }
+
+    [Fact]
+    public async Task Acquire_AfterLeaseReadCannotDowngradeAReappearingOwner()
+    {
+        const string identity = "EXPIRY-PUBLIC-RACE";
+        var realDatabase = connection!.GetDatabase();
+        var ownerStore = new RedisUploadIdempotencyStore(connection);
+        var owner = await ownerStore.AcquireAsync(identity, "fingerprint", "orders/42", default);
+        RedisKey checkpointKey = $"legacy:file:idempotency:v1:{identity}";
+        RedisKey leaseKey = $"legacy:file:idempotency:v1:{identity}:lease";
+        await realDatabase.KeyDeleteAsync(leaseKey);
+        var original = await realDatabase.StringGetAsync(checkpointKey);
+        var readObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var database = new Mock<IDatabase>(MockBehavior.Strict);
+        database.Setup(d => d.CreateTransaction(null)).Returns(() => realDatabase.CreateTransaction());
+        database.Setup(d => d.StringGetAsync(checkpointKey, CommandFlags.None))
+            .Returns(() => realDatabase.StringGetAsync(checkpointKey));
+        database.Setup(d => d.StringGetAsync(leaseKey, CommandFlags.None)).Returns(async () =>
+        {
+            var observed = await realDatabase.StringGetAsync(leaseKey);
+            readObserved.TrySetResult();
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            return observed;
+        });
+        var multiplexer = new Mock<IConnectionMultiplexer>(MockBehavior.Strict);
+        multiplexer.Setup(c => c.GetDatabase(-1, null)).Returns(database.Object);
+        var retry = new RedisUploadIdempotencyStore(multiplexer.Object).AcquireAsync(identity, "fingerprint", "ignored", default);
+        try
+        {
+            await readObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await realDatabase.StringSetAsync(leaseKey, owner.ReservationId!, TimeSpan.FromMinutes(1));
+            release.TrySetResult();
+            Assert.Equal(UploadAcquireState.Unknown, (await retry.WaitAsync(TimeSpan.FromSeconds(10))).State);
+            Assert.Equal(original, await realDatabase.StringGetAsync(checkpointKey));
+            Assert.True(await ownerStore.RenewAsync(identity, owner.ReservationId!, default));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await retry.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
 
     [Fact]
     public async Task ExpiredWorkerLease_TransitionsDurableCheckpointToUnknownWithoutReacquiring()

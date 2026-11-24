@@ -33,7 +33,7 @@ public sealed class RedisUploadIdempotencyStore(IConnectionMultiplexer? redis = 
             var lease = await database.StringGetAsync(leaseKey).WaitAsync(cancellationToken);
             if (lease == envelope.ReservationId) return new(UploadAcquireState.InProgress, EffectivePath: envelope.EffectivePath);
             var unknown = Serialize(envelope with { State = "unknown" });
-            _ = await ReplaceAsync(database, key, current!, unknown, cancellationToken);
+            _ = await ReplaceExpiredAsync(database, key, leaseKey, current!, unknown, envelope.ReservationId, cancellationToken);
             return new(UploadAcquireState.Unknown, envelope.ReservationId, envelope.Response, envelope.EffectivePath);
         }
         return envelope.State switch
@@ -89,9 +89,13 @@ public sealed class RedisUploadIdempotencyStore(IConnectionMultiplexer? redis = 
         _ = await transaction.ExecuteAsync().WaitAsync(cancellationToken);
     }
 
-    private static async Task<bool> ReplaceAsync(IDatabase database, RedisKey key, RedisValue current, RedisValue replacement, CancellationToken cancellationToken)
+    internal static async Task<bool> ReplaceExpiredAsync(IDatabase database, RedisKey key, RedisKey leaseKey,
+        RedisValue current, RedisValue replacement, RedisValue reservationId, CancellationToken cancellationToken)
     {
-        var transaction = database.CreateTransaction(); transaction.AddCondition(Condition.StringEqual(key, current)); _ = transaction.StringSetAsync(key, replacement, Retention);
+        var transaction = database.CreateTransaction();
+        transaction.AddCondition(Condition.StringEqual(key, current));
+        transaction.AddCondition(Condition.StringNotEqual(leaseKey, reservationId));
+        _ = transaction.StringSetAsync(key, replacement, Retention);
         return await transaction.ExecuteAsync().WaitAsync(cancellationToken);
     }
     private IDatabase Database() => redis?.GetDatabase() ?? throw new InvalidOperationException("Redis is required for upload replay protection.");
